@@ -137,7 +137,6 @@ Customizable tiers with unique visual styles per level range:
 | Graphics       | D3D11           |
 | Overlay        | ImGui           |
 | Font Rendering | FreeType 2      |
-| Hooking        | MinHook         |
 | Assembly       | xbyak           |
 | Framework      | CommonLibSSE-NG |
 | Logging        | spdlog          |
@@ -343,7 +342,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [CommonLibSSE-NG](https://github.com/CharmedBaryon/CommonLibSSE-NG) - SKSE plugin library
 - [ImGui](https://github.com/ocornut/imgui) - Immediate mode GUI
 - [FreeType](https://freetype.org/) - Font rendering
-- [MinHook](https://github.com/TsudaKageworst/minhook) - Function hooking library
 - [spdlog](https://github.com/gabime/spdlog) - Logging library
 - [xbyak](https://github.com/herumi/xbyak) - JIT assembler
 - [Claude](https://claude.ai/) - AI coding assistant by Anthropic

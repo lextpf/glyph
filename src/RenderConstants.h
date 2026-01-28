@@ -9,7 +9,7 @@
  * @ingroup Rendering
  *
  * Contains `constexpr` constants for actor processing limits, cache management,
- * position smoothing, and occlusion thresholds.
+ * and position smoothing.
  *
  * ## :material-ruler: Distance Units
  *
@@ -53,12 +53,5 @@ namespace RenderConstants
     // Debug Overlay
     constexpr float kReloadNotificationDuration = 2.0f;  ///< Duration to show "Reloaded!" notification (seconds)
     constexpr int kFrameTimeSamples = 60;                ///< Number of frame time samples for averaging
-
-    // Distance Thresholds
-    constexpr float kCloseDistanceThreshold = 100.0f;    ///< Distance below which actors are always visible (game units)
-
-    // Camera Checks
-    constexpr float kBehindCameraDotThreshold = -0.2f;   ///< Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101°$)
-    constexpr float kHeadHeightMultiplier = 0.9f;        ///< Head position: $y_{head} = y_{base} + 0.9 \cdot h_{actor}$
 
 }
