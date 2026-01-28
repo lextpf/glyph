@@ -7,7 +7,7 @@
  * @namespace TextEffects
  * @brief Collection of text rendering effects for ImGui.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Rendering
+ * @ingroup TextEffects
  *
  * Provides functions for rendering text with various visual effects using ImGui's
  * draw list API. Effects are achieved by manipulating per-vertex colors after
@@ -481,7 +481,7 @@ namespace TextEffects
      * $$H = H_{base} + \frac{x - x_{min}}{x_{max} - x_{min}} \cdot H_{spread} + t \cdot speed$$
      *
      * HSV to RGB conversion follows standard formulas with $H \in [0,1]$
-     * mapped to $[0°, 360°]$.
+     * mapped to $[0, 360]$.
      *
      * @paramlist ImGui draw list to render to.
      * @paramfont Font to use for rendering.

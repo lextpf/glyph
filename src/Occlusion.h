@@ -6,7 +6,7 @@
  * @namespace Occlusion
  * @brief Actor visibility and occlusion culling.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Rendering
+ * @ingroup Occlusion
  *
  * Provides occlusion culling for nameplates using the game's built-in line-of-sight
  * system combined with camera frustum checks.
@@ -14,8 +14,12 @@
  * ## :material-eye-off-outline: Occlusion Pipeline
  *
  * ```mermaid
- * %%{init: {'theme':'dark', 'look':'handDrawn'}}%%
- * flowchart TD
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
+ * flowchart LR
  *     classDef check fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
  *     classDef visible fill:#1a3a2a,stroke:#10b981,color:#e2e8f0
  *     classDef occluded fill:#3a1a1a,stroke:#ef4444,color:#e2e8f0
@@ -31,18 +35,18 @@
  *
  * ## :material-angle-acute: Behind-Camera Test
  *
- * **Step 1 — Direction vector.** Given the camera world position
+ * **Step 1 - Direction vector.** Given the camera world position
  * $p_{cam}$ and the actor world position $p_{actor}$, compute the
  * displacement vector pointing from the camera toward the actor:
  *
  * $$\vec{v} = p_{actor} - p_{cam}$$
  *
- * **Step 2 — Normalize.** Divide by the vector's length to get a
+ * **Step 2 - Normalize.** Divide by the vector's length to get a
  * unit direction (length $= 1$), so only orientation matters:
  *
  * $$\hat{d} = \frac{\vec{v}}{\|\vec{v}\|} = \frac{p_{actor} - p_{cam}}{\sqrt{v_x^2 + v_y^2 + v_z^2}}$$
  *
- * **Step 3 — Dot product.** The camera also provides a unit forward
+ * **Step 3 - Dot product.** The camera also provides a unit forward
  * vector $\hat{f}$ (the direction the player is looking). The dot
  * product of two unit vectors equals the cosine of the angle between
  * them:
@@ -58,7 +62,7 @@
  * | $0$          | $90$     | Perpendicular (edge) |
  * | $-1$         | $180$    | Directly behind      |
  *
- * **Step 4 — Threshold test.** An actor is classified as behind the
+ * **Step 4 - Threshold test.** An actor is classified as behind the
  * camera when the dot product falls below a threshold:
  *
  * $$\hat{f} \cdot \hat{d} < \theta_{behind}$$

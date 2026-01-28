@@ -15,7 +15,11 @@
  * ## :material-hook: Hook Architecture
  *
  * ```mermaid
- * %%{init: {'theme':'dark', 'look':'handDrawn'}}%%
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
  * flowchart LR
  *     classDef core fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
  *     classDef hook fill:#4a3520,stroke:#f59e0b,color:#e2e8f0
@@ -61,7 +65,11 @@
  * ## :material-hook: Hook Flow
  *
  * ```mermaid
- * %%{init: {'theme':'dark', 'look':'handDrawn'}}%%
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
  * flowchart LR
  *     classDef core fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
  *     classDef render fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
