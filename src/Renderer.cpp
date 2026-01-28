@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "TextEffects.h"
+#include "ParticleTextures.h"
 #include "Settings.h"
 #include "Occlusion.h"
 #include "RenderConstants.h"
@@ -297,54 +298,55 @@ namespace Renderer
         bool isOccluded{false};                   ///< Whether actor is occluded from view
     };
 
-    /// Cache for smooth actor transitions, keyed by form ID
-    static std::unordered_map<uint32_t, ActorCache> s_cache;
-    /// Current frame counter for cache management
-    static uint32_t s_frame = 0;
+    /// Encapsulates all mutable renderer state into a single struct.
+    struct RendererState
+    {
+        // Cache
+        std::unordered_map<uint32_t, ActorCache> cache;
+        uint32_t frame = 0;
+
+        // Snapshot & Thread Safety
+        std::vector<ActorDrawData> snapshot;
+        std::mutex snapshotLock;
+        std::atomic<bool> updateQueued{false};
+
+        // Frame State
+        bool wasInInvalidState = true;
+        int postLoadCooldown = 0;
+
+        // Debug Stats
+        DebugOverlay::Stats debugStats;
+        float lastDebugUpdateTime = 0.0f;
+        int updateCounter = 0;
+        int lastUpdateCount = 0;
+
+        // Hot Reload
+        bool reloadKeyWasDown = false;
+        float lastReloadTime = -10.0f;
+
+        // Overlay Flags
+        std::atomic<bool> allowOverlay{false};
+        std::atomic<bool> manualEnabled{true};
+    };
+
+    static RendererState s_state;
+
+    static constexpr float kReloadNotificationDuration = RenderConstants::kReloadNotificationDuration;
+
     /// Per-frame overlap Y offsets, keyed by form ID
     static std::unordered_map<uint32_t, float>& OverlapOffsets() {
         static std::unordered_map<uint32_t, float> offsets;
         return offsets;
     }
 
-    /// Snapshot of actor data for rendering (thread-safe)
-    static std::vector<ActorDrawData> s_snapshot;
-    /// Mutex protecting the snapshot data
-    static std::mutex s_snapshotLock;
-
-    /// Flag indicating if an update is currently queued
-    static std::atomic<bool> s_updateQueued{false};
-    /// Frame counter for throttling updates
-    static uint32_t s_updateTicker = 0;
-
-    /// Tracks if we were previously in an invalid state
-    static bool s_wasInInvalidState = true;
-    /// Cooldown frames after loading before rendering starts
-    static int s_postLoadCooldown = 0;
-
-    static DebugOverlay::Stats s_debugStats;
-    static float s_lastDebugUpdateTime = 0.0f;
-    static int s_updateCounter = 0;
-    static int s_lastUpdateCount = 0;
-
-    // Hot reload state
-    static bool s_reloadKeyWasDown = false;
-    static float s_lastReloadTime = -10.0f;  // Time of last reload (for notification)
-    static constexpr float kReloadNotificationDuration = RenderConstants::kReloadNotificationDuration;
-
-    /// Atomic flag for whether overlay is allowed (checked by render thread)
-    static std::atomic<bool> s_allowOverlay{false};
-    /// Manual toggle flag (can disable rendering via console command)
-    static std::atomic<bool> s_manualEnabled{true};
-
     bool IsOverlayAllowedRT() {
-        return s_manualEnabled.load(std::memory_order_acquire) &&
-               s_allowOverlay.load(std::memory_order_acquire);
+        return s_state.manualEnabled.load(std::memory_order_acquire) &&
+               s_state.allowOverlay.load(std::memory_order_acquire);
     }
 
     bool ToggleEnabled() {
-        bool newState = !s_manualEnabled.load(std::memory_order_acquire);
-        s_manualEnabled.store(newState, std::memory_order_release);
+        bool newState = !s_state.manualEnabled.load(std::memory_order_acquire);
+        s_state.manualEnabled.store(newState, std::memory_order_release);
         return newState;
     }
 
@@ -504,11 +506,11 @@ namespace Renderer
     /// Check occlusion for an actor, using cached results when available.
     static void UpdateOcclusionForActor(ActorDrawData& d, RE::Actor* a, RE::Actor* player)
     {
-        auto cacheIt = s_cache.find(d.formID);
+        auto cacheIt = s_state.cache.find(d.formID);
 
         // Use cached result if fresh enough
-        if (cacheIt != s_cache.end() && cacheIt->second.initialized) {
-            uint32_t framesSince = s_frame - cacheIt->second.lastOcclusionCheckFrame;
+        if (cacheIt != s_state.cache.end() && cacheIt->second.initialized) {
+            uint32_t framesSince = s_state.frame - cacheIt->second.lastOcclusionCheckFrame;
             if (framesSince < static_cast<uint32_t>(Settings::OcclusionCheckInterval)) {
                 d.isOccluded = cacheIt->second.cachedOccluded;
                 return;
@@ -519,8 +521,8 @@ namespace Renderer
         d.isOccluded = Occlusion::IsActorOccluded(a, player, d.worldPos);
 
         // Update cache with the fresh result
-        if (cacheIt != s_cache.end()) {
-            cacheIt->second.lastOcclusionCheckFrame = s_frame;
+        if (cacheIt != s_state.cache.end()) {
+            cacheIt->second.lastOcclusionCheckFrame = s_state.frame;
             cacheIt->second.cachedOccluded = d.isOccluded;
         }
     }
@@ -530,17 +532,17 @@ namespace Renderer
         // RAII struct to ensure the update flag is cleared when function exits
         struct ClearFlag
         {
-            ~ClearFlag() { s_updateQueued.store(false); }
+            ~ClearFlag() { s_state.updateQueued.store(false); }
         } _;
 
         // Check if we're allowed to draw the overlay (not in menus, loading, etc.)
         const bool allow = CanDrawOverlay();
-        s_allowOverlay.store(allow, std::memory_order_release);
+        s_state.allowOverlay.store(allow, std::memory_order_release);
 
         if (!allow)
         {
-            std::lock_guard<std::mutex> lock(s_snapshotLock);
-            s_snapshot.clear();
+            std::lock_guard<std::mutex> lock(s_state.snapshotLock);
+            s_state.snapshot.clear();
             return;
         }
 
@@ -548,8 +550,8 @@ namespace Renderer
         auto *pl = RE::ProcessLists::GetSingleton();
         if (!player || !pl)
         {
-            std::lock_guard<std::mutex> lock(s_snapshotLock);
-            s_snapshot.clear();
+            std::lock_guard<std::mutex> lock(s_state.snapshotLock);
+            s_state.snapshot.clear();
             return;
         }
 
@@ -646,8 +648,8 @@ namespace Renderer
         }
 
         {
-            std::lock_guard<std::mutex> lock(s_snapshotLock);
-            s_snapshot = tempBuf;
+            std::lock_guard<std::mutex> lock(s_state.snapshotLock);
+            s_state.snapshot = tempBuf;
         }
     }
 
@@ -655,7 +657,7 @@ namespace Renderer
     {
         // Check if an update is already queued
         // If exchange returns true, an update is already pending, so skip
-        if (s_updateQueued.exchange(true))
+        if (s_state.updateQueued.exchange(true))
         {
             return;  // Already queued, don't queue again
         }
@@ -670,7 +672,7 @@ namespace Renderer
         else
         {
             // Task interface not available, clear the flag
-            s_updateQueued.store(false);
+            s_state.updateQueued.store(false);
         }
     }
 
@@ -679,7 +681,7 @@ namespace Renderer
         // Grace period prevents jitter when actors briefly leave the snapshot
         constexpr uint32_t kCacheGraceFrames = RenderConstants::kCacheGraceFrames;
 
-        for (auto it = s_cache.begin(); it != s_cache.end();)
+        for (auto it = s_state.cache.begin(); it != s_state.cache.end();)
         {
             bool inSnapshot = false;
             for (auto &d : snap)
@@ -687,7 +689,7 @@ namespace Renderer
                 if (d.formID == it->first)
                 {
                     inSnapshot = true;
-                    it->second.lastSeenFrame = s_frame;  // Update last seen
+                    it->second.lastSeenFrame = s_state.frame;  // Update last seen
                     break;
                 }
             }
@@ -695,10 +697,10 @@ namespace Renderer
             if (!inSnapshot)
             {
                 // Check if grace period has expired
-                uint32_t framesSinceLastSeen = s_frame - it->second.lastSeenFrame;
+                uint32_t framesSinceLastSeen = s_state.frame - it->second.lastSeenFrame;
                 if (framesSinceLastSeen > kCacheGraceFrames)
                 {
-                    it = s_cache.erase(it);
+                    it = s_state.cache.erase(it);
                     continue;
                 }
             }
@@ -835,283 +837,199 @@ namespace Renderer
         }
     }
 
-    static void DrawLabel(const ActorDrawData &d, ImDrawList *drawList)
+    // =========================================================================
+    // Data structures for DrawLabel sub-functions
+    // =========================================================================
+
+    /// Describes one formatted text segment on the main nameplate line.
+    struct RenderSeg
     {
-        // Get or create cache entry for this actor (keyed by form ID)
-        // The cache stores smoothing state for position, alpha, and text size
-        auto it = s_cache.find(d.formID);
-        if (it == s_cache.end())
-        {
-            ActorCache newEntry{};
-            newEntry.lastSeenFrame = s_frame;  // Initialize to current frame
-            it = s_cache.emplace(d.formID, newEntry).first;
-        }
-        auto &entry = it->second;
-        entry.lastSeenFrame = s_frame;  // Always update last seen
+        std::string text;         ///< Formatted text to display
+        std::string displayText;  ///< Text after typewriter truncation
+        bool isLevel;             ///< Whether to use level font
+        ImFont *font;             ///< Font to use for rendering
+        float fontSize;           ///< Scaled font size
+        ImVec2 size;              ///< Measured size of this segment
+        ImVec2 displaySize;       ///< Measured size of displayText
+    };
 
-        // Detect name changes (e.g., after showracemenu) and reset typewriter
-        if (entry.cachedName != d.name)
+    /// All color, tier, and effect data computed once per label.
+    struct LabelStyle
+    {
+        int tierIdx;
+        const Settings::TierDefinition* tier;
+        const Settings::SpecialTitleDefinition* specialTitle;
+
+        ImU32 colL, colR;               // Name gradient (packed)
+        ImU32 colLTitle, colRTitle;      // Title gradient
+        ImU32 colLLevel, colRLevel;      // Level gradient
+        ImU32 highlight;                 // Shimmer / sparkle highlight
+        ImU32 outlineColor;              // Black outline (alpha-scaled)
+        ImU32 shadowColor;               // Black shadow  (alpha-scaled)
+
+        ImVec4 Lc, Rc;                  // Tier left/right (pasteled)
+        ImVec4 LcName, RcName;          // Washed name colors (float, for glow)
+        ImVec4 LcTitle, RcTitle;        // Washed title colors (float, for glow)
+        ImVec4 LcLevel, RcLevel;        // Softened level colors (float, for glow)
+        ImVec4 dispoCol;                // Disposition color
+        ImVec4 specialGlowColor;        // Special title glow
+
+        float alpha;
+        float titleAlpha;
+        float levelAlpha;
+        float effectAlpha;
+        float strength;
+        float phase01;
+
+        bool tierAllowsGlow;
+        bool tierAllowsParticles;
+        bool tierAllowsOrnaments;
+
+        float nameOutlineWidth;
+        float levelOutlineWidth;
+        float titleOutlineWidth;
+        float outlineWidth;              // Primary (= nameOutlineWidth)
+
+        // Stored for deferred outline width computation
+        float baseOutlineWidth;
+        float distToPlayer;
+
+        float CalcOutlineWidth(float fontSize) const {
+            float w = baseOutlineWidth * (fontSize / Settings::NameFontSize);
+            if (Settings::Visual().EnableDistanceOutlineScale) {
+                float distT = TextEffects::Saturate(
+                    (distToPlayer - Settings::FadeStartDistance) /
+                    (Settings::FadeEndDistance - Settings::FadeStartDistance));
+                float distMul = Settings::Visual().OutlineDistanceMin +
+                                (Settings::Visual().OutlineDistanceMax - Settings::Visual().OutlineDistanceMin) * distT;
+                w *= distMul;
+            }
+            return w;
+        }
+    };
+
+    /// Text measurement and position data for a label.
+    struct LabelLayout
+    {
+        ImFont* fontName;
+        ImFont* fontLevel;
+        ImFont* fontTitle;
+        float nameFontSize;
+        float levelFontSize;
+        float titleFontSize;
+
+        std::vector<RenderSeg> segments;
+        float mainLineWidth;
+        float mainLineHeight;
+        float segmentPadding;
+
+        std::string titleStr;
+        std::string titleDisplayStr;
+        ImVec2 titleSize;
+
+        ImVec2 startPos;
+        float titleY;
+        float mainLineY;
+        float totalWidth;
+
+        ImVec2 nameplateCenter;
+        float nameplateTop;
+        float nameplateBottom;
+        float nameplateLeft;
+        float nameplateRight;
+        float nameplateWidth;
+        float nameplateHeight;
+    };
+
+    // =========================================================================
+    // DrawLabel helper functions
+    // =========================================================================
+
+    /// Desaturate a color toward white.
+    static ImVec4 WashColor(ImVec4 base)
+    {
+        const float wash = Settings::ColorWashAmount;
+        return ImVec4(
+            base.x + (1.0f - base.x) * wash,
+            base.y + (1.0f - base.y) * wash,
+            base.z + (1.0f - base.z) * wash,
+            base.w);
+    }
+
+    /// Replace %n, %l, %t placeholders in a format string.
+    static std::string FormatString(const std::string &fmt, const char *nameVal, int levelVal, const char *titleVal = nullptr)
+    {
+        std::string s = fmt;
+
+        size_t pos = 0;
+        while ((pos = s.find("%n", pos)) != std::string::npos)
         {
-            entry.cachedName = d.name;
-            entry.typewriterTime = 0.0f;
-            entry.typewriterComplete = false;
+            s.replace(pos, 2, nameVal);
+            pos += strlen(nameVal);
         }
 
-        // Reset typewriter when actor re-enters range after being unseen,
-        // or when they become visible again after occlusion.
-        constexpr uint32_t kReentryThreshold = 30;  // Frames before considering re-entry
-        if (entry.initialized && entry.typewriterComplete)
+        pos = 0;
+        std::string lStr = std::to_string(levelVal);
+        while ((pos = s.find("%l", pos)) != std::string::npos)
         {
-            uint32_t framesSinceLastSeen = s_frame - entry.lastSeenFrame;
-            bool becameVisible = entry.wasOccluded && !d.isOccluded;
-            if (framesSinceLastSeen >= kReentryThreshold || becameVisible)
+            s.replace(pos, 2, lStr);
+            pos += lStr.length();
+        }
+
+        if (titleVal)
+        {
+            pos = 0;
+            while ((pos = s.find("%t", pos)) != std::string::npos)
             {
-                entry.typewriterTime = 0.0f;
-                entry.typewriterComplete = false;
+                s.replace(pos, 2, titleVal);
+                pos += strlen(titleVal);
             }
         }
+        return s;
+    }
 
-        entry.lastSeenFrame = s_frame;  // Mark as seen this frame (for pruning)
+    /// Compute all color, tier, and effect data for a label.
+    static LabelStyle ComputeLabelStyle(const ActorDrawData &d, float alpha, float time)
+    {
+        LabelStyle style{};
+        style.alpha = alpha;
 
-        // Get camera position for camera-relative scaling
-        RE::NiPoint3 cameraPos{};
-        bool hasCameraPos = false;
-        if (auto pc = RE::PlayerCamera::GetSingleton(); pc && pc->cameraRoot)
-        {
-            cameraPos = pc->cameraRoot->world.translate;
-            hasCameraPos = true;
-        }
-
-        const float dist = d.distToPlayer;          // Player-to-actor distance in game units
-        const float dt = ImGui::GetIO().DeltaTime;  // Time since last frame
-
-        // Calculate alpha target based on distance
-        // Uses smooth interpolation to avoid harsh transitions
-        float fadeT = TextEffects::SmoothStep((dist - Settings::FadeStartDistance) / (Settings::FadeEndDistance - Settings::FadeStartDistance));
-        float alphaTarget = 1.0f - fadeT;         // Invert: 1.0 at near, 0.0 at far
-        alphaTarget = alphaTarget * alphaTarget;  // Square for more opacity at near range
-
-        // LOD factors: control content visibility by distance band
-        float lodTitleFactor = 1.0f;
-        float lodEffectsFactor = 1.0f;
-
-        if (Settings::Visual().EnableLOD) {
-            float transRange = std::max(1.0f, Settings::Visual().LODTransitionRange);
-
-            // Title hidden beyond LODFarDistance
-            float titleFadeT = TextEffects::Saturate(
-                (dist - Settings::Visual().LODFarDistance) / transRange);
-            lodTitleFactor = 1.0f - TextEffects::SmoothStep(titleFadeT);
-
-            // Effects (particles, ornaments) hidden beyond LODMidDistance
-            float effectsFadeT = TextEffects::Saturate(
-                (dist - Settings::Visual().LODMidDistance) / transRange);
-            lodEffectsFactor = 1.0f - TextEffects::SmoothStep(effectsFadeT);
-        }
-
-        // Calculate font size scale target based on distance
-        // Names get smaller as actors move farther away
-        float scaleT = TextEffects::Saturate((dist - Settings::ScaleStartDistance) / (Settings::ScaleEndDistance - Settings::ScaleStartDistance));
-
-        // Apply gamma correction to scale transition
-        // kScaleGamma < 1.0 makes names stay larger longer, then shrink quickly
-        // kScaleGamma > 1.0 makes names shrink quickly, then stay small
-        constexpr float kScaleGamma = 0.5f;
-        scaleT = std::pow(scaleT, kScaleGamma);
-
-        // Convert to actual font scale: 1.0 at near, MinimumScale at far
-        float textScaleTarget = 1.0f + (Settings::MinimumScale - 1.0f) * scaleT;
-
-        // Blend in camera-to-actor distance to react to camera zoom
-        // If camera is closer than player, bias scale to stay larger
-        if (hasCameraPos)
-        {
-            float camDist = std::sqrt(
-                std::pow(d.worldPos.x - cameraPos.x, 2.0f) +
-                std::pow(d.worldPos.y - cameraPos.y, 2.0f) +
-                std::pow(d.worldPos.z - cameraPos.z, 2.0f));
-
-            float camScaleT = TextEffects::Saturate((camDist - Settings::ScaleStartDistance) / (Settings::ScaleEndDistance - Settings::ScaleStartDistance));
-            camScaleT = std::pow(camScaleT, kScaleGamma);
-            float camTextScale = 1.0f + (Settings::MinimumScale - 1.0f) * camScaleT;
-
-            // Blend player-distance scale and camera-distance scale
-            // Use a weighted min to avoid popping when zooming in
-            textScaleTarget = std::min(textScaleTarget, camTextScale);
-        }
-
-        // Enforce minimum readable text size
-        if (Settings::Visual().MinimumPixelHeight > 0.0f) {
-            float minScale = Settings::Visual().MinimumPixelHeight / Settings::NameFontSize;
-            textScaleTarget = std::max(textScaleTarget, minScale);
-        }
-
-        // Project world position to screen space
-        // Jitter reduction is handled by screen-space moving average below
-        RE::NiPoint3 screenPos;
-        if (!WorldToScreen(d.worldPos, screenPos))
-        {
-            return;  // Behind camera or outside field of view
-        }
-
-        // Occlusion target (1.0 = visible, 0.0 = occluded)
-        float occlusionTarget = d.isOccluded ? 0.0f : 1.0f;
-
-        if (!entry.initialized)
-        {
-            // First time seeing this actor: Initialize cache with current values
-            entry.initialized = true;
-            entry.alphaSmooth = alphaTarget;
-            entry.textSizeScale = textScaleTarget;
-            entry.smooth = ImVec2(screenPos.x, screenPos.y);
-
-            // Fill position history buffer with current position to avoid initial jitter
-            ImVec2 initPos(screenPos.x, screenPos.y);
-            for (int i = 0; i < ActorCache::kHistorySize; i++)
-            {
-                entry.posHistory[i] = initPos;
-            }
-            entry.historyIndex = 0;
-            entry.historyFilled = true;
-
-            // Start actors as visible and let them fade out if occluded
-            // This prevents the "never appears" bug when HasLineOfSight is unreliable
-            // on zone load or when actors are still loading in
-            entry.occlusionSmooth = 1.0f;
-
-            // Initialize typewriter state
-            entry.typewriterTime = 0.0f;
-            entry.typewriterComplete = false;
-        }
-        else
-        {
-            // Subsequent frames smooth toward target values
-            // Calculate interpolation factors
-            float aLerp = ExpApproachAlpha(dt, Settings::AlphaSettleTime);
-            float sLerp = ExpApproachAlpha(dt, Settings::ScaleSettleTime);
-
-            // Player uses near-instant response, NPCs use smooth settling
-            float pLerp = d.isPlayer ? ExpApproachAlpha(dt, 0.015f) : ExpApproachAlpha(dt, Settings::PositionSettleTime);
-            float oLerp = ExpApproachAlpha(dt, Settings::OcclusionSettleTime);
-
-            // Apply exponential smoothing for alpha and scale
-            entry.alphaSmooth += (alphaTarget - entry.alphaSmooth) * aLerp;
-            entry.textSizeScale += (textScaleTarget - entry.textSizeScale) * sLerp;
-            entry.occlusionSmooth += (occlusionTarget - entry.occlusionSmooth) * oLerp;
-
-            // Blend moving-average and exponential smoothing for position
-            ImVec2 targetPos(screenPos.x, screenPos.y);
-            ImVec2 maSmoothed = entry.AddAndGetSmoothed(targetPos);
-
-            // Exponential smoothing toward raw target
-            ImVec2 expSmoothed;
-            expSmoothed.x = entry.smooth.x + (targetPos.x - entry.smooth.x) * pLerp;
-            expSmoothed.y = entry.smooth.y + (targetPos.y - entry.smooth.y) * pLerp;
-
-            // PositionSmoothingBlend: 1.0 = pure moving-avg, 0.0 = pure exponential
-            float blend = Settings::Visual().PositionSmoothingBlend;
-            ImVec2 smoothedPos;
-            smoothedPos.x = expSmoothed.x + (maSmoothed.x - expSmoothed.x) * blend;
-            smoothedPos.y = expSmoothed.y + (maSmoothed.y - expSmoothed.y) * blend;
-
-            // For large movements, blend more toward target for responsiveness
-            float dx = targetPos.x - entry.smooth.x;
-            float dy = targetPos.y - entry.smooth.y;
-            float moveDist = std::sqrt(dx * dx + dy * dy);
-
-            if (moveDist > Settings::Visual().LargeMovementThreshold)
-            {
-                entry.smooth.x += (smoothedPos.x - entry.smooth.x) * Settings::Visual().LargeMovementBlend;
-                entry.smooth.y += (smoothedPos.y - entry.smooth.y) * Settings::Visual().LargeMovementBlend;
-            }
-            else
-            {
-                entry.smooth = smoothedPos;
-            }
-
-            // Update typewriter time, starts after delay
-            if (Settings::EnableTypewriter && !entry.typewriterComplete)
-            {
-                entry.typewriterTime += dt;
-            }
-        }
-
-        // Track occlusion state for next frame
-        entry.wasOccluded = d.isOccluded;
-
-        // Use smoothed values for rendering, combine alpha with occlusion
-        const float alpha = entry.alphaSmooth * entry.occlusionSmooth;
-        if (alpha <= 0.02f)
-        {
-            return;  // Too faded, skip rendering
-        }
-
-        const float textSizeScale = entry.textSizeScale;  // Note: Font scale is independent of alpha
-
-        // Field of view culling, skip if completely off-screen
-        // Allow some overflow (100px) so names can partially appear at screen edges
-        const auto viewSize = RE::BSGraphics::Renderer::GetSingleton()->GetScreenSize();
-        if (screenPos.z < 0 || screenPos.z > 1.0f ||
-            screenPos.x < -100.0f || screenPos.x > viewSize.width + 100.0f ||
-            screenPos.y < -100.0f || screenPos.y > viewSize.height + 100.0f)
-        {
-            return;  // Off-screen, skip
-        }
-
-        const float time = (float)ImGui::GetTime();  // For animations
-
-        // Helper lambda, "Wash" colors toward white for a softer appearance
-        // Higher wash value = more white, less saturated
-        auto WashColor = [](ImVec4 base)
-        {
-            const float wash = Settings::ColorWashAmount;
-            return ImVec4(
-                base.x + (1.0f - base.x) * wash,  // Lerp R toward 1.0
-                base.y + (1.0f - base.y) * wash,  // Lerp G toward 1.0
-                base.z + (1.0f - base.z) * wash,  // Lerp B toward 1.0
-                base.w);                          // Keep alpha unchanged
-        };
-
-        // Determine NPC disposition color
-        ImVec4 dispoCol;
+        // Disposition color
         if (d.dispo == Disposition::Enemy)
-            dispoCol = WashColor(ImVec4(0.9f, 0.2f, 0.2f, alpha));  // Red for enemies
+            style.dispoCol = WashColor(ImVec4(0.9f, 0.2f, 0.2f, alpha));
         else if (d.dispo == Disposition::AllyOrFriend)
-            dispoCol = WashColor(ImVec4(0.2f, 0.6f, 1.0f, alpha));  // Blue for allies
+            style.dispoCol = WashColor(ImVec4(0.2f, 0.6f, 1.0f, alpha));
         else
-            dispoCol = WashColor(ImVec4(0.9f, 0.9f, 0.9f, alpha));  // Gray for neutral
+            style.dispoCol = WashColor(ImVec4(0.9f, 0.9f, 0.9f, alpha));
 
-        // Determine which tier this level falls into
-        const uint16_t lv = (uint16_t)std::min<int>(d.level, 9999);  // Effectively no cap
+        const uint16_t lv = (uint16_t)std::min<int>(d.level, 9999);
 
-        // Find matching tier by level range
-        int tierIdx = 0;
+        // Find matching tier
+        style.tierIdx = 0;
         for (size_t i = 0; i < Settings::Tiers.size(); ++i)
         {
             if (lv >= Settings::Tiers[i].minLevel && lv <= Settings::Tiers[i].maxLevel)
             {
-                tierIdx = static_cast<int>(i);
+                style.tierIdx = static_cast<int>(i);
                 break;
             }
         }
-        tierIdx = std::clamp(tierIdx, 0, static_cast<int>(Settings::Tiers.size()) - 1);
-        const Settings::TierDefinition &tier = Settings::Tiers[tierIdx];
+        style.tierIdx = std::clamp(style.tierIdx, 0, static_cast<int>(Settings::Tiers.size()) - 1);
+        style.tier = &Settings::Tiers[style.tierIdx];
+        const Settings::TierDefinition &tier = *style.tier;
 
-        // Tier effect gating: restrict heavy effects to high-tier actors
-        bool tierAllowsGlow = !Settings::Visual().EnableTierEffectGating || tierIdx >= Settings::Visual().GlowMinTier;
-        bool tierAllowsParticles = !Settings::Visual().EnableTierEffectGating || tierIdx >= Settings::Visual().ParticleMinTier;
-        bool tierAllowsOrnaments = !Settings::Visual().EnableTierEffectGating || tierIdx >= Settings::Visual().OrnamentMinTier;
+        // Tier effect gating
+        style.tierAllowsGlow = !Settings::Visual().EnableTierEffectGating || style.tierIdx >= Settings::Visual().GlowMinTier;
+        style.tierAllowsParticles = !Settings::Visual().EnableTierEffectGating || style.tierIdx >= Settings::Visual().ParticleMinTier;
+        style.tierAllowsOrnaments = !Settings::Visual().EnableTierEffectGating || style.tierIdx >= Settings::Visual().OrnamentMinTier;
 
-        // Check for special title match
-        // Special titles override normal tier styling for MMORPG-style nameplates
-        const Settings::SpecialTitleDefinition* specialTitle = nullptr;
+        // Special title matching
+        style.specialTitle = nullptr;
         {
-            // Convert name to lowercase for case-insensitive matching
             std::string nameLower = d.name;
             std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
                            [](unsigned char c) { return std::tolower(c); });
 
-            // Sort by priority and check each special title
             std::vector<const Settings::SpecialTitleDefinition*> sortedSpecials;
             for (const auto& st : Settings::SpecialTitles) {
                 if (!st.keyword.empty()) {
@@ -1126,36 +1044,31 @@ namespace Renderer
                 std::transform(keywordLower.begin(), keywordLower.end(), keywordLower.begin(),
                                [](unsigned char c) { return std::tolower(c); });
                 if (nameLower.find(keywordLower) != std::string::npos) {
-                    specialTitle = st;
+                    style.specialTitle = st;
                     break;
                 }
             }
         }
 
-        // Calculate position within tier [0, 1]
-        // 0.0 = at min level of tier, 1.0 = at max level of tier
+        // Level position within tier [0, 1]
         float levelT = 0.0f;
         if (tier.maxLevel > tier.minLevel)
         {
-            levelT = (lv <= tier.minLevel) 
-            ? 0.0f 
-            : (lv >= tier.maxLevel) 
+            levelT = (lv <= tier.minLevel)
+            ? 0.0f
+            : (lv >= tier.maxLevel)
                 ? 1.0f
                 : (float)(lv - tier.minLevel) / (float)(tier.maxLevel - tier.minLevel);
         }
         levelT = std::clamp(levelT, 0.0f, 1.0f);
 
-        // Reduce effect intensity for levels <100
         const bool under100 = (lv < 100);
-        const float tierIntensity = under100 ? 0.5f : 1.0f;  // 50% intensity for low levels
+        const float tierIntensity = under100 ? 0.5f : 1.0f;
 
-        // Pastelize colors based on level position in tier
-        // At levelT = 0.0 (bottom of tier): more desaturated
-        // At levelT = 1.0 (top of tier): full vibrant color
+        // Pastelize tier colors
         auto Pastelize = [&](const float *c) -> ImVec4
         {
             const float t = Settings::NameColorMix + (1.0f - Settings::NameColorMix) * levelT;
-            // Lerp from white (1.0) toward tier color (c) by factor t
             return ImVec4(
                 1.0f + (c[0] - 1.0f) * t,
                 1.0f + (c[1] - 1.0f) * t,
@@ -1163,775 +1076,743 @@ namespace Renderer
                 1.0f);
         };
 
-        // Apply pastelization to tier colors
-        ImVec4 Lc = Pastelize(tier.leftColor);
-        ImVec4 Rc = Pastelize(tier.rightColor);
+        style.Lc = Pastelize(tier.leftColor);
+        style.Rc = Pastelize(tier.rightColor);
 
-        // Calculate alpha for visual effects (shimmers, etc.)
-        // Scales with tier intensity and level position
-        const float effectAlpha = alpha * tierIntensity * (Settings::EffectAlphaMin + Settings::EffectAlphaMax * levelT);
+        style.effectAlpha = alpha * tierIntensity * (Settings::EffectAlphaMin + Settings::EffectAlphaMax * levelT);
 
-        // Mix color toward white
-        // amount = 1.0 keeps original color, 0.0 gives pure white
         auto MixToWhite = [](ImVec4 c, float amount)
         {
             amount = std::clamp(amount, 0.0f, 1.0f);
             return ImVec4(
-                1.0f + (c.x - 1.0f) * amount,  // Lerp toward white (1.0)
+                1.0f + (c.x - 1.0f) * amount,
                 1.0f + (c.y - 1.0f) * amount,
                 1.0f + (c.z - 1.0f) * amount,
-                c.w  // Preserve alpha
-            );
+                c.w);
         };
 
-        // Calculate color intensity for low levels
-        // Low levels get more whitened to avoid overly saturated colors
         const float baseColorAmount = under100 ? (0.35f + 0.65f * tierIntensity) : 1.0f;
 
-        // Create color variations with progressive whitening:
-        // Level, softened tier colors
-        ImVec4 LcLevel = MixToWhite(Lc, baseColorAmount);
-        ImVec4 RcLevel = MixToWhite(Rc, baseColorAmount);
+        style.LcLevel = MixToWhite(style.Lc, baseColorAmount);
+        style.RcLevel = MixToWhite(style.Rc, baseColorAmount);
+        style.LcName = WashColor(style.LcLevel);
+        style.RcName = WashColor(style.RcLevel);
+        style.LcTitle = WashColor(style.LcName);
+        style.RcTitle = WashColor(style.RcName);
 
-        // Name, washed level colors
-        ImVec4 LcName = WashColor(LcLevel);
-        ImVec4 RcName = WashColor(RcLevel);
+        style.specialGlowColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
-        // Title, extra washed
-        ImVec4 LcTitle = WashColor(LcName);
-        ImVec4 RcTitle = WashColor(RcName);
+        if (style.specialTitle) {
+            const auto* st = style.specialTitle;
+            ImVec4 specialCol(st->color[0], st->color[1], st->color[2], 1.0f);
+            style.specialGlowColor = ImVec4(st->glowColor[0], st->glowColor[1], st->glowColor[2], 1.0f);
 
-        // Special title glow color
-        ImVec4 specialGlowColor(1.0f, 1.0f, 1.0f, 1.0f);
-
-        // Override colors if this is a special title
-        if (specialTitle) {
-            // Use special title's custom colors
-            ImVec4 specialCol(specialTitle->color[0], specialTitle->color[1], specialTitle->color[2], 1.0f);
-            specialGlowColor = ImVec4(specialTitle->glowColor[0], specialTitle->glowColor[1], specialTitle->glowColor[2], 1.0f);
-
-            // Apply the special color with slight variations for visual hierarchy
-            Lc = specialCol;
-            Rc = specialCol;
-            LcLevel = specialCol;
-            RcLevel = specialCol;
-            LcName = specialCol;
-            RcName = specialCol;
-            // Title uses slightly brighter/washed version
-            LcTitle = WashColor(specialCol);
-            RcTitle = WashColor(specialCol);
+            style.Lc = specialCol;
+            style.Rc = specialCol;
+            style.LcLevel = specialCol;
+            style.RcLevel = specialCol;
+            style.LcName = specialCol;
+            style.RcName = specialCol;
+            style.LcTitle = WashColor(specialCol);
+            style.RcTitle = WashColor(specialCol);
         }
 
-        // Convert to packed ImU32 format for rendering
-        // Name colors
-        ImU32 colL = ImGui::ColorConvertFloat4ToU32(ImVec4(LcName.x, LcName.y, LcName.z, alpha));
-        ImU32 colR = ImGui::ColorConvertFloat4ToU32(ImVec4(RcName.x, RcName.y, RcName.z, alpha));
+        // Pack colors to ImU32
+        style.colL = ImGui::ColorConvertFloat4ToU32(ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, alpha));
+        style.colR = ImGui::ColorConvertFloat4ToU32(ImVec4(style.RcName.x, style.RcName.y, style.RcName.z, alpha));
 
-        // Reduced alpha for secondary text elements (title, level, separator)
-        // This makes the name stand out more as the primary element
-        const float titleAlpha = alpha * Settings::Visual().TitleAlphaMultiplier;
-        const float levelAlpha = alpha * Settings::Visual().LevelAlphaMultiplier;
+        style.titleAlpha = alpha * Settings::Visual().TitleAlphaMultiplier;
+        style.levelAlpha = alpha * Settings::Visual().LevelAlphaMultiplier;
 
-        // Title colors
-        ImU32 colLTitle = ImGui::ColorConvertFloat4ToU32(ImVec4(LcTitle.x, LcTitle.y, LcTitle.z, titleAlpha));
-        ImU32 colRTitle = ImGui::ColorConvertFloat4ToU32(ImVec4(RcTitle.x, RcTitle.y, RcTitle.z, titleAlpha));
+        style.colLTitle = ImGui::ColorConvertFloat4ToU32(ImVec4(style.LcTitle.x, style.LcTitle.y, style.LcTitle.z, style.titleAlpha));
+        style.colRTitle = ImGui::ColorConvertFloat4ToU32(ImVec4(style.RcTitle.x, style.RcTitle.y, style.RcTitle.z, style.titleAlpha));
+        style.colLLevel = ImGui::ColorConvertFloat4ToU32(ImVec4(style.LcLevel.x, style.LcLevel.y, style.LcLevel.z, style.levelAlpha));
+        style.colRLevel = ImGui::ColorConvertFloat4ToU32(ImVec4(style.RcLevel.x, style.RcLevel.y, style.RcLevel.z, style.levelAlpha));
+        style.highlight = ImGui::ColorConvertFloat4ToU32(ImVec4(tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], style.effectAlpha));
 
-        // Level colors
-        ImU32 colLLevel = ImGui::ColorConvertFloat4ToU32(ImVec4(LcLevel.x, LcLevel.y, LcLevel.z, levelAlpha));
-        ImU32 colRLevel = ImGui::ColorConvertFloat4ToU32(ImVec4(RcLevel.x, RcLevel.y, RcLevel.z, levelAlpha));
-
-        // Highlight color for shimmer/special effects
-        ImU32 highlight = ImGui::ColorConvertFloat4ToU32(ImVec4(tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], effectAlpha));
-
-        // Keep black layers tied to distance alpha so far text fades instead of turning black.
         const float outlineAlpha = TextEffects::Saturate(alpha);
         const float shadowAlpha = TextEffects::Saturate(alpha * 0.75f);
-        ImU32 outlineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, outlineAlpha));
-        ImU32 shadowColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, shadowAlpha));
+        style.outlineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, outlineAlpha));
+        style.shadowColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, shadowAlpha));
 
-        // Base outline width from settings
-        const float baseOutlineWidth = Settings::OutlineWidthMin + Settings::OutlineWidthMax;
+        // Outline width data (actual widths computed after font sizes are known)
+        style.baseOutlineWidth = Settings::OutlineWidthMin + Settings::OutlineWidthMax;
+        style.distToPlayer = d.distToPlayer;
 
-        // Calculate outline width scaled proportionally to font size
-        // Uses the configured NameFontSize as reference so outline looks correct at default zoom
-        auto calcOutlineWidth = [=, &d](float fontSize) {
-            float w = baseOutlineWidth * (fontSize / Settings::NameFontSize);
-            if (Settings::Visual().EnableDistanceOutlineScale) {
-                float distT = TextEffects::Saturate(
-                    (d.distToPlayer - Settings::FadeStartDistance) /
-                    (Settings::FadeEndDistance - Settings::FadeStartDistance));
-                float distMul = Settings::Visual().OutlineDistanceMin +
-                                (Settings::Visual().OutlineDistanceMax - Settings::Visual().OutlineDistanceMin) * distT;
-                w *= distMul;
-            }
-            return w;
-        };
+        // Animation
+        auto frac = [](float x) { return x - std::floor(x); };
 
-        // Get fractional part of float
-        auto frac = [](float x)
-        { return x - std::floor(x); };
-
-        // Determine animation speed based on tier position
-        // Higher tiers get slower, more "legendary" animations
-        float tierAnimSpeed = Settings::AnimSpeedLowTier;  // Default for low tiers
+        float tierAnimSpeed = Settings::AnimSpeedLowTier;
         if (!Settings::Tiers.empty())
         {
-            float tierRatio = static_cast<float>(tierIdx) / static_cast<float>(Settings::Tiers.size() - 1);
+            float tierRatio = static_cast<float>(style.tierIdx) / static_cast<float>(Settings::Tiers.size() - 1);
             if (tierRatio >= 0.9f)
-            {
-                tierAnimSpeed = Settings::AnimSpeedHighTier;  // Slowest for top tiers
-            }
+                tierAnimSpeed = Settings::AnimSpeedHighTier;
             else if (tierRatio >= 0.8f)
-            {
-                tierAnimSpeed = Settings::AnimSpeedMidTier;  // Medium for mid-high tiers
-            }
+                tierAnimSpeed = Settings::AnimSpeedMidTier;
         }
-        // Further slow down animations for low levels
         if (under100)
             tierAnimSpeed *= 0.75f;
 
-        // Calculate animation phase [0, 1] for this actor
-        // Each actor gets a unique seed based on form ID to prevent synchronization
-        const float phaseSeed = (d.formID & 1023) / 1023.0f;           // Unique seed per actor
-        const float phase01 = frac(time * tierAnimSpeed + phaseSeed);  // Animated phase
+        const float phaseSeed = (d.formID & 1023) / 1023.0f;
+        style.phase01 = frac(time * tierAnimSpeed + phaseSeed);
 
-        // Format string replacement
-        // Replaces placeholders: %n = name, %l = level, %t = title
-        auto FormatString = [&](const std::string &fmt, const char *nameVal, int levelVal, const char *titleVal = nullptr)
-        {
-            std::string s = fmt;
+        style.strength = tierIntensity * (Settings::StrengthMin + Settings::StrengthMax * levelT);
 
-            // Replace %n with actor name
-            size_t pos = 0;
-            while ((pos = s.find("%n", pos)) != std::string::npos)
-            {
-                s.replace(pos, 2, nameVal);
-                pos += strlen(nameVal);  // Move past replacement to avoid infinite loop
-            }
+        return style;
+    }
 
-            // Replace %l with actor level
-            pos = 0;
-            std::string lStr = std::to_string(levelVal);
-            while ((pos = s.find("%l", pos)) != std::string::npos)
-            {
-                s.replace(pos, 2, lStr);
-                pos += lStr.length();
-            }
+    /// Measure text and compute all positions for a label.
+    static LabelLayout ComputeLabelLayout(const ActorDrawData &d, ActorCache &entry, const LabelStyle &style, float textSizeScale)
+    {
+        LabelLayout layout{};
 
-            // Replace %t with tier title
-            if (titleVal)
-            {
-                pos = 0;
-                while ((pos = s.find("%t", pos)) != std::string::npos)
-                {
-                    s.replace(pos, 2, titleVal);
-                    pos += strlen(titleVal);
-                }
-            }
-            return s;
-        };
-
-        // Render segment
-        struct RenderSeg
-        {
-            std::string text;         ///< Formatted text to display
-            std::string displayText;  ///< Text after typewriter truncation
-            bool isLevel;             ///< Whether to use level font
-            ImFont *font;             ///< Font to use for rendering
-            float fontSize;           ///< Scaled font size
-            ImVec2 size;              ///< Measured size of this segment
-            ImVec2 displaySize;       ///< Measured size of displayText
-        };
-
-        // Calculate how many characters should be visible based on time elapsed
-        int typewriterCharsToShow = -1;  // -1 = show all (disabled or complete)
+        // Typewriter character count
+        int typewriterCharsToShow = -1;
         if (Settings::EnableTypewriter && !entry.typewriterComplete)
         {
             float effectiveTime = entry.typewriterTime - Settings::TypewriterDelay;
             if (effectiveTime > 0.0f)
-            {
                 typewriterCharsToShow = static_cast<int>(effectiveTime * Settings::TypewriterSpeed);
-            }
             else
-            {
-                typewriterCharsToShow = 0;  // Still in delay period
-            }
+                typewriterCharsToShow = 0;
         }
 
-        // Get fonts loaded in Hooks.cpp (Index 0 = name, 1 = level, 2 = title)
-        ImFont *fontName = ImGui::GetIO().Fonts->Fonts[0];
-        ImFont *fontLevel = ImGui::GetIO().Fonts->Fonts[1];
-        ImFont *fontTitle = ImGui::GetIO().Fonts->Fonts[2];
+        // Fonts
+        layout.fontName = ImGui::GetIO().Fonts->Fonts[0];
+        layout.fontLevel = ImGui::GetIO().Fonts->Fonts[1];
+        layout.fontTitle = ImGui::GetIO().Fonts->Fonts[2];
 
-        // Calculate scaled font sizes
-        const float nameFontSize = fontName->FontSize * textSizeScale;
-        const float levelFontSize = fontLevel->FontSize * textSizeScale;
-        const float titleFontSize = fontTitle->FontSize * textSizeScale;
+        layout.nameFontSize = layout.fontName->FontSize * textSizeScale;
+        layout.levelFontSize = layout.fontLevel->FontSize * textSizeScale;
+        layout.titleFontSize = layout.fontTitle->FontSize * textSizeScale;
 
-        // Per-font outline widths (scaled to font size)
-        const float nameOutlineWidth = calcOutlineWidth(nameFontSize);
-        const float levelOutlineWidth = calcOutlineWidth(levelFontSize);
-        const float titleOutlineWidth = calcOutlineWidth(titleFontSize);
+        const float outlineWidth = style.outlineWidth;
 
-        // Primary outline width for layout calculations
-        const float outlineWidth = nameOutlineWidth;
-
-        // Use space if name is empty
         const char *safeName = d.name.empty() ? " " : d.name.c_str();
 
-        // Build segments for the main line
-        std::vector<RenderSeg> segments;
-        float mainLineWidth = 0.0f;   // Total width of all segments
-        float mainLineHeight = 0.0f;  // Height of tallest segment
+        // Build segments
+        layout.mainLineWidth = 0.0f;
+        layout.mainLineHeight = 0.0f;
 
-        // Use default format if settings not loaded or empty
-        // Default: "%n Lv.%l" (e.g., "Lydia Lv.42")
         const auto &fmtList = Settings::DisplayFormat.empty() ? std::vector<Settings::Segment>{{"%n", false}, {" Lv.%l", true}} : Settings::DisplayFormat;
 
-        // Track total characters for typewriter effect
         int totalCharsProcessed = 0;
 
-        // Process each segment in the format list
         for (const auto &fmt : fmtList)
         {
             RenderSeg seg;
-            seg.text = FormatString(fmt.format, safeName, d.level);  // Replace placeholders
-            seg.isLevel = fmt.useLevelFont;                          // Choose font
-            seg.font = seg.isLevel ? fontLevel : fontName;
-            seg.fontSize = seg.isLevel ? levelFontSize : nameFontSize;
-
-            // Measure the rendered size of this segment
+            seg.text = FormatString(fmt.format, safeName, d.level);
+            seg.isLevel = fmt.useLevelFont;
+            seg.font = seg.isLevel ? layout.fontLevel : layout.fontName;
+            seg.fontSize = seg.isLevel ? layout.levelFontSize : layout.nameFontSize;
             seg.size = seg.font->CalcTextSizeA(seg.fontSize, FLT_MAX, 0.0f, seg.text.c_str());
 
-            // Apply typewriter truncation if active
             if (typewriterCharsToShow >= 0)
             {
                 size_t segCharCount = Utf8CharCount(seg.text.c_str());
                 int charsRemaining = typewriterCharsToShow - totalCharsProcessed;
                 if (charsRemaining <= 0)
-                {
-                    seg.displayText = "";  // No characters visible yet
-                }
+                    seg.displayText = "";
                 else if (static_cast<size_t>(charsRemaining) >= segCharCount)
-                {
-                    seg.displayText = seg.text;  // Show full segment
-                }
+                    seg.displayText = seg.text;
                 else
-                {
                     seg.displayText = Utf8Truncate(seg.text.c_str(), charsRemaining);
-                }
                 totalCharsProcessed += static_cast<int>(segCharCount);
             }
             else
             {
-                seg.displayText = seg.text;  // Typewriter disabled, show full text
+                seg.displayText = seg.text;
             }
 
-            // Measure display text size
             seg.displaySize = seg.font->CalcTextSizeA(seg.fontSize, FLT_MAX, 0.0f, seg.displayText.c_str());
 
-            segments.push_back(seg);
-            mainLineWidth += seg.size.x;  // Use full width for layout
-            if (seg.size.y > mainLineHeight)
-                mainLineHeight = seg.size.y;  // Track tallest
+            layout.segments.push_back(seg);
+            layout.mainLineWidth += seg.size.x;
+            if (seg.size.y > layout.mainLineHeight)
+                layout.mainLineHeight = seg.size.y;
         }
 
-        // Add padding between segments
-        // Total width = sum of segment widths + (n-1) * padding
-        float segmentPadding = Settings::SegmentPadding;
-        if (!segments.empty())
-        {
-            mainLineWidth += (segments.size() - 1) * segmentPadding;
-        }
+        layout.segmentPadding = Settings::SegmentPadding;
+        if (!layout.segments.empty())
+            layout.mainLineWidth += (layout.segments.size() - 1) * layout.segmentPadding;
 
-        // Format the title text, displayed above main line
-        // Special titles override the tier title with their custom display title
-        const char* titleToUse = specialTitle ? specialTitle->displayTitle.c_str() : tier.title.c_str();
-        std::string titleStr = FormatString(Settings::TitleFormat, safeName, d.level, titleToUse);
-        std::string titleDisplayStr = titleStr;
+        // Title
+        const char* titleToUse = style.specialTitle ? style.specialTitle->displayTitle.c_str() : style.tier->title.c_str();
+        layout.titleStr = FormatString(Settings::TitleFormat, safeName, d.level, titleToUse);
+        layout.titleDisplayStr = layout.titleStr;
 
-        // Apply typewriter truncation to title
         if (typewriterCharsToShow >= 0)
         {
-            size_t titleCharCount = Utf8CharCount(titleStr.c_str());
+            size_t titleCharCount = Utf8CharCount(layout.titleStr.c_str());
             int charsRemainingForTitle = typewriterCharsToShow - totalCharsProcessed;
             if (charsRemainingForTitle <= 0)
-            {
-                titleDisplayStr = "";
-            }
+                layout.titleDisplayStr = "";
             else if (static_cast<size_t>(charsRemainingForTitle) >= titleCharCount)
-            {
-                titleDisplayStr = titleStr;
-            }
+                layout.titleDisplayStr = layout.titleStr;
             else
-            {
-                titleDisplayStr = Utf8Truncate(titleStr.c_str(), charsRemainingForTitle);
-            }
+                layout.titleDisplayStr = Utf8Truncate(layout.titleStr.c_str(), charsRemainingForTitle);
             totalCharsProcessed += static_cast<int>(titleCharCount);
 
-            // Check if typewriter is complete (all text revealed)
             if (!entry.typewriterComplete && typewriterCharsToShow >= totalCharsProcessed)
-            {
                 entry.typewriterComplete = true;
-            }
         }
 
-        const char *titleText = titleStr.c_str();
-        const char *titleDisplayText = titleDisplayStr.c_str();
+        const char *titleText = layout.titleStr.c_str();
 
-        // Calculate tight vertical bounds for precise positioning
-        // Title bounds, relative to baseline
+        // Tight vertical bounds
         float titleTop = 0.0f, titleBottom = 0.0f;
         if (titleText && *titleText)
-        {
-            CalcTightYBoundsFromTop(fontTitle, titleFontSize, titleText, titleTop, titleBottom);
-        }
-        ImVec2 titleSize = fontTitle->CalcTextSizeA(titleFontSize, FLT_MAX, 0.0f, titleText);
+            CalcTightYBoundsFromTop(layout.fontTitle, layout.titleFontSize, titleText, titleTop, titleBottom);
+        layout.titleSize = layout.fontTitle->CalcTextSizeA(layout.titleFontSize, FLT_MAX, 0.0f, titleText);
 
-        // Main line tight bounds
-        // We need to account for vertical offset used during rendering
         float mainTop = +FLT_MAX;
         float mainBottom = -FLT_MAX;
-
         bool any = false;
-        for (const auto &seg : segments)
+        for (const auto &seg : layout.segments)
         {
             float sTop = 0.0f, sBottom = 0.0f;
             CalcTightYBoundsFromTop(seg.font, seg.fontSize, seg.text.c_str(), sTop, sBottom);
-
-            // Calculate vertical offset
-            // This centers smaller text within the tallest segment's height
-            float vOffset = (mainLineHeight - seg.size.y) * 0.5f;
-
-            // Track extremes accounting for the offset
+            float vOffset = (layout.mainLineHeight - seg.size.y) * 0.5f;
             mainTop = std::min(mainTop, vOffset + sTop);
             mainBottom = std::max(mainBottom, vOffset + sBottom);
             any = true;
         }
+        if (!any) { mainTop = 0.0f; mainBottom = 0.0f; }
 
-        if (!any)
-        {
-            mainTop = 0.0f;
-            mainBottom = 0.0f;
-        }
-
-        // Include shadow and outline in bounds visual extents of the text
         const float titleShadowY = Settings::TitleShadowOffsetY;
         const float mainShadowY = Settings::MainShadowOffsetY;
+        float titleBottomDraw = titleBottom + titleShadowY;
+        float mainTopDraw = mainTop - outlineWidth;
+        float mainBottomDraw = mainBottom + outlineWidth + mainShadowY;
 
-        // Calculate actual drawn extents including effects
-        float titleBottomDraw = titleBottom + titleShadowY;              // Shadow extends downward
-        float mainTopDraw = mainTop - outlineWidth;                      // Outline extends upward
-        float mainBottomDraw = mainBottom + outlineWidth + mainShadowY;  // Outline shadow
+        layout.mainLineY = -mainBottomDraw;
+        layout.titleY = layout.mainLineY + mainTopDraw - titleBottomDraw;
 
-        // Anchor main line so its visual bottom is at Y=0
-        float mainLineY = -mainBottomDraw;
-
-        // Stack title above main line with no gap
-        // Title's drawn bottom should touch main's drawn top
-        float titleY = mainLineY + mainTopDraw - titleBottomDraw;
-
-        // Final rendering setup
-        // startPos is the anchor point
-        ImVec2 startPos = entry.smooth;
-
-        // Apply overlap prevention offset
+        layout.startPos = entry.smooth;
         if (Settings::Visual().EnableOverlapPrevention)
         {
             auto oIt = OverlapOffsets().find(d.formID);
             if (oIt != OverlapOffsets().end())
-                startPos.y += oIt->second;
+                layout.startPos.y += oIt->second;
         }
 
-        // Total width is the larger of main line or title
-        float totalWidth = std::max(mainLineWidth, titleSize.x);
+        layout.totalWidth = std::max(layout.mainLineWidth, layout.titleSize.x);
 
-        // Calculate effect strength based on tier and level position
-        // Higher levels in higher tiers get stronger effects
-        float strength = tierIntensity * (Settings::StrengthMin + Settings::StrengthMax * levelT);
+        layout.nameplateTop = layout.startPos.y + layout.titleY + titleTop;
+        layout.nameplateBottom = layout.startPos.y + layout.mainLineY + mainBottom;
+        layout.nameplateLeft = layout.startPos.x - layout.totalWidth * 0.5f;
+        layout.nameplateRight = layout.startPos.x + layout.totalWidth * 0.5f;
+        layout.nameplateWidth = layout.totalWidth;
+        layout.nameplateHeight = layout.nameplateBottom - layout.nameplateTop;
+        layout.nameplateCenter = ImVec2(layout.startPos.x, (layout.nameplateTop + layout.nameplateBottom) * 0.5f);
 
-        // Calculate overall nameplate bounds for decorative effects
-        // These bounds encompass both title and main line
-        float nameplateTop = startPos.y + titleY + titleTop;
-        float nameplateBottom = startPos.y + mainLineY + mainBottom;
-        float nameplateLeft = startPos.x - totalWidth * 0.5f;
-        float nameplateRight = startPos.x + totalWidth * 0.5f;
-        float nameplateWidth = totalWidth;
-        float nameplateHeight = nameplateBottom - nameplateTop;
-        ImVec2 nameplatePos(nameplateLeft, nameplateTop);
-        ImVec2 nameplateSize(nameplateWidth, nameplateHeight);
-        ImVec2 nameplateCenter(startPos.x, (nameplateTop + nameplateBottom) * 0.5f);
+        return layout;
+    }
 
-        // Draw particles first so they appear behind everything else
+    /// Draw particle aura effects behind the nameplate.
+    static void DrawParticles(ImDrawList *dl, const ActorDrawData &d, const LabelStyle &style, const LabelLayout &layout, float lodEffectsFactor, float time, ImDrawListSplitter *splitter)
+    {
+        splitter->SetCurrentChannel(dl, 0);  // Back layer: particles
+        const Settings::TierDefinition &tier = *style.tier;
+        const uint16_t lv = (uint16_t)std::min<int>(d.level, 9999);
+
         bool tierHasParticles = !tier.particleTypes.empty() && tier.particleTypes != "None";
         bool globalHasParticles = Settings::EnableOrbs || Settings::EnableWisps || Settings::EnableRunes ||
                                   Settings::EnableSparks || Settings::EnableStars;
         bool hasAnyParticles = tierHasParticles || globalHasParticles;
-        bool showParticles = ((Settings::EnableParticleAura && hasAnyParticles && tierAllowsParticles)
-                          || (specialTitle && specialTitle->forceParticles))
+        bool showParticles = ((Settings::EnableParticleAura && hasAnyParticles && style.tierAllowsParticles)
+                          || (style.specialTitle && style.specialTitle->forceParticles))
                           && lodEffectsFactor > 0.01f;
-        if (showParticles)
-        {
-            // Use special title's color for particles, or tier highlight color for normal
-            ImU32 particleColor;
-            if (specialTitle) {
-                particleColor = ImGui::ColorConvertFloat4ToU32(
-                    ImVec4(specialTitle->color[0], specialTitle->color[1], specialTitle->color[2], 1.0f));
-            } else {
-                particleColor = ImGui::ColorConvertFloat4ToU32(
-                    ImVec4(tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], 1.0f));
-            }
+        if (!showParticles)
+            return;
 
-            // Particle spread based on nameplate size
-            float spreadX = (nameplateWidth * 0.5f + Settings::ParticleSpread * 1.4f);
-            float spreadY = (nameplateHeight * 0.5f + Settings::ParticleSpread * 1.1f);
-
-            // Use tier-specific particle count if set, otherwise global.
-            // Boost high-tier/high-level visibility so very high levels read as visually stronger.
-            int particleCount = (tier.particleCount > 0) ? tier.particleCount : Settings::ParticleCount;
-            float tierBoost = 0.0f;
-            if (Settings::Tiers.size() > 1) {
-                tierBoost = static_cast<float>(tierIdx) / static_cast<float>(Settings::Tiers.size() - 1);
-            }
-            float levelBoost = TextEffects::Saturate((static_cast<float>(lv) - 100.0f) / 400.0f);
-            float particleBoost = 1.0f + 0.6f * tierBoost + 0.6f * levelBoost;
-            int boostedParticleCount = std::clamp(static_cast<int>(std::round(particleCount * particleBoost)),
-                                                  particleCount, 96);
-            float boostedParticleSize = Settings::ParticleSize * (1.0f + 0.4f * tierBoost + 0.35f * levelBoost);
-            float boostedParticleAlpha = std::clamp(Settings::ParticleAlpha * alpha *
-                                                    (0.95f + 0.35f * tierBoost + 0.35f * levelBoost),
-                                                    0.0f, 1.0f);
-
-            // Determine which particle types to render
-            // If tier has specific types, use those; otherwise use global settings
-            bool showOrbs = false, showWisps = false, showRunes = false, showSparks = false, showStars = false;
-
-            if (tierHasParticles) {
-                // Parse tier-specific particle types (comma-separated)
-                showOrbs = tier.particleTypes.find("Orbs") != std::string::npos;
-                showWisps = tier.particleTypes.find("Wisps") != std::string::npos;
-                showRunes = tier.particleTypes.find("Runes") != std::string::npos;
-                showSparks = tier.particleTypes.find("Sparks") != std::string::npos;
-                showStars = tier.particleTypes.find("Stars") != std::string::npos;
-            } else {
-                // Use global settings
-                showOrbs = Settings::EnableOrbs;
-                showWisps = Settings::EnableWisps;
-                showRunes = Settings::EnableRunes;
-                showSparks = Settings::EnableSparks;
-                showStars = Settings::EnableStars;
-            }
-
-            // Count enabled styles for alpha scaling
-            int enabledStyles = (int)showOrbs + (int)showWisps + (int)showRunes + (int)showSparks + (int)showStars;
-            int slot = 0;
-
-            // Render each enabled particle type
-            if (showOrbs)
-            {
-                TextEffects::DrawParticleAura(drawList, nameplateCenter, spreadX, spreadY,
-                                              particleColor, boostedParticleAlpha,
-                                              Settings::ParticleStyle::Orbs, boostedParticleCount,
-                                              boostedParticleSize, Settings::ParticleSpeed, time,
-                                              slot++, enabledStyles);
-            }
-            if (showWisps)
-            {
-                TextEffects::DrawParticleAura(drawList, nameplateCenter, spreadX * 1.15f, spreadY * 1.15f,
-                                              particleColor, boostedParticleAlpha,
-                                              Settings::ParticleStyle::Wisps, boostedParticleCount,
-                                              boostedParticleSize, Settings::ParticleSpeed, time,
-                                              slot++, enabledStyles);
-            }
-            if (showRunes)
-            {
-                TextEffects::DrawParticleAura(drawList, nameplateCenter, spreadX * 0.9f, spreadY * 0.7f,
-                                              particleColor, boostedParticleAlpha,
-                                              Settings::ParticleStyle::Runes, std::max(4, boostedParticleCount / 2),
-                                              boostedParticleSize * 1.2f, Settings::ParticleSpeed * 0.6f, time,
-                                              slot++, enabledStyles);
-            }
-            if (showSparks)
-            {
-                TextEffects::DrawParticleAura(drawList, nameplateCenter, spreadX, spreadY * 0.8f,
-                                              particleColor, boostedParticleAlpha,
-                                              Settings::ParticleStyle::Sparks, boostedParticleCount,
-                                              boostedParticleSize * 0.7f, Settings::ParticleSpeed * 1.5f, time,
-                                              slot++, enabledStyles);
-            }
-            if (showStars)
-            {
-                TextEffects::DrawParticleAura(drawList, nameplateCenter, spreadX, spreadY,
-                                              particleColor, boostedParticleAlpha,
-                                              Settings::ParticleStyle::Stars, boostedParticleCount,
-                                              boostedParticleSize, Settings::ParticleSpeed, time,
-                                              slot++, enabledStyles);
-            }
+        ImU32 particleColor;
+        if (style.specialTitle) {
+            particleColor = ImGui::ColorConvertFloat4ToU32(
+                ImVec4(style.specialTitle->color[0], style.specialTitle->color[1], style.specialTitle->color[2], 1.0f));
+        } else {
+            particleColor = ImGui::ColorConvertFloat4ToU32(
+                ImVec4(tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], 1.0f));
         }
 
-        // Determine which ornaments to use
-        const std::string& leftOrns = (specialTitle && !specialTitle->leftOrnaments.empty())
-            ? specialTitle->leftOrnaments : tier.leftOrnaments;
-        const std::string& rightOrns = (specialTitle && !specialTitle->rightOrnaments.empty())
-            ? specialTitle->rightOrnaments : tier.rightOrnaments;
+        float spreadX = (layout.nameplateWidth * 0.5f + Settings::ParticleSpread * 1.4f);
+        float spreadY = (layout.nameplateHeight * 0.5f + Settings::ParticleSpread * 1.1f);
+
+        int particleCount = (tier.particleCount > 0) ? tier.particleCount : Settings::ParticleCount;
+        float tierBoost = 0.0f;
+        if (Settings::Tiers.size() > 1)
+            tierBoost = static_cast<float>(style.tierIdx) / static_cast<float>(Settings::Tiers.size() - 1);
+        float levelBoost = TextEffects::Saturate((static_cast<float>(lv) - 100.0f) / 400.0f);
+        float particleBoost = 1.0f + 0.6f * tierBoost + 0.6f * levelBoost;
+        int boostedParticleCount = std::clamp(static_cast<int>(std::round(particleCount * particleBoost)), particleCount, 96);
+        float boostedParticleSize = Settings::ParticleSize * (1.0f + 0.4f * tierBoost + 0.35f * levelBoost);
+        float boostedParticleAlpha = std::clamp(Settings::ParticleAlpha * style.alpha *
+                                                (0.95f + 0.35f * tierBoost + 0.35f * levelBoost), 0.0f, 1.0f);
+
+        bool showOrbs = false, showWisps = false, showRunes = false, showSparks = false, showStars = false;
+        if (tierHasParticles) {
+            showOrbs = tier.particleTypes.find("Orbs") != std::string::npos;
+            showWisps = tier.particleTypes.find("Wisps") != std::string::npos;
+            showRunes = tier.particleTypes.find("Runes") != std::string::npos;
+            showSparks = tier.particleTypes.find("Sparks") != std::string::npos;
+            showStars = tier.particleTypes.find("Stars") != std::string::npos;
+        } else {
+            showOrbs = Settings::EnableOrbs;
+            showWisps = Settings::EnableWisps;
+            showRunes = Settings::EnableRunes;
+            showSparks = Settings::EnableSparks;
+            showStars = Settings::EnableStars;
+        }
+
+        int enabledStyles = (int)showOrbs + (int)showWisps + (int)showRunes + (int)showSparks + (int)showStars;
+        int slot = 0;
+
+        if (showOrbs)
+            TextEffects::DrawParticleAura(dl, layout.nameplateCenter, spreadX, spreadY,
+                particleColor, boostedParticleAlpha, Settings::ParticleStyle::Orbs, boostedParticleCount,
+                boostedParticleSize, Settings::ParticleSpeed, time, slot++, enabledStyles);
+        if (showWisps)
+            TextEffects::DrawParticleAura(dl, layout.nameplateCenter, spreadX * 1.15f, spreadY * 1.15f,
+                particleColor, boostedParticleAlpha, Settings::ParticleStyle::Wisps, boostedParticleCount,
+                boostedParticleSize, Settings::ParticleSpeed, time, slot++, enabledStyles);
+        if (showRunes)
+            TextEffects::DrawParticleAura(dl, layout.nameplateCenter, spreadX * 0.9f, spreadY * 0.7f,
+                particleColor, boostedParticleAlpha, Settings::ParticleStyle::Runes, std::max(4, boostedParticleCount / 2),
+                boostedParticleSize * 1.2f, Settings::ParticleSpeed * 0.6f, time, slot++, enabledStyles);
+        if (showSparks)
+            TextEffects::DrawParticleAura(dl, layout.nameplateCenter, spreadX, spreadY * 0.8f,
+                particleColor, boostedParticleAlpha, Settings::ParticleStyle::Sparks, boostedParticleCount,
+                boostedParticleSize * 0.7f, Settings::ParticleSpeed * 1.5f, time, slot++, enabledStyles);
+        if (showStars)
+            TextEffects::DrawParticleAura(dl, layout.nameplateCenter, spreadX, spreadY,
+                particleColor, boostedParticleAlpha, Settings::ParticleStyle::Stars, boostedParticleCount,
+                boostedParticleSize, Settings::ParticleSpeed, time, slot++, enabledStyles);
+    }
+
+    /// Draw decorative ornament characters beside the nameplate.
+    static void DrawOrnaments(ImDrawList *dl, const ActorDrawData &d, const LabelStyle &style, const LabelLayout &layout, float lodEffectsFactor, float time, ImDrawListSplitter *splitter)
+    {
+        const Settings::TierDefinition &tier = *style.tier;
+
+        const std::string& leftOrns = (style.specialTitle && !style.specialTitle->leftOrnaments.empty())
+            ? style.specialTitle->leftOrnaments : tier.leftOrnaments;
+        const std::string& rightOrns = (style.specialTitle && !style.specialTitle->rightOrnaments.empty())
+            ? style.specialTitle->rightOrnaments : tier.rightOrnaments;
         bool hasOrnaments = !leftOrns.empty() || !rightOrns.empty();
-        bool showOrnaments = ((d.isPlayer && Settings::EnableOrnaments && hasOrnaments && tierAllowsOrnaments)
-                          || (specialTitle && specialTitle->forceOrnaments && hasOrnaments))
+        bool showOrnaments = ((d.isPlayer && Settings::EnableOrnaments && hasOrnaments && style.tierAllowsOrnaments)
+                          || (style.specialTitle && style.specialTitle->forceOrnaments && hasOrnaments))
                           && lodEffectsFactor > 0.01f;
         auto& ornIo = ImGui::GetIO();
         ImFont* ornamentFont = (ornIo.Fonts->Fonts.Size >= 4) ? ornIo.Fonts->Fonts[3] : nullptr;
-        if (showOrnaments && !Settings::OrnamentFontPath.empty() && ornamentFont)
-        {
-            // Keep only valid UTF-8 ornaments with an actual glyph in the ornament font.
-            auto collectDrawableOrnaments = [&](const std::string& raw) {
-                std::vector<std::string> out;
-                const char* p = raw.c_str();
-                while (*p) {
-                    unsigned int cp = 0;
-                    const char* next = Utf8Next(p, cp);
-                    if (!next || next <= p) {
-                        ++p;
-                        continue;
-                    }
+        if (!showOrnaments || Settings::OrnamentFontPath.empty() || !ornamentFont)
+            return;
 
-                    // Skip invalid and control codepoints to avoid tofu blocks.
-                    if (cp == 0xFFFD || cp < 0x20) {
-                        p = next;
-                        continue;
-                    }
+        auto collectDrawableOrnaments = [&](const std::string& raw) {
+            std::vector<std::string> out;
+            const char* p = raw.c_str();
+            while (*p) {
+                unsigned int cp = 0;
+                const char* next = Utf8Next(p, cp);
+                if (!next || next <= p) { ++p; continue; }
+                if (cp == 0xFFFD || cp < 0x20) { p = next; continue; }
 
-                    const ImFontGlyph* glyph = nullptr;
+                const ImFontGlyph* glyph = nullptr;
 #if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 18804
-                    glyph = ornamentFont->FindGlyphNoFallback(static_cast<ImWchar>(cp));
+                glyph = ornamentFont->FindGlyphNoFallback(static_cast<ImWchar>(cp));
 #else
-                    glyph = ornamentFont->FindGlyph(static_cast<ImWchar>(cp));
+                glyph = ornamentFont->FindGlyph(static_cast<ImWchar>(cp));
 #endif
-                    if (glyph) {
-                        out.emplace_back(p, static_cast<size_t>(next - p));
-                    }
-
-                    p = next;
-                }
-                return out;
-            };
-
-            const auto leftChars = collectDrawableOrnaments(leftOrns);
-            const auto rightChars = collectDrawableOrnaments(rightOrns);
-            if (leftChars.empty() && rightChars.empty()) {
-                // All configured ornaments were invalid or missing from font.
-                // Skip drawing instead of rendering fallback block glyphs.
-            } else {
-            // Calculate ornament scale based on tier position
-            float ornamentScale = 0.75f;
-            if (Settings::Tiers.size() > 1) {
-                ornamentScale = 0.75f + 0.3f * (static_cast<float>(tierIdx) / static_cast<float>(Settings::Tiers.size() - 1));
+                if (glyph)
+                    out.emplace_back(p, static_cast<size_t>(next - p));
+                p = next;
             }
-            float sizeMultiplier = (specialTitle != nullptr) ? ornamentScale * 1.3f : ornamentScale;
-            float ornamentSize = Settings::OrnamentFontSize * Settings::OrnamentScale * sizeMultiplier * textSizeScale;
+            return out;
+        };
 
-            // Extra padding between ornaments and text
-            float extraPadding = ornamentSize * 0.30f;
-            float totalSpacing = Settings::OrnamentSpacing * 1.35f + extraPadding;
-            float ornamentCharGap = std::max(2.0f, ornamentSize * 0.16f);
+        const auto leftChars = collectDrawableOrnaments(leftOrns);
+        const auto rightChars = collectDrawableOrnaments(rightOrns);
+        if (leftChars.empty() && rightChars.empty())
+            return;
 
-            // Use same colors as name for ornaments
-            ImU32 ornColL = ImGui::ColorConvertFloat4ToU32(ImVec4(Lc.x, Lc.y, Lc.z, alpha));
-            ImU32 ornColR = ImGui::ColorConvertFloat4ToU32(ImVec4(Rc.x, Rc.y, Rc.z, alpha));
-            ImU32 ornHighlight = ImGui::ColorConvertFloat4ToU32(
-                ImVec4(tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], alpha));
-            ImU32 ornOutline = IM_COL32(0, 0, 0, (int)(alpha * 255.0f));
+        const float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
 
-            // Calculate outline width scaled for ornament size
-            float ornOutlineWidth = outlineWidth * (ornamentSize / nameFontSize);
+        float ornamentScale = 0.75f;
+        if (Settings::Tiers.size() > 1)
+            ornamentScale = 0.75f + 0.3f * (static_cast<float>(style.tierIdx) / static_cast<float>(Settings::Tiers.size() - 1));
+        float sizeMultiplier = (style.specialTitle != nullptr) ? ornamentScale * 1.3f : ornamentScale;
+        float ornamentSize = Settings::OrnamentFontSize * Settings::OrnamentScale * sizeMultiplier * textSizeScale;
 
-            // Glow color for ornaments
-            ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(ImVec4(Lc.x, Lc.y, Lc.z, alpha));
-            bool showOrnGlow = Settings::EnableGlow && Settings::GlowIntensity > 0.0f && tierAllowsGlow;
+        float extraPadding = ornamentSize * 0.30f;
+        float totalSpacing = Settings::OrnamentSpacing * 1.35f + extraPadding;
+        float ornamentCharGap = std::max(2.0f, ornamentSize * 0.16f);
 
-            // Draw a single ornament character with optional glow and text effect
-            auto drawOrnChar = [&](ImVec2 charPos, const char* ch) {
-                if (showOrnGlow) {
-                    TextEffects::AddTextGlow(drawList, ornamentFont, ornamentSize, charPos,
-                                             ch, glowColor, Settings::GlowRadius,
-                                             Settings::GlowIntensity, Settings::GlowSamples);
-                }
-                ApplyTextEffect(drawList, ornamentFont, ornamentSize, charPos, ch,
-                                tier.nameEffect, ornColL, ornColR, ornHighlight, ornOutline, ornOutlineWidth,
-                                phase01, strength, textSizeScale, alpha);
-            };
+        ImU32 ornColL = ImGui::ColorConvertFloat4ToU32(ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha));
+        ImU32 ornColR = ImGui::ColorConvertFloat4ToU32(ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, style.alpha));
+        ImU32 ornHighlight = ImGui::ColorConvertFloat4ToU32(
+            ImVec4(tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], style.alpha));
+        ImU32 ornOutline = IM_COL32(0, 0, 0, (int)(style.alpha * 255.0f));
+        float ornOutlineWidth = style.outlineWidth * (ornamentSize / layout.nameFontSize);
 
-            // Use UTF-8 aware iteration for multi-byte characters
-            if (!leftChars.empty())
-            {
-                float cursorX = nameplateCenter.x - nameplateWidth * 0.5f - totalSpacing;
-                // Draw characters in reverse order
-                for (int i = static_cast<int>(leftChars.size()) - 1; i >= 0; --i)
-                {
-                    const std::string& ch = leftChars[i];
-                    ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, 0.0f, ch.c_str());
-                    cursorX -= charSize.x;
-                    ImVec2 charPos(cursorX, nameplateCenter.y - charSize.y * 0.5f);
-                    drawOrnChar(charPos, ch.c_str());
-                    if (i > 0) {
-                        cursorX -= ornamentCharGap;
-                    }
-                }
+        ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha));
+        bool showOrnGlow = Settings::EnableGlow && Settings::GlowIntensity > 0.0f && style.tierAllowsGlow;
+
+        auto drawOrnChar = [&](ImVec2 charPos, const char* ch) {
+            if (showOrnGlow) {
+                splitter->SetCurrentChannel(dl, 0);  // Back layer: glow
+                ParticleTextures::PushAdditiveBlend(dl);
+                TextEffects::AddTextGlow(dl, ornamentFont, ornamentSize, charPos,
+                                         ch, glowColor, Settings::GlowRadius,
+                                         Settings::GlowIntensity, Settings::GlowSamples);
+                ParticleTextures::PopBlendState(dl);
             }
+            splitter->SetCurrentChannel(dl, 1);  // Front layer: ornament shapes
+            ApplyTextEffect(dl, ornamentFont, ornamentSize, charPos, ch,
+                            tier.nameEffect, ornColL, ornColR, ornHighlight, ornOutline, ornOutlineWidth,
+                            style.phase01, style.strength, textSizeScale, style.alpha);
+        };
 
-            if (!rightChars.empty())
-            {
-                float cursorX = nameplateCenter.x + nameplateWidth * 0.5f + totalSpacing;
-                for (size_t i = 0; i < rightChars.size(); ++i)
-                {
-                    const std::string& ch = rightChars[i];
-                    ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, 0.0f, ch.c_str());
-                    ImVec2 charPos(cursorX, nameplateCenter.y - charSize.y * 0.5f);
-                    drawOrnChar(charPos, ch.c_str());
-                    cursorX += charSize.x;
-                    if (i + 1 < rightChars.size()) {
-                        cursorX += ornamentCharGap;
-                    }
-                }
-            }
-            }
-        }
-
-        // Render Title, if present and has visible characters (LOD: hidden at far distance)
-        if (titleDisplayText && *titleDisplayText && lodTitleFactor > 0.01f)
+        if (!leftChars.empty())
         {
-            // Center title horizontally within totalWidth
-            float titleOffsetX = (totalWidth - titleSize.x) * 0.5f;
-            ImVec2 titlePos(startPos.x - totalWidth * 0.5f + titleOffsetX,  // Centered X
-                            startPos.y + titleY);                           // Calculated Y
-
-            // Prepare colors for title (apply LOD fade)
-            float lodTitleAlpha = alpha * lodTitleFactor;
-            ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, lodTitleAlpha));
-            ImU32 titleShadow = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlpha * 0.5f));
-
-            // Draw glow behind title
-            if (Settings::EnableGlow && Settings::GlowIntensity > 0.0f && tierAllowsGlow)
+            float cursorX = layout.nameplateCenter.x - layout.nameplateWidth * 0.5f - totalSpacing;
+            for (int i = static_cast<int>(leftChars.size()) - 1; i >= 0; --i)
             {
-                // Use special glow color if available, otherwise tier left color
-                ImVec4 glowColorVec = specialTitle
-                    ? ImVec4(specialGlowColor.x, specialGlowColor.y, specialGlowColor.z, alpha)
-                    : ImVec4(LcTitle.x, LcTitle.y, LcTitle.z, alpha);
-                ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(glowColorVec);
-                // Subtle glow boost for special titles
-                float glowIntensity = specialTitle ? Settings::GlowIntensity * 1.15f : Settings::GlowIntensity;
-                float glowRadius = specialTitle ? Settings::GlowRadius * 1.1f : Settings::GlowRadius;
-                TextEffects::AddTextGlow(drawList, fontTitle, titleFontSize, titlePos,
-                                         titleDisplayText, glowColor, glowRadius,
-                                         glowIntensity, Settings::GlowSamples);
-            }
-
-            // Draw title shadow first
-            drawList->AddText(fontTitle, titleFontSize,
-                              ImVec2(titlePos.x + Settings::TitleShadowOffsetX,
-                                     titlePos.y + Settings::TitleShadowOffsetY),
-                              titleShadow, titleDisplayText);
-
-            float lodTitleAlphaFinal = titleAlpha * lodTitleFactor;
-            if (d.isPlayer)
-            {
-                // Apply tier-defined visual effect
-                ApplyTextEffect(drawList, fontTitle, titleFontSize, titlePos, titleDisplayText,
-                                tier.titleEffect, colLTitle, colRTitle, highlight, outlineColor, titleOutlineWidth,
-                                phase01, strength, textSizeScale, lodTitleAlphaFinal);
-            }
-            else
-            {
-                // NPC, use disposition color with simple outline
-                ImVec4 dColV = WashColor(dispoCol);
-                dColV.w = lodTitleAlphaFinal;
-                ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
-                ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlphaFinal));
-                TextEffects::AddTextOutline4(drawList, fontTitle, titleFontSize, titlePos, titleDisplayText, dCol, npcOutline, titleOutlineWidth);
+                const std::string& ch = leftChars[i];
+                ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, 0.0f, ch.c_str());
+                cursorX -= charSize.x;
+                ImVec2 charPos(cursorX, layout.nameplateCenter.y - charSize.y * 0.5f);
+                drawOrnChar(charPos, ch.c_str());
+                if (i > 0) cursorX -= ornamentCharGap;
             }
         }
 
-        // Render Main Line
-        // Position main line centered horizontally, below title
+        if (!rightChars.empty())
+        {
+            float cursorX = layout.nameplateCenter.x + layout.nameplateWidth * 0.5f + totalSpacing;
+            for (size_t i = 0; i < rightChars.size(); ++i)
+            {
+                const std::string& ch = rightChars[i];
+                ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, 0.0f, ch.c_str());
+                ImVec2 charPos(cursorX, layout.nameplateCenter.y - charSize.y * 0.5f);
+                drawOrnChar(charPos, ch.c_str());
+                cursorX += charSize.x;
+                if (i + 1 < rightChars.size()) cursorX += ornamentCharGap;
+            }
+        }
+    }
+
+    /// Render the title line above the main nameplate line.
+    static void DrawTitleText(ImDrawList *dl, const ActorDrawData &d, const LabelStyle &style, const LabelLayout &layout, float lodTitleFactor, ImDrawListSplitter *splitter)
+    {
+        const char *titleDisplayText = layout.titleDisplayStr.c_str();
+        if (!titleDisplayText || !*titleDisplayText || lodTitleFactor <= 0.01f)
+            return;
+
+        float titleOffsetX = (layout.totalWidth - layout.titleSize.x) * 0.5f;
+        ImVec2 titlePos(layout.startPos.x - layout.totalWidth * 0.5f + titleOffsetX,
+                        layout.startPos.y + layout.titleY);
+
+        float lodTitleAlpha = style.alpha * lodTitleFactor;
+        ImU32 titleShadow = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlpha * 0.5f));
+
+        splitter->SetCurrentChannel(dl, 0);  // Back layer: glow
+        if (Settings::EnableGlow && Settings::GlowIntensity > 0.0f && style.tierAllowsGlow)
+        {
+            ImVec4 glowColorVec = style.specialTitle
+                ? ImVec4(style.specialGlowColor.x, style.specialGlowColor.y, style.specialGlowColor.z, style.alpha)
+                : ImVec4(style.LcTitle.x, style.LcTitle.y, style.LcTitle.z, style.alpha);
+            ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(glowColorVec);
+            float glowIntensity = style.specialTitle ? Settings::GlowIntensity * 1.15f : Settings::GlowIntensity;
+            float glowRadius = style.specialTitle ? Settings::GlowRadius * 1.1f : Settings::GlowRadius;
+            ParticleTextures::PushAdditiveBlend(dl);
+            TextEffects::AddTextGlow(dl, layout.fontTitle, layout.titleFontSize, titlePos,
+                                     titleDisplayText, glowColor, glowRadius,
+                                     glowIntensity, Settings::GlowSamples);
+            ParticleTextures::PopBlendState(dl);
+        }
+
+        splitter->SetCurrentChannel(dl, 1);  // Front layer: shadow + text
+        dl->AddText(layout.fontTitle, layout.titleFontSize,
+                     ImVec2(titlePos.x + Settings::TitleShadowOffsetX,
+                            titlePos.y + Settings::TitleShadowOffsetY),
+                     titleShadow, titleDisplayText);
+
+        float lodTitleAlphaFinal = style.titleAlpha * lodTitleFactor;
+        float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
+        if (d.isPlayer)
+        {
+            ApplyTextEffect(dl, layout.fontTitle, layout.titleFontSize, titlePos, titleDisplayText,
+                            style.tier->titleEffect, style.colLTitle, style.colRTitle, style.highlight, style.outlineColor, style.titleOutlineWidth,
+                            style.phase01, style.strength, textSizeScale, lodTitleAlphaFinal);
+        }
+        else
+        {
+            ImVec4 dColV = WashColor(style.dispoCol);
+            dColV.w = lodTitleAlphaFinal;
+            ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
+            ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlphaFinal));
+            TextEffects::AddTextOutline4(dl, layout.fontTitle, layout.titleFontSize, titlePos, titleDisplayText, dCol, npcOutline, style.titleOutlineWidth);
+        }
+    }
+
+    /// Render each segment of the main nameplate line.
+    static void DrawMainLineSegments(ImDrawList *dl, const ActorDrawData &d, const LabelStyle &style, const LabelLayout &layout, ImDrawListSplitter *splitter)
+    {
+        const float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
+
         ImVec2 currentPos;
-        currentPos.x = startPos.x - totalWidth * 0.5f + (totalWidth - mainLineWidth) * 0.5f; // Center within totalWidth
-        currentPos.y = startPos.y + mainLineY;                                           // Calculated Y position
+        currentPos.x = layout.startPos.x - layout.totalWidth * 0.5f + (layout.totalWidth - layout.mainLineWidth) * 0.5f;
+        currentPos.y = layout.startPos.y + layout.mainLineY;
 
-        // Draw each segment sequentially
-        for (const auto &seg : segments)
+        for (const auto &seg : layout.segments)
         {
-            // Skip segments with no visible text, typewriter hasn't reached them yet
             if (seg.displayText.empty())
             {
-                // Still advance position to maintain layout
-                currentPos.x += seg.size.x + segmentPadding;
+                currentPos.x += seg.size.x + layout.segmentPadding;
                 continue;
             }
 
-            // Calculate vertical offset to center this segment within mainLineHeight
-            // Smaller segments get offset downward to align with larger ones
-            float vOffset = (mainLineHeight - seg.size.y) * 0.5f;
-
+            float vOffset = (layout.mainLineHeight - seg.size.y) * 0.5f;
             ImVec2 pos = ImVec2(currentPos.x, currentPos.y + vOffset);
 
-            // Draw glow behind segment
-            if (Settings::EnableGlow && Settings::GlowIntensity > 0.0f && tierAllowsGlow)
+            splitter->SetCurrentChannel(dl, 0);  // Back layer: glow
+            if (Settings::EnableGlow && Settings::GlowIntensity > 0.0f && style.tierAllowsGlow)
             {
-                // Use special glow color if available, otherwise segment-appropriate color
-                ImVec4 glowCol = specialTitle
-                    ? ImVec4(specialGlowColor.x, specialGlowColor.y, specialGlowColor.z, alpha)
-                    : (seg.isLevel ? ImVec4(LcLevel.x, LcLevel.y, LcLevel.z, alpha)
-                                   : ImVec4(LcName.x, LcName.y, LcName.z, alpha));
+                ImVec4 glowCol = style.specialTitle
+                    ? ImVec4(style.specialGlowColor.x, style.specialGlowColor.y, style.specialGlowColor.z, style.alpha)
+                    : (seg.isLevel ? ImVec4(style.LcLevel.x, style.LcLevel.y, style.LcLevel.z, style.alpha)
+                                   : ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, style.alpha));
                 ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(glowCol);
-                // Subtle glow boost for special titles
-                float glowIntensity = specialTitle ? Settings::GlowIntensity * 1.15f : Settings::GlowIntensity;
-                float glowRadius = specialTitle ? Settings::GlowRadius * 1.1f : Settings::GlowRadius;
-                TextEffects::AddTextGlow(drawList, seg.font, seg.fontSize, pos,
+                float glowIntensity = style.specialTitle ? Settings::GlowIntensity * 1.15f : Settings::GlowIntensity;
+                float glowRadius = style.specialTitle ? Settings::GlowRadius * 1.1f : Settings::GlowRadius;
+                ParticleTextures::PushAdditiveBlend(dl);
+                TextEffects::AddTextGlow(dl, seg.font, seg.fontSize, pos,
                                          seg.displayText.c_str(), glowColor, glowRadius,
                                          glowIntensity, Settings::GlowSamples);
+                ParticleTextures::PopBlendState(dl);
             }
 
-            // Draw shadow first
-            drawList->AddText(seg.font, seg.fontSize,
-                              ImVec2(pos.x + Settings::MainShadowOffsetX,
-                                     pos.y + Settings::MainShadowOffsetY),
-                              shadowColor, seg.displayText.c_str());
+            splitter->SetCurrentChannel(dl, 1);  // Front layer: shadow + text
+            dl->AddText(seg.font, seg.fontSize,
+                        ImVec2(pos.x + Settings::MainShadowOffsetX,
+                               pos.y + Settings::MainShadowOffsetY),
+                        style.shadowColor, seg.displayText.c_str());
 
-            // Draw main text with appropriate styling
-            // Use font-appropriate outline width
-            float segOutlineWidth = seg.isLevel ? levelOutlineWidth : nameOutlineWidth;
+            float segOutlineWidth = seg.isLevel ? style.levelOutlineWidth : style.nameOutlineWidth;
 
             if (seg.isLevel)
             {
-                // Level segment, apply tier-defined level effect
-                // All actors use tier effects for level
-                ApplyTextEffect(drawList, seg.font, seg.fontSize, pos, seg.displayText.c_str(),
-                                tier.levelEffect, colLLevel, colRLevel, highlight, outlineColor, segOutlineWidth,
-                                phase01, strength, textSizeScale, levelAlpha);
+                ApplyTextEffect(dl, seg.font, seg.fontSize, pos, seg.displayText.c_str(),
+                                style.tier->levelEffect, style.colLLevel, style.colRLevel, style.highlight, style.outlineColor, segOutlineWidth,
+                                style.phase01, style.strength, textSizeScale, style.levelAlpha);
             }
             else
             {
-                // Name segment: Different rendering for player vs NPCs
                 if (d.isPlayer)
                 {
-                    // Apply tier-defined name effect
-                    ApplyTextEffect(drawList, seg.font, seg.fontSize, pos, seg.displayText.c_str(),
-                                    tier.nameEffect, colL, colR, highlight, outlineColor, segOutlineWidth,
-                                    phase01, strength, textSizeScale, alpha);
+                    ApplyTextEffect(dl, seg.font, seg.fontSize, pos, seg.displayText.c_str(),
+                                    style.tier->nameEffect, style.colL, style.colR, style.highlight, style.outlineColor, segOutlineWidth,
+                                    style.phase01, style.strength, textSizeScale, style.alpha);
                 }
                 else
                 {
-                    // NPC, simple outline with disposition color (enemy=red, friend=blue, etc.)
-                    ImVec4 dColV = dispoCol;
-                    dColV.w = alpha;
+                    ImVec4 dColV = style.dispoCol;
+                    dColV.w = style.alpha;
                     ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
-                    ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, alpha));
-                    TextEffects::AddTextOutline4(drawList, seg.font, seg.fontSize, pos, seg.displayText.c_str(), dCol, npcOutline, segOutlineWidth);
+                    ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, style.alpha));
+                    TextEffects::AddTextOutline4(dl, seg.font, seg.fontSize, pos, seg.displayText.c_str(), dCol, npcOutline, segOutlineWidth);
                 }
             }
 
-            // Move to next segment position
-            currentPos.x += seg.size.x + segmentPadding;
+            currentPos.x += seg.size.x + layout.segmentPadding;
         }
+    }
+
+    // =========================================================================
+    // DrawLabel - orchestrator
+    // =========================================================================
+    static void DrawLabel(const ActorDrawData &d, ImDrawList *drawList, ImDrawListSplitter *splitter)
+    {
+        // ----- Cache management -----
+        auto it = s_state.cache.find(d.formID);
+        if (it == s_state.cache.end())
+        {
+            ActorCache newEntry{};
+            newEntry.lastSeenFrame = s_state.frame;
+            it = s_state.cache.emplace(d.formID, newEntry).first;
+        }
+        auto &entry = it->second;
+        entry.lastSeenFrame = s_state.frame;
+
+        if (entry.cachedName != d.name)
+        {
+            entry.cachedName = d.name;
+            entry.typewriterTime = 0.0f;
+            entry.typewriterComplete = false;
+        }
+
+        constexpr uint32_t kReentryThreshold = 30;
+        if (entry.initialized && entry.typewriterComplete)
+        {
+            uint32_t framesSinceLastSeen = s_state.frame - entry.lastSeenFrame;
+            bool becameVisible = entry.wasOccluded && !d.isOccluded;
+            if (framesSinceLastSeen >= kReentryThreshold || becameVisible)
+            {
+                entry.typewriterTime = 0.0f;
+                entry.typewriterComplete = false;
+            }
+        }
+
+        entry.lastSeenFrame = s_state.frame;
+
+        // ----- Distance / alpha / scale computation -----
+        RE::NiPoint3 cameraPos{};
+        bool hasCameraPos = false;
+        if (auto pc = RE::PlayerCamera::GetSingleton(); pc && pc->cameraRoot)
+        {
+            cameraPos = pc->cameraRoot->world.translate;
+            hasCameraPos = true;
+        }
+
+        const float dist = d.distToPlayer;
+        const float dt = ImGui::GetIO().DeltaTime;
+
+        float fadeT = TextEffects::SmoothStep((dist - Settings::FadeStartDistance) / (Settings::FadeEndDistance - Settings::FadeStartDistance));
+        float alphaTarget = 1.0f - fadeT;
+        alphaTarget = alphaTarget * alphaTarget;
+
+        float lodTitleFactor = 1.0f;
+        float lodEffectsFactor = 1.0f;
+
+        if (Settings::Visual().EnableLOD) {
+            float transRange = std::max(1.0f, Settings::Visual().LODTransitionRange);
+            float titleFadeT = TextEffects::Saturate(
+                (dist - Settings::Visual().LODFarDistance) / transRange);
+            lodTitleFactor = 1.0f - TextEffects::SmoothStep(titleFadeT);
+            float effectsFadeT = TextEffects::Saturate(
+                (dist - Settings::Visual().LODMidDistance) / transRange);
+            lodEffectsFactor = 1.0f - TextEffects::SmoothStep(effectsFadeT);
+        }
+
+        float scaleT = TextEffects::Saturate((dist - Settings::ScaleStartDistance) / (Settings::ScaleEndDistance - Settings::ScaleStartDistance));
+        constexpr float kScaleGamma = 0.5f;
+        scaleT = std::pow(scaleT, kScaleGamma);
+        float textScaleTarget = 1.0f + (Settings::MinimumScale - 1.0f) * scaleT;
+
+        if (hasCameraPos)
+        {
+            float camDist = std::sqrt(
+                std::pow(d.worldPos.x - cameraPos.x, 2.0f) +
+                std::pow(d.worldPos.y - cameraPos.y, 2.0f) +
+                std::pow(d.worldPos.z - cameraPos.z, 2.0f));
+            float camScaleT = TextEffects::Saturate((camDist - Settings::ScaleStartDistance) / (Settings::ScaleEndDistance - Settings::ScaleStartDistance));
+            camScaleT = std::pow(camScaleT, kScaleGamma);
+            float camTextScale = 1.0f + (Settings::MinimumScale - 1.0f) * camScaleT;
+            textScaleTarget = std::min(textScaleTarget, camTextScale);
+        }
+
+        if (Settings::Visual().MinimumPixelHeight > 0.0f) {
+            float minScale = Settings::Visual().MinimumPixelHeight / Settings::NameFontSize;
+            textScaleTarget = std::max(textScaleTarget, minScale);
+        }
+
+        // ----- World projection & smoothing -----
+        RE::NiPoint3 screenPos;
+        if (!WorldToScreen(d.worldPos, screenPos))
+            return;
+
+        float occlusionTarget = d.isOccluded ? 0.0f : 1.0f;
+
+        if (!entry.initialized)
+        {
+            entry.initialized = true;
+            entry.alphaSmooth = alphaTarget;
+            entry.textSizeScale = textScaleTarget;
+            entry.smooth = ImVec2(screenPos.x, screenPos.y);
+
+            ImVec2 initPos(screenPos.x, screenPos.y);
+            for (int i = 0; i < ActorCache::kHistorySize; i++)
+                entry.posHistory[i] = initPos;
+            entry.historyIndex = 0;
+            entry.historyFilled = true;
+            entry.occlusionSmooth = 1.0f;
+            entry.typewriterTime = 0.0f;
+            entry.typewriterComplete = false;
+        }
+        else
+        {
+            float aLerp = ExpApproachAlpha(dt, Settings::AlphaSettleTime);
+            float sLerp = ExpApproachAlpha(dt, Settings::ScaleSettleTime);
+            float pLerp = d.isPlayer ? ExpApproachAlpha(dt, 0.015f) : ExpApproachAlpha(dt, Settings::PositionSettleTime);
+            float oLerp = ExpApproachAlpha(dt, Settings::OcclusionSettleTime);
+
+            entry.alphaSmooth += (alphaTarget - entry.alphaSmooth) * aLerp;
+            entry.textSizeScale += (textScaleTarget - entry.textSizeScale) * sLerp;
+            entry.occlusionSmooth += (occlusionTarget - entry.occlusionSmooth) * oLerp;
+
+            ImVec2 targetPos(screenPos.x, screenPos.y);
+            ImVec2 maSmoothed = entry.AddAndGetSmoothed(targetPos);
+
+            ImVec2 expSmoothed;
+            expSmoothed.x = entry.smooth.x + (targetPos.x - entry.smooth.x) * pLerp;
+            expSmoothed.y = entry.smooth.y + (targetPos.y - entry.smooth.y) * pLerp;
+
+            float blend = Settings::Visual().PositionSmoothingBlend;
+            ImVec2 smoothedPos;
+            smoothedPos.x = expSmoothed.x + (maSmoothed.x - expSmoothed.x) * blend;
+            smoothedPos.y = expSmoothed.y + (maSmoothed.y - expSmoothed.y) * blend;
+
+            float dx = targetPos.x - entry.smooth.x;
+            float dy = targetPos.y - entry.smooth.y;
+            float moveDist = std::sqrt(dx * dx + dy * dy);
+
+            if (moveDist > Settings::Visual().LargeMovementThreshold)
+            {
+                entry.smooth.x += (smoothedPos.x - entry.smooth.x) * Settings::Visual().LargeMovementBlend;
+                entry.smooth.y += (smoothedPos.y - entry.smooth.y) * Settings::Visual().LargeMovementBlend;
+            }
+            else
+            {
+                entry.smooth = smoothedPos;
+            }
+
+            if (Settings::EnableTypewriter && !entry.typewriterComplete)
+                entry.typewriterTime += dt;
+        }
+
+        entry.wasOccluded = d.isOccluded;
+
+        // ----- Early returns -----
+        const float alpha = entry.alphaSmooth * entry.occlusionSmooth;
+        if (alpha <= 0.02f)
+            return;
+
+        const float textSizeScale = entry.textSizeScale;
+
+        const auto viewSize = RE::BSGraphics::Renderer::GetSingleton()->GetScreenSize();
+        if (screenPos.z < 0 || screenPos.z > 1.0f ||
+            screenPos.x < -100.0f || screenPos.x > viewSize.width + 100.0f ||
+            screenPos.y < -100.0f || screenPos.y > viewSize.height + 100.0f)
+            return;
+
+        const float time = (float)ImGui::GetTime();
+
+        // ----- Compute style and layout -----
+        LabelStyle style = ComputeLabelStyle(d, alpha, time);
+
+        // Compute per-font outline widths
+        style.nameOutlineWidth  = style.CalcOutlineWidth(ImGui::GetIO().Fonts->Fonts[0]->FontSize * textSizeScale);
+        style.levelOutlineWidth = style.CalcOutlineWidth(ImGui::GetIO().Fonts->Fonts[1]->FontSize * textSizeScale);
+        style.titleOutlineWidth = style.CalcOutlineWidth(ImGui::GetIO().Fonts->Fonts[2]->FontSize * textSizeScale);
+        style.outlineWidth      = style.nameOutlineWidth;
+
+        LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale);
+
+        // ----- Draw layers (back to front) -----
+        DrawParticles(drawList, d, style, layout, lodEffectsFactor, time, splitter);
+        DrawOrnaments(drawList, d, style, layout, lodEffectsFactor, time, splitter);
+        DrawTitleText(drawList, d, style, layout, lodTitleFactor, splitter);
+        DrawMainLineSegments(drawList, d, style, layout, splitter);
     }
 
     // Draw debug overlay with performance stats
@@ -1945,19 +1826,19 @@ namespace Renderer
 
         // Update frame timing stats
         DebugOverlay::UpdateFrameStats(
-            s_debugStats, dt, time,
-            s_lastDebugUpdateTime, s_updateCounter, s_lastUpdateCount
+            s_state.debugStats, dt, time,
+            s_state.lastDebugUpdateTime, s_state.updateCounter, s_state.lastUpdateCount
         );
 
         // Update cache stats
-        s_debugStats.cacheSize = s_cache.size();
+        s_state.debugStats.cacheSize = s_state.cache.size();
 
         // Build context and render
         DebugOverlay::Context ctx;
-        ctx.stats = &s_debugStats;
-        ctx.frameNumber = s_frame;
-        ctx.postLoadCooldown = s_postLoadCooldown;
-        ctx.lastReloadTime = s_lastReloadTime;
+        ctx.stats = &s_state.debugStats;
+        ctx.frameNumber = s_state.frame;
+        ctx.postLoadCooldown = s_state.postLoadCooldown;
+        ctx.lastReloadTime = s_state.lastReloadTime;
         ctx.actorCacheEntrySize = sizeof(ActorCache);
         ctx.actorDrawDataSize = sizeof(ActorDrawData);
 
@@ -1972,11 +1853,11 @@ namespace Renderer
 
         bool keyDown = (GetAsyncKeyState(Settings::ReloadKey) & 0x8000) != 0;
 
-        if (keyDown && !s_reloadKeyWasDown)
+        if (keyDown && !s_state.reloadKeyWasDown)
         {
             Settings::Load();
-            s_lastReloadTime = static_cast<float>(ImGui::GetTime());
-            s_cache.clear();
+            s_state.lastReloadTime = static_cast<float>(ImGui::GetTime());
+            s_state.cache.clear();
 
             if (Settings::TemplateReapplyOnReload && Settings::UseTemplateAppearance)
             {
@@ -1986,27 +1867,27 @@ namespace Renderer
                 });
             }
         }
-        s_reloadKeyWasDown = keyDown;
+        s_state.reloadKeyWasDown = keyDown;
     }
 
     /// Update debug stats from the current snapshot.
     static void UpdateDebugStats(const std::vector<ActorDrawData>& snap)
     {
-        s_debugStats.actorCount = static_cast<int>(snap.size());
-        s_debugStats.visibleActors = 0;
-        s_debugStats.occludedActors = 0;
-        s_debugStats.playerVisible = 0;
+        s_state.debugStats.actorCount = static_cast<int>(snap.size());
+        s_state.debugStats.visibleActors = 0;
+        s_state.debugStats.occludedActors = 0;
+        s_state.debugStats.playerVisible = 0;
 
         for (const auto &d : snap)
         {
             if (d.isPlayer)
-                s_debugStats.playerVisible = 1;
+                s_state.debugStats.playerVisible = 1;
             if (d.isOccluded)
-                s_debugStats.occludedActors++;
+                s_state.debugStats.occludedActors++;
             else
-                s_debugStats.visibleActors++;
+                s_state.debugStats.visibleActors++;
         }
-        ++s_updateCounter;
+        ++s_state.updateCounter;
     }
 
     /// Resolve overlapping labels by pushing lower-priority ones down.
@@ -2022,8 +1903,8 @@ namespace Renderer
         for (int i = 0; i < static_cast<int>(localSnap.size()); ++i)
         {
             const auto& d = localSnap[i];
-            auto cIt = s_cache.find(d.formID);
-            if (cIt == s_cache.end() || !cIt->second.initialized)
+            auto cIt = s_state.cache.find(d.formID);
+            if (cIt == s_state.cache.end() || !cIt->second.initialized)
                 continue;
 
             const auto& entry = cIt->second;
@@ -2071,19 +1952,19 @@ namespace Renderer
 
         if (!CanDrawOverlay())
         {
-            s_wasInInvalidState = true;
+            s_state.wasInInvalidState = true;
             return;
         }
 
-        if (s_wasInInvalidState)
+        if (s_state.wasInInvalidState)
         {
-            s_wasInInvalidState = false;
-            s_postLoadCooldown = 300;
+            s_state.wasInInvalidState = false;
+            s_state.postLoadCooldown = 300;
         }
 
-        if (s_postLoadCooldown > 0)
+        if (s_state.postLoadCooldown > 0)
         {
-            --s_postLoadCooldown;
+            --s_state.postLoadCooldown;
             return;
         }
 
@@ -2094,12 +1975,12 @@ namespace Renderer
             return;
 
         const auto viewSize = bsRenderer->GetScreenSize();
-        ++s_frame;
+        ++s_state.frame;
 
         static std::vector<ActorDrawData> localSnap;
         {
-            std::lock_guard<std::mutex> lock(s_snapshotLock);
-            localSnap = s_snapshot;
+            std::lock_guard<std::mutex> lock(s_state.snapshotLock);
+            localSnap = s_state.snapshot;
         }
 
         if (localSnap.empty())
@@ -2124,8 +2005,13 @@ namespace Renderer
         if (Settings::Visual().EnableOverlapPrevention)
             ResolveOverlaps(localSnap);
 
+        ImDrawListSplitter splitter;
+        splitter.Split(drawList, 2);
+
         for (auto &d : localSnap)
-            DrawLabel(d, drawList);
+            DrawLabel(d, drawList, &splitter);
+
+        splitter.Merge(drawList);
 
         ImGui::End();
 
@@ -2139,13 +2025,4 @@ namespace Renderer
         // Queues updates but keeps the actual work lightweight/throttled
         QueueSnapshotUpdate_RenderThread();
     }
-}
-
-// Forward declaration for appearance template check (defined in main.cpp)
-extern void CheckPendingAppearanceTemplate();
-
-// Called from Hooks.cpp after rendering
-void Renderer_CheckAppearanceTemplate()
-{
-    CheckPendingAppearanceTemplate();
 }

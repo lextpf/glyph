@@ -3,6 +3,7 @@
 
 #include <SKSE/SKSE.h>
 
+#include <atomic>
 #include <memory>
 #include <sstream>
 #include <iomanip>
@@ -821,5 +822,45 @@ namespace AppearanceTemplate
         }
 
         return copiedCount > 0;
+    }
+
+    static std::atomic<bool> s_pendingAppearanceApply{false};
+    static std::atomic<int> s_checkCount{0};
+
+    void SetPendingAppearanceApply()
+    {
+        s_pendingAppearanceApply.store(true);
+    }
+
+    void CheckPendingAppearanceTemplate()
+    {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            SKSE::log::info("CheckPendingAppearanceTemplate called for first time");
+            loggedOnce = true;
+        }
+
+        if (!s_pendingAppearanceApply.load()) {
+            return;
+        }
+
+        int count = s_checkCount.fetch_add(1);
+        bool shouldLog = (count % 60 == 0);
+
+        auto player = RE::PlayerCharacter::GetSingleton();
+        auto playerBase = player ? player->GetActorBase() : nullptr;
+        bool is3DLoaded = player ? player->Is3DLoaded() : false;
+
+        if (shouldLog) {
+            SKSE::log::debug("Appearance check #{}: player={}, base={}, 3D={}",
+                count, player != nullptr, playerBase != nullptr, is3DLoaded);
+        }
+
+        if (player && playerBase && is3DLoaded) {
+            SKSE::log::info("Player ready after {} checks, applying appearance template", count);
+            s_pendingAppearanceApply.store(false);
+            s_checkCount.store(0);
+            ApplyIfConfigured();
+        }
     }
 }

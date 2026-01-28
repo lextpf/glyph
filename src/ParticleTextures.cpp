@@ -462,4 +462,16 @@ namespace ParticleTextures
             list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
         }
     }
+
+    void PushAdditiveBlend(ImDrawList* dl)
+    {
+        if (dl && g_additiveBlend)
+            dl->AddCallback(SetBlendCallback, g_additiveBlend);
+    }
+
+    void PopBlendState(ImDrawList* dl)
+    {
+        if (dl)
+            dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+    }
 }
