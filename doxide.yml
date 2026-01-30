@@ -14,6 +14,13 @@ groups:
   - name: Core
     title: ":material-cube: Core Systems"
     description: Plugin entry points and initialization.
+    groups:
+      - name: AppearanceTemplate
+        title: AppearanceTemplate
+        description: NPC appearance template system for copying appearance to player.
+      - name: ConsoleCommands
+        title: ConsoleCommands
+        description: Console command registration and handlers.
 
   - name: Rendering
     title: ":material-palette: Rendering"

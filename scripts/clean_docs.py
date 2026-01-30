@@ -2,11 +2,12 @@
 
 Cleans doxide-generated markdown for MkDocs Material compatibility:
 - Removes @author lines
-- Strips @brief tags
+- Strips @brief and @details tags
 - Fixes admonition indentation (1-space to 4-space)
 - Adds Material icons to page titles and section headers
 - Trims function summary tables to first-sentence briefs
 - Flattens namespace definition lists into single-line bullets
+- Injects class listings under groups on home page
 - Injects version from src/Version.h into home page subtitle
 
 Only touches files with 'generator: doxide' frontmatter.
@@ -175,6 +176,109 @@ def flatten_namespace_lists(text: str) -> str:
     return "\n".join(out)
 
 
+def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]:
+    """Extract types and functions from a group/subgroup index.md.
+
+    Returns list of (name, relative_path, description) tuples.
+    Paths are prefixed so they're relative to the docs root.
+    """
+    if not index_path.exists():
+        return []
+    text = index_path.read_text(encoding="utf-8")
+    results = []
+
+    for m in re.finditer(
+        r"^\| \[([^\]]+)\]\(([^)]+)\) \|(.+)\|",
+        text,
+        re.MULTILINE,
+    ):
+        name = m.group(1)
+        rel_path = m.group(2).strip()
+        desc = m.group(3).strip()
+        # Strip leftover @brief tag
+        desc = re.sub(r"^@brief\s+", "", desc)
+        # Anchor links (#func) need the index.md path prepended
+        if rel_path.startswith("#"):
+            full_path = f"{prefix}index.md{rel_path}"
+        else:
+            full_path = f"{prefix}{rel_path}"
+        results.append((name, full_path, desc))
+
+    return results
+
+
+def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str, str]]:
+    """Collect all types from a group and its subgroups.
+
+    Reads the group's index.md for direct types, then reads each
+    subgroup's index.md for their types.
+    """
+    group_index = docs_dir / group_dir / "index.md"
+    prefix = f"{group_dir}/"
+    members = []
+
+    # Direct members in the group (types + functions)
+    members.extend(collect_members(group_index, prefix))
+
+    # Find subgroup links: :material-format-section: [Name](SubDir/index.md)
+    if group_index.exists():
+        text = group_index.read_text(encoding="utf-8")
+        for m in re.finditer(
+            r":material-format-section: \[([^\]]+)\]\(([^)]+)/index\.md\)",
+            text,
+        ):
+            sub_name = m.group(1)
+            sub_dir = m.group(2)
+            sub_index = docs_dir / group_dir / sub_dir / "index.md"
+            sub_prefix = f"{group_dir}/{sub_dir}/"
+            members.extend(collect_members(sub_index, sub_prefix))
+
+    return members
+
+
+def inject_group_members(text: str, docs_dir: Path) -> str:
+    """Append a flat class/function listing after the group list on the home page.
+
+    Collects all types and functions from every group's index.md (and
+    subgroup index pages), then appends them as a single bullet list
+    after the last group entry.  Idempotent: strips previously-injected
+    member lines before re-injecting.
+    """
+    lines = text.split("\n")
+    # Strip previously-injected member lines (top-level and indented)
+    lines = [l for l in lines if not re.match(r"^-?\s*- :material-package:", l)]
+
+    out = []
+    all_members = []
+    last_group_idx = -1
+
+    for line in lines:
+        out.append(line)
+
+        m = re.match(
+            r"^- :material-format-section: \[.*\]\(([^/]+)/index\.md\)",
+            line,
+        )
+        if not m:
+            continue
+
+        last_group_idx = len(out) - 1
+        group_dir = m.group(1)
+        members = collect_group_members(docs_dir, group_dir)
+        for name, path, desc in members:
+            sentence = re.match(r"^(.*?\.)\s", desc)
+            brief = sentence.group(1) if sentence else desc
+            all_members.append(f"- :material-package: [{name}]({path}) - {brief}")
+
+    if all_members and last_group_idx >= 0:
+        insert_at = last_group_idx + 1
+        out.insert(insert_at, "")
+        for j, entry in enumerate(all_members):
+            out.insert(insert_at + 1 + j, entry)
+
+    return "\n".join(out)
+
+
 def parse_version(repo_root: Path) -> str:
     """Read version components from src/Version.h and return 'MAJOR.MINOR.PATCH'."""
     version_h = repo_root / "src" / "Version.h"
@@ -192,8 +296,8 @@ def parse_version(repo_root: Path) -> str:
 
 
 def inject_version(text: str, version: str) -> str:
-    """Add version to the home page subtitle line."""
-    if not version:
+    """Add version to the home page subtitle line.  Idempotent."""
+    if not version or f"**v{version}**" in text:
         return text
     return re.sub(
         r"^(# whois)\n\n(.+)$",
@@ -208,8 +312,9 @@ def clean(text: str) -> str:
     # Remove standalone @author lines
     text = re.sub(r"^\s*@author\b.*\n?", "", text, flags=re.MULTILINE)
 
-    # Strip @brief tag but keep the description text
+    # Strip @brief and @details tags but keep the description text
     text = re.sub(r"@brief\s+", "", text)
+    text = re.sub(r"@details\s*\n?", "", text)
 
     # Fix admonition indentation (doxide outputs 1-space, MkDocs needs 4)
     text = fix_admonition_indent(text)
@@ -249,9 +354,35 @@ def main():
 
         cleaned = clean(original)
 
-        # Inject version into home page
-        if md.name == "index.md" and md.parent == docs_dir and version:
-            cleaned = inject_version(cleaned, version)
+        is_home = md.name == "index.md" and md.parent == docs_dir
+
+        # Home page: inject version and group member listings
+        if is_home:
+            cleaned = inject_group_members(cleaned, docs_dir)
+            if version:
+                cleaned = inject_version(cleaned, version)
+        else:
+            # Group index pages: use package icon for subgroup bullets
+            # and fix relative links to point to top-level content pages
+            # (only in the header area, before the first ## section)
+            parts = cleaned.split("\n## ", 1)
+            parts[0] = re.sub(
+                r"^- :material-format-section:",
+                "- :material-package:",
+                parts[0],
+                flags=re.MULTILINE,
+            )
+            # Doxide generates subgroup links as relative paths (e.g.,
+            # Renderer/index.md) inside group index pages (e.g.,
+            # Rendering/index.md).  These resolve to stubs at
+            # Rendering/Renderer/index.md instead of the actual content
+            # at the top-level Renderer/index.md.  Prepend ../ to fix.
+            parts[0] = re.sub(
+                r"\]\((\w+/index\.md)\)",
+                r"](../\1)",
+                parts[0],
+            )
+            cleaned = "\n## ".join(parts)
 
         if cleaned != original:
             md.write_text(cleaned, encoding="utf-8")
