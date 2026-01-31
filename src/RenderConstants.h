@@ -35,10 +35,14 @@
  *
  * $$p_{smooth} = p_{old} + \alpha \cdot (p_{new} - p_{old})$$
  *
- * For large movements ($\|p_{new} - p_{old}\| > 50\text{px}$), a fixed blend
- * factor $\beta = 0.5$ is used instead to avoid excessive lag:
+ * For large movements ($\|p_{new} - p_{old}\| > threshold$), a separate blend
+ * factor $\beta$ is used instead to avoid excessive lag:
  *
  * $$p_{smooth} = p_{old} + \beta \cdot (p_{new} - p_{old})$$
+ *
+ * The threshold and blend factor are runtime-configurable via
+ * `Settings::Visual().LargeMovementThreshold` (default 50px) and
+ * `Settings::Visual().LargeMovementBlend` (default 0.5).
  */
 namespace RenderConstants
 {

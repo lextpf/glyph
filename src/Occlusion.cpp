@@ -49,6 +49,7 @@ namespace Occlusion
         return dot < Constants::kBehindCameraDotThreshold;
     }
 
+    // Fail-safe: returns true (visible) on any error to avoid false occlusion.
     bool HasLineOfSightToActor(RE::Actor* actor)
     {
         auto* player = RE::PlayerCharacter::GetSingleton();

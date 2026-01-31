@@ -22,7 +22,14 @@
  * | `[General]`        | Core settings, fonts, distances          |
  * | `[TierN]`          | Per-tier colors, effects, ornaments      |
  * | `[SpecialTitleN]`  | Keyword-based title overrides            |
+ * | `[Display]`        | Format string for nameplate composition  |
  * | `[Appearance]`     | NPC appearance template settings         |
+ *
+ * @note Documented defaults on extern variables refer to the values shipped in
+ * the default INI file. Variables without explicit C++ initializers default to
+ * zero/empty until Load() populates them from `whois.ini`. Variables with
+ * explicit C++ initializers (e.g., `EnableGlow`, `GlowRadius`) use those
+ * values as fallbacks when the INI key is absent.
  *
  * ## :material-refresh: Hot Reload
  *
@@ -264,9 +271,9 @@ namespace Settings
 
     // Glow Effect
     extern bool  EnableGlow;             ///< Enable glow effect (default: false)
-    extern float GlowRadius;             ///< Glow spread in pixels (default: 6.0)
-    extern float GlowIntensity;          ///< Glow brightness 0-1 (default: 0.6)
-    extern int   GlowSamples;            ///< Quality samples 8-16 (default: 12)
+    extern float GlowRadius;             ///< Glow spread in pixels (default: 4.0)
+    extern float GlowIntensity;          ///< Glow brightness 0-1 (default: 0.5)
+    extern int   GlowSamples;            ///< Quality samples 8-16 (default: 8)
 
     // Typewriter Effect
     extern bool  EnableTypewriter;       ///< Enable typewriter reveal (default: false)

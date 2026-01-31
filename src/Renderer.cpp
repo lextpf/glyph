@@ -1947,6 +1947,8 @@ namespace Renderer
         }
     }
 
+    // Several pipeline stages are gated or tuned by Settings::Visual() overrides
+    // (LOD, overlap prevention, distance outline scaling, tier effect gating, etc.).
     void Draw()
     {
         HandleHotReload();

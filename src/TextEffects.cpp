@@ -514,6 +514,7 @@ namespace TextEffects
         }
     }
 
+    // Perf: renders 2 ghost layers + outline (8-dir) + main = ~11 text draws.
     void AddTextOutline4ChromaticShimmer(ImDrawList *list, ImFont *font, float size,
                                          const ImVec2 &pos, const char *text,
                                          ImU32 baseL, ImU32 baseR, ImU32 highlight,
@@ -1099,6 +1100,8 @@ namespace TextEffects
         AddTextScanline(list, font, size, pos, text, baseL, baseR, scanColor, speed, width, intensity);
     }
 
+    // Perf: draws up to 3 layers x 8 samples = 24 AddText calls per string.
+    // Use GlowSamples <= 4 for a cheaper single-layer fallback.
     void TextEffects::AddTextGlow(ImDrawList *list, ImFont *font, float size,
                                   const ImVec2 &pos, const char *text, ImU32 glowColor,
                                   float radius, float intensity, int samples)

@@ -15,6 +15,9 @@
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 
+// Lifecycle: Initialize() loads textures once after D3D11 device creation.
+// Textures are owned by the module for the lifetime of the process (no
+// explicit shutdown/release - resources are freed on process exit).
 namespace ParticleTextures
 {
     // Number of particle texture types

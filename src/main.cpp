@@ -109,6 +109,11 @@ namespace ConsoleCommands
     }
 }
 
+/**
+ * SKSE message handler - key lifecycle states:
+ * - kDataLoaded: register console commands, retry NiOverride
+ * - kPostLoadGame / kNewGame: queue pending appearance template apply
+ */
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
     switch (a_msg->type) {
