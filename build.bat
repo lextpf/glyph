@@ -89,7 +89,7 @@ echo Documentation:
 echo   - API:  docs\api\  (if doxide available)
 echo   - Site: site\      (if mkdocs available)
 echo.
-echo  *** Run deploy.bat to copy the built files to the Skyrim directory ***
+echo  *** Run deploy.bat to install the plugin as an MO2 mod ***
 echo.
 echo ============================================================================
 
