@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.19)
 
-project(whois LANGUAGES CXX)
+project(glyph LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -89,7 +89,7 @@ else()
     message(WARNING "ClibUtil not found. You may need to set CommonLibSSEPath environment variable or add extern/commonlibsse submodule.")
 endif()
 
-add_library(whois SHARED
+add_library(glyph SHARED
     src/main.cpp
     src/PCH.h
     src/Settings.cpp
@@ -112,7 +112,7 @@ add_library(whois SHARED
     src/Version.h
 )
 
-target_include_directories(whois PRIVATE
+target_include_directories(glyph PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/external
     ${CMAKE_CURRENT_SOURCE_DIR}/external/skse64
@@ -121,25 +121,25 @@ target_include_directories(whois PRIVATE
 
 # Add ClibUtil include directory if found
 if(CLIBUTIL_INCLUDE_DIRS)
-    target_include_directories(whois PRIVATE ${CLIBUTIL_INCLUDE_DIRS})
+    target_include_directories(glyph PRIVATE ${CLIBUTIL_INCLUDE_DIRS})
 endif()
 
 # Add boost-unordered include directory if found
 if(BOOST_UNORDERED_INCLUDE_DIRS)
-    target_include_directories(whois PRIVATE ${BOOST_UNORDERED_INCLUDE_DIRS})
+    target_include_directories(glyph PRIVATE ${BOOST_UNORDERED_INCLUDE_DIRS})
 endif()
 
 # Add srell include directory if found
 if(SRELL_INCLUDE_DIRS)
-    target_include_directories(whois PRIVATE ${SRELL_INCLUDE_DIRS})
+    target_include_directories(glyph PRIVATE ${SRELL_INCLUDE_DIRS})
 endif()
 
 # Define Skyrim version (1.5.97 SE)
-target_compile_definitions(whois PRIVATE
+target_compile_definitions(glyph PRIVATE
     SKYRIM_SE
 )
 
-target_link_libraries(whois PRIVATE
+target_link_libraries(glyph PRIVATE
     CommonLibSSE
     imgui::imgui
     spdlog::spdlog
@@ -150,30 +150,30 @@ target_link_libraries(whois PRIVATE
 # ============================================================================
 # Testing Support
 # ============================================================================
-option(BUILD_WHOIS_TESTS "Build whois unit tests" ON)
+option(BUILD_GLYPH_TESTS "Build glyph unit tests" ON)
 
-if(BUILD_WHOIS_TESTS)
+if(BUILD_GLYPH_TESTS)
     find_package(GTest CONFIG REQUIRED)
 
     # Test executable for utility functions
-    add_executable(whois_test_utils tests/test_utils.cpp)
-    target_compile_features(whois_test_utils PRIVATE cxx_std_17)
-    target_link_libraries(whois_test_utils PRIVATE GTest::gtest GTest::gtest_main)
+    add_executable(glyph_test_utils tests/test_utils.cpp)
+    target_compile_features(glyph_test_utils PRIVATE cxx_std_17)
+    target_link_libraries(glyph_test_utils PRIVATE GTest::gtest GTest::gtest_main)
     if(MSVC)
-        target_compile_options(whois_test_utils PRIVATE /W4)
+        target_compile_options(glyph_test_utils PRIVATE /W4)
     endif()
 
     # Test executable for settings parsing
-    add_executable(whois_test_settings tests/test_settings.cpp)
-    target_compile_features(whois_test_settings PRIVATE cxx_std_17)
-    target_link_libraries(whois_test_settings PRIVATE GTest::gtest GTest::gtest_main)
+    add_executable(glyph_test_settings tests/test_settings.cpp)
+    target_compile_features(glyph_test_settings PRIVATE cxx_std_17)
+    target_link_libraries(glyph_test_settings PRIVATE GTest::gtest GTest::gtest_main)
     if(MSVC)
-        target_compile_options(whois_test_settings PRIVATE /W4)
+        target_compile_options(glyph_test_settings PRIVATE /W4)
     endif()
 
     # Enable CTest integration with Google Test
     include(GoogleTest)
     enable_testing()
-    gtest_discover_tests(whois_test_utils)
-    gtest_discover_tests(whois_test_settings)
+    gtest_discover_tests(glyph_test_utils)
+    gtest_discover_tests(glyph_test_settings)
 endif()

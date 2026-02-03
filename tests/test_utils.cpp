@@ -1,5 +1,5 @@
 /**
- * Unit tests for whois utility functions using Google Test.
+ * Unit tests for glyph utility functions using Google Test.
  *
  * Tests core math and color manipulation functions that are independent
  * of the game runtime.

@@ -16,7 +16,7 @@
  *
  * ## :material-cogs: Settings
  *
- * Configure in whois.ini under `[Debug]`:
+ * Configure in glyph.ini under `[Debug]`:
  *
  * |            Setting | Type | Default | Description                          |
  * |--------------------|------|---------|--------------------------------------|

@@ -3,13 +3,13 @@
  *                                                             ⠀     ⢸⣧⠀⠀⠀⠀⢠⣾⣇⣀⣴⣿⠀⠀⣼⡇⠀⠀
  *                                                                ⠀⠀⣾⣿⣧⠀⠀⢀⣼⣿⣿⣿⣿⣿⠀⣼⣿⣷⠀⠀
  *                                                                ⠀⢸⣿⣿⣿⡀⠀⠸⠿⠿⣿⣿⣿⡟⢀⣿⣿⣿⡇⠀
- *    :::       ::: :::    :::  :::::::: ::::::::::: ::::::::     ⠀⣾⣿⣿⣿⣿⡀⠀⢀⣼⣿⣿⡿⠁⣿⣿⣿⣿⣷⠀
- *    :+:       :+: :+:    :+: :+:    :+:    :+:    :+:    :+:    ⢸⣿⣿⣿⣿⠁⣠⣤⣾⣿⣿⣯⣤⣄⠙⣿⣿⣿⣿⡇
- *    +:+       +:+ +:+    +:+ +:+    +:+    +:+    +:+           ⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿
- *    +#+  +:+  +#+ +#++:++#++ +#+    +:+    +#+    +#++:++#++    ⠘⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏
- *    +#+ +#+#+ +#+ +#+    +#+ +#+    +#+    +#+           +#+    ⠀⠘⢿⣿⣿⣿⠛⠻⢿⣿⣿⣿⠹⠟⣿⣿⣿⣿⣿⠀
- *     #+#+# #+#+#  #+#    #+# #+#    #+#    #+#    #+#    #+#    ⠀⠀⠘⢿⣿⣿⣦⡄⢸⣿⣿⣿⡇⠠⣿⣿⣿⣿⡇⠀
- *      ###   ###   ###    ###  ######## ########### ########     ⠀⠀⠀⠘⢿⣿⣿⠀⣸⣿⣿⣿⠇⠀⠙⣿⣿⣿⠁⠀
+ *        ::::::::  :::     :::   ::: :::::::::  :::    :::       ⠀⣾⣿⣿⣿⣿⡀⠀⢀⣼⣿⣿⡿⠁⣿⣿⣿⣿⣷⠀
+ *       :+:    :+: :+:     :+:   :+: :+:    :+: :+:    :+:       ⢸⣿⣿⣿⣿⠁⣠⣤⣾⣿⣿⣯⣤⣄⠙⣿⣿⣿⣿⡇
+ *       +:+        +:+      +:+ +:+  +:+    +:+ +:+    +:+       ⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿
+ *       :#:        +#+       +#++:   +#++:++#+  +#++:++#++       ⠘⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏
+ *       +#+   +#+# +#+        +#+    +#+        +#+    +#+       ⠀⠘⢿⣿⣿⣿⠛⠻⢿⣿⣿⣿⠹⠟⣿⣿⣿⣿⣿⠀
+ *       #+#    #+# #+#        #+#    #+#        #+#    #+#       ⠀⠀⠘⢿⣿⣿⣦⡄⢸⣿⣿⣿⡇⠠⣿⣿⣿⣿⡇⠀
+ *        ########  ########## ###    ###        ###    ###       ⠀⠀⠀⠘⢿⣿⣿⠀⣸⣿⣿⣿⠇⠀⠙⣿⣿⣿⠁⠀
  *                                                                ⠀⠀⠀⠀⠘⣿⠃⢰⣿⣿⣿⡇⠀⠀⠀⠈⢻⡇⠀⠀
  *                                                                ⠀⠀⠀⠀⠀⠈⠀⠈⢿⣿⣿⣿⣶⡶⠂⠀⠀⠁⠀⠀
  *                                << S K Y R I M   P L U G I N >>         ⠀⠀⠈⠻⣿⡿⠋⠀⠀⠀⠀⠀⠀⠀
@@ -22,7 +22,7 @@
  *
  *    ----------------------------------------------------------------------
  *
- *      Repository:   https://github.com/lextpf/whois
+ *      Repository:   https://github.com/lextpf/glyph
  *      License:      MIT
  */
 #include "PCH.h"
@@ -39,16 +39,16 @@
  * @brief Console command registration and handlers.
  * @ingroup ConsoleCommands
  *
- * Provides the `whois` console command for toggling nameplate rendering.
+ * Provides the `glyph` console command for toggling nameplate rendering.
  * Registers by replacing an unused vanilla command slot at plugin load.
  */
 namespace ConsoleCommands
 {
     /**
-     * whois console command.
-     * Usage: Type 'whois' in console to toggle nameplate rendering on/off.
+     * glyph console command.
+     * Usage: Type 'glyph' in console to toggle nameplate rendering on/off.
      */
-    bool WhoisExecute(const RE::SCRIPT_PARAMETER*, RE::SCRIPT_FUNCTION::ScriptData*,
+    bool GlyphExecute(const RE::SCRIPT_PARAMETER*, RE::SCRIPT_FUNCTION::ScriptData*,
                       RE::TESObjectREFR*, RE::TESObjectREFR*, RE::Script*, RE::ScriptLocals*,
                       double&, std::uint32_t&)
     {
@@ -57,20 +57,20 @@ namespace ConsoleCommands
 
         if (console) {
             if (newState) {
-                console->Print("whois: Nameplate rendering ENABLED");
+                console->Print("glyph: Nameplate rendering ENABLED");
             } else {
-                console->Print("whois: Nameplate rendering DISABLED");
+                console->Print("glyph: Nameplate rendering DISABLED");
             }
         }
 
-        logger::info("whois: Rendering toggled to {}", newState ? "ON" : "OFF");
+        logger::info("glyph: Rendering toggled to {}", newState ? "ON" : "OFF");
 
         return true;
     }
 
     void Register()
     {
-        logger::info("Registering whois console command...");
+        logger::info("Registering glyph console command...");
 
         auto* commands = RE::SCRIPT_FUNCTION::GetFirstConsoleCommand();
         if (!commands) {
@@ -89,22 +89,22 @@ namespace ConsoleCommands
 
             // Replace TestSeenData
             if (_stricmp(cmd->functionName, "TestSeenData") == 0) {
-                cmd->functionName = "whois";
+                cmd->functionName = "glyph";
                 cmd->shortName = "";
                 cmd->helpString = "Toggle nameplate rendering on/off";
                 cmd->referenceFunction = false;
-                cmd->executeFunction = WhoisExecute;
+                cmd->executeFunction = GlyphExecute;
                 cmd->numParams = 0;
                 cmd->params = nullptr;
                 found = true;
-                logger::info("Registered 'whois' console command");
+                logger::info("Registered 'glyph' console command");
             }
         }
 
         if (!found) {
-            logger::warn("Could not find slot for whois command");
+            logger::warn("Could not find slot for glyph command");
         } else {
-            logger::info("Usage: Type 'whois' to toggle nameplate rendering");
+            logger::info("Usage: Type 'glyph' to toggle nameplate rendering");
         }
     }
 }
@@ -181,7 +181,7 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
         return false;
     }
 
-    *path /= "whois.log";
+    *path /= "glyph.log";
     auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
     auto log = std::make_shared<spdlog::logger>("global log"s, std::move(sink));
 
@@ -191,7 +191,7 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
     spdlog::set_default_logger(std::move(log));
     spdlog::set_pattern("[%H:%M:%S] [%^%l%$] %v"s);
 
-    logger::debug("whois loaded");
+    logger::debug("glyph loaded");
 
     // Register for SKSE messages
     auto messaging = SKSE::GetMessagingInterface();
@@ -218,7 +218,7 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
 extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []() {
     SKSE::PluginVersionData version;
     version.PluginVersion(REL::Version(0, 1, 0, 0));
-    version.PluginName("whois");
+    version.PluginName("glyph");
     version.AuthorName("lextpf | powerof3 | expired6978");
     version.UsesAddressLibrary(true);
     return version;
@@ -236,7 +236,7 @@ extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []() 
 extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Query(const SKSE::QueryInterface*, SKSE::PluginInfo* a_info)
 {
     a_info->infoVersion = SKSE::PluginInfo::kVersion;
-    a_info->name = "whois";
+    a_info->name = "glyph";
     a_info->version = 1;
     return true;
 }

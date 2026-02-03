@@ -1,6 +1,6 @@
 <div align="center">
 
-# whois
+# glyph
 **SKSE overlay for actor info and appearance templates**
 
 📖 [Installation](#installation) | 🎨 [Configuration](#configuration) | 🏗️ [Building](#building) | 🤝 [Contributing](./CONTRIBUTING.md)
@@ -12,12 +12,12 @@
 ![CMake](https://img.shields.io/badge/CMake-3.10%2B-c0392b?style=flat&logo=cmake&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-475569.svg?logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB3aWR0aD0iMTY0cHgiIGhlaWdodD0iMTY0cHgiIHZpZXdCb3g9IjAgMCA1MTIuMDAgNTEyLjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIwLjAwNTEyIj48ZyBpZD0iU1ZHUmVwb19iZ0NhcnJpZXIiIHN0cm9rZS13aWR0aD0iMCI+PC9nPjxnIGlkPSJTVkdSZXBvX3RyYWNlckNhcnJpZXIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgc3Ryb2tlPSIjQ0NDQ0NDIiBzdHJva2Utd2lkdGg9IjMuMDcyIj48L2c+PGcgaWQ9IlNWR1JlcG9faWNvbkNhcnJpZXIiPjxwYXRoIGQ9Ik0yNTYgOEMxMTkuMDMzIDggOCAxMTkuMDMzIDggMjU2czExMS4wMzMgMjQ4IDI0OCAyNDggMjQ4LTExMS4wMzMgMjQ4LTI0OFMzOTIuOTY3IDggMjU2IDh6bTExNy4xMzQgMzQ2Ljc1M2MtMS41OTIgMS44NjctMzkuNzc2IDQ1LjczMS0xMDkuODUxIDQ1LjczMS04NC42OTIgMC0xNDQuNDg0LTYzLjI2LTE0NC40ODQtMTQ1LjU2NyAwLTgxLjMwMyA2Mi4wMDQtMTQzLjQwMSAxNDMuNzYyLTE0My40MDEgNjYuOTU3IDAgMTAxLjk2NSAzNy4zMTUgMTAzLjQyMiAzOC45MDRhMTIgMTIgMCAwIDEgMS4yMzggMTQuNjIzbC0yMi4zOCAzNC42NTVjLTQuMDQ5IDYuMjY3LTEyLjc3NCA3LjM1MS0xOC4yMzQgMi4yOTUtLjIzMy0uMjE0LTI2LjUyOS0yMy44OC02MS44OC0yMy44OC00Ni4xMTYgMC03My45MTYgMzMuNTc1LTczLjkxNiA3Ni4wODIgMCAzOS42MDIgMjUuNTE0IDc5LjY5MiA3NC4yNzcgNzkuNjkyIDM4LjY5NyAwIDY1LjI4LTI4LjMzOCA2NS41NDQtMjguNjI1IDUuMTMyLTUuNTY1IDE0LjA1OS01LjAzMyAxOC41MDggMS4wNTNsMjQuNTQ3IDMzLjU3MmExMi4wMDEgMTIuMDAxIDAgMCAxLS41NTMgMTQuODY2eiI+PC9wYXRoPjwvZz48L3N2Zz4=)
 <br/>
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lextpf_glyph&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lextpf_glyph)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_glyph&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_glyph)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_glyph&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_glyph)
 <br/>
-[![build](https://github.com/lextpf/whois/actions/workflows/build.yml/badge.svg)](https://github.com/lextpf/whois/actions/workflows/build.yml)
-[![tests](https://github.com/lextpf/whois/actions/workflows/test.yml/badge.svg)](https://github.com/lextpf/whois/actions/workflows/test.yml)
+[![build](https://github.com/lextpf/glyph/actions/workflows/build.yml/badge.svg)](https://github.com/lextpf/glyph/actions/workflows/build.yml)
+[![tests](https://github.com/lextpf/glyph/actions/workflows/test.yml/badge.svg)](https://github.com/lextpf/glyph/actions/workflows/test.yml)
 <br/>
 ![Sponsor](https://img.shields.io/static/v1?label=sponsor&message=%E2%9D%A4&color=ff69b4&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNjQwIj48IS0tIUZvbnQgQXdlc29tZSBQcm8gdjcuMi4wIGJ5IEBmb250YXdlc29tZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tIExpY2Vuc2UgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbS9saWNlbnNlIChDb21tZXJjaWFsIExpY2Vuc2UpIENvcHlyaWdodCAyMDI2IEZvbnRpY29ucywgSW5jLi0tPjxwYXRoIG9wYWNpdHk9IjEiIGZpbGw9IiNmZjY5YjRmZiIgZD0iTTMyIDQ4MEwzMiA1NDRDMzIgNTYxLjcgNDYuMyA1NzYgNjQgNTc2TDM4NC41IDU3NkM0MTMuNSA1NzYgNDQxLjggNTY2LjcgNDY1LjIgNTQ5LjVMNTkxLjggNDU2LjJDNjA5LjYgNDQzLjEgNjEzLjQgNDE4LjEgNjAwLjMgNDAwLjNDNTg3LjIgMzgyLjUgNTYyLjIgMzc4LjcgNTQ0LjQgMzkxLjhMNDI0LjYgNDgwTDMxMiA0ODBDMjk4LjcgNDgwIDI4OCA0NjkuMyAyODggNDU2QzI4OCA0NDIuNyAyOTguNyA0MzIgMzEyIDQzMkwzODQgNDMyQzQwMS43IDQzMiA0MTYgNDE3LjcgNDE2IDQwMEM0MTYgMzgyLjMgNDAxLjcgMzY4IDM4NCAzNjhMMjMxLjggMzY4QzE5Ny45IDM2OCAxNjUuMyAzODEuNSAxNDEuMyA0MDUuNUw5OC43IDQ0OEw2NCA0NDhDNDYuMyA0NDggMzIgNDYyLjMgMzIgNDgweiIvPjxwYXRoIGZpbGw9InJnYmEoMjU1LCAyNTUsIDI1NSwgMS4wMCkiIGQ9Ik0yNTAuOSA2NEMyNzQuOSA2NCAyOTcuNSA3NS41IDMxMS42IDk1TDMyMCAxMDYuN0wzMjguNCA5NUMzNDIuNSA3NS41IDM2NS4xIDY0IDM4OS4xIDY0QzQzMC41IDY0IDQ2NCA5Ny41IDQ2NCAxMzguOUw0NjQgMTQxLjNDNDY0IDIwNS43IDM4MiAyNzQuNyAzNDEuOCAzMDQuNkMzMjguOCAzMTQuMyAzMTEuMyAzMTQuMyAyOTguMyAzMDQuNkMyNTguMSAyNzQuNiAxNzYgMjA1LjcgMTc2LjEgMTQxLjNMMTc2LjEgMTM4LjlDMTc2IDk3LjUgMjA5LjUgNjQgMjUwLjkgNjR6Ii8+PC9zdmc+)
 </div>
@@ -35,7 +35,7 @@ An SKSE plugin that renders **floating nameplates** above NPCs and creatures, di
 > **Skyrim SE 1.5.97** - AE support is available but untested.
 >
 > - Built and tested against **Nolvus Awakening 6.0.20**. The deploy script assumes `D:\Nolvus\Instance\MODS\overwrite`, edit `DEPLOY_PATH` in `deploy.bat` to match your setup.
-> - If you experience frame drops, type `whois` in the console to toggle the overlay off.
+> - If you experience frame drops, type `glyph` in the console to toggle the overlay off.
 
 ```
 /* ============================================================================================== *
@@ -43,13 +43,13 @@ An SKSE plugin that renders **floating nameplates** above NPCs and creatures, di
  *                                                             ⠀     ⢸⣧⠀⠀⠀⠀⢠⣾⣇⣀⣴⣿⠀⠀⣼⡇⠀⠀
  *                                                                ⠀⠀⣾⣿⣧⠀⠀⢀⣼⣿⣿⣿⣿⣿⠀⣼⣿⣷⠀⠀
  *                                                                ⠀⢸⣿⣿⣿⡀⠀⠸⠿⠿⣿⣿⣿⡟⢀⣿⣿⣿⡇⠀
- *    :::       ::: :::    :::  :::::::: ::::::::::: ::::::::     ⠀⣾⣿⣿⣿⣿⡀⠀⢀⣼⣿⣿⡿⠁⣿⣿⣿⣿⣷⠀
- *    :+:       :+: :+:    :+: :+:    :+:    :+:    :+:    :+:    ⢸⣿⣿⣿⣿⠁⣠⣤⣾⣿⣿⣯⣤⣄⠙⣿⣿⣿⣿⡇
- *    +:+       +:+ +:+    +:+ +:+    +:+    +:+    +:+           ⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿
- *    +#+  +:+  +#+ +#++:++#++ +#+    +:+    +#+    +#++:++#++    ⠘⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏
- *    +#+ +#+#+ +#+ +#+    +#+ +#+    +#+    +#+           +#+    ⠀⠘⢿⣿⣿⣿⠛⠻⢿⣿⣿⣿⠹⠟⣿⣿⣿⣿⣿⠀
- *     #+#+# #+#+#  #+#    #+# #+#    #+#    #+#    #+#    #+#    ⠀⠀⠘⢿⣿⣿⣦⡄⢸⣿⣿⣿⡇⠠⣿⣿⣿⣿⡇⠀
- *      ###   ###   ###    ###  ######## ########### ########     ⠀⠀⠀⠘⢿⣿⣿⠀⣸⣿⣿⣿⠇⠀⠙⣿⣿⣿⠁⠀
+ *        ::::::::  :::     :::   ::: :::::::::  :::    :::       ⠀⣾⣿⣿⣿⣿⡀⠀⢀⣼⣿⣿⡿⠁⣿⣿⣿⣿⣷⠀
+ *       :+:    :+: :+:     :+:   :+: :+:    :+: :+:    :+:       ⢸⣿⣿⣿⣿⠁⣠⣤⣾⣿⣿⣯⣤⣄⠙⣿⣿⣿⣿⡇
+ *       +:+        +:+      +:+ +:+  +:+    +:+ +:+    +:+       ⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿
+ *       :#:        +#+       +#++:   +#++:++#+  +#++:++#++       ⠘⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏
+ *       +#+   +#+# +#+        +#+    +#+        +#+    +#+       ⠀⠘⢿⣿⣿⣿⠛⠻⢿⣿⣿⣿⠹⠟⣿⣿⣿⣿⣿⠀
+ *       #+#    #+# #+#        #+#    #+#        #+#    #+#       ⠀⠀⠘⢿⣿⣿⣦⡄⢸⣿⣿⣿⡇⠠⣿⣿⣿⣿⡇⠀
+ *        ########  ########## ###    ###        ###    ###       ⠀⠀⠀⠘⢿⣿⣿⠀⣸⣿⣿⣿⠇⠀⠙⣿⣿⣿⠁⠀
  *                                                                ⠀⠀⠀⠀⠘⣿⠃⢰⣿⣿⣿⡇⠀⠀⠀⠈⢻⡇⠀⠀
  *                                                                ⠀⠀⠀⠀⠀⠈⠀⠈⢿⣿⣿⣿⣶⡶⠂⠀⠀⠁⠀⠀
  *                                << S K Y R I M   P L U G I N >>         ⠀⠀⠈⠻⣿⡿⠋⠀⠀⠀⠀⠀⠀⠀
@@ -149,9 +149,9 @@ Pack the build output into the SKSE folder structure and install with your mod m
 Data/
 +-- SKSE/
     +-- Plugins/
-        |-- whois.dll
-        |-- whois.ini
-        +-- whois/
+        |-- glyph.dll
+        |-- glyph.ini
+        +-- glyph/
             +-- (assets)
 ```
 
@@ -161,7 +161,7 @@ Data/
 
 ## Configuration
 
-Edit `Data/SKSE/Plugins/whois.ini` — press **F7** in-game to hot reload.
+Edit `Data/SKSE/Plugins/glyph.ini` — press **F7** in-game to hot reload.
 
 ```mermaid
 ---
@@ -232,8 +232,8 @@ graph LR
 
 ```powershell
 # 1. Clone the repository
-git clone https://github.com/lextpf/whois.git
-cd whois
+git clone https://github.com/lextpf/glyph.git
+cd glyph
 
 # 2. Build
 .\build.bat
@@ -242,7 +242,7 @@ cd whois
 .\deploy.bat
 ```
 
-Output: `build/Release/whois.dll`
+Output: `build/Release/glyph.dll`
 
 ## Architecture
 
@@ -283,7 +283,7 @@ graph TB
 ## Project Structure
 
 ```
-whois/
+glyph/
 |-- src/                          # Source code
 |   |-- main.cpp                  # Entry point, SKSE interface
 |   |-- Hooks.cpp/h               # D3D11 present and HUD menu hooks
@@ -298,8 +298,8 @@ whois/
 |   |-- PCH.h
 |   +-- Version.h
 |-- skse/plugins/                 # Runtime assets
-|   |-- whois.ini                 # Default config
-|   +-- whois/
+|   |-- glyph.ini                 # Default config
+|   +-- glyph/
 |       |-- fonts/                # Custom fonts
 |       +-- particles/            # Particle sprites
 |-- external/                     # Third-party sources
@@ -317,7 +317,7 @@ whois/
 | Performance issues | Reduce `MaxScanDistance`, disable complex effects  |
 |  Fonts not loading | Verify paths in INI, ensure TTF format             |
 
-Check `Documents/My Games/Skyrim Special Edition/SKSE/whois.log` for errors.
+Check `Documents/My Games/Skyrim Special Edition/SKSE/glyph.log` for errors.
 
 ## Contributing
 

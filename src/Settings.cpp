@@ -73,7 +73,7 @@ namespace Settings
     float ParticleSpeed = 1.0f;
     float ParticleSpread = 20.0f;
     float ParticleAlpha = 0.8f;
-    // Textures loaded from subfolders: Data/SKSE/Plugins/whois/particles/<type>/
+    // Textures loaded from subfolders: Data/SKSE/Plugins/glyph/particles/<type>/
 
     // Display Options
     float VerticalOffset = 8.0f;
@@ -199,7 +199,7 @@ namespace Settings
     void Load()
     {
         // File is located in Skyrim's Data folder under SKSE plugins directory
-        std::ifstream file("Data/SKSE/Plugins/whois.ini");
+        std::ifstream file("Data/SKSE/Plugins/glyph.ini");
         if (!file.is_open()) return;  // Silently use defaults if file not found
 
         std::string line;
@@ -542,7 +542,7 @@ namespace Settings
             else if (key == "ParticleSpread") ParticleSpread = ParseFloat(val, 20.0f);
             else if (key == "ParticleAlpha") ParticleAlpha = ParseFloat(val, 0.8f);
             else if (key == "UseParticleTextures") UseParticleTextures = ParseBool(val);
-            // Textures now auto-loaded from whois/particles/<type>/ folders
+            // Textures now auto-loaded from glyph/particles/<type>/ folders
             // Display Options
             else if (key == "VerticalOffset") VerticalOffset = ParseFloat(val, 8.0f);
             else if (key == "HidePlayer") HidePlayer = (ParseInt(val, 0) != 0);
