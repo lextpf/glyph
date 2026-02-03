@@ -1,11 +1,13 @@
 #include "Renderer.h"
-#include "TextEffects.h"
-#include "ParticleTextures.h"
-#include "Settings.h"
-#include "Occlusion.h"
-#include "RenderConstants.h"
-#include "DebugOverlay.h"
+
 #include "AppearanceTemplate.h"
+#include "DebugOverlay.h"
+#include "GameState.h"
+#include "Occlusion.h"
+#include "ParticleTextures.h"
+#include "RenderConstants.h"
+#include "Settings.h"
+#include "TextEffects.h"
 
 #include <SKSE/SKSE.h>
 #include <algorithm>
@@ -339,15 +341,21 @@ namespace Renderer
         return offsets;
     }
 
-    bool IsOverlayAllowedRT() {
+    bool IsOverlayAllowedRT()
+    {
         return s_state.manualEnabled.load(std::memory_order_acquire) &&
                s_state.allowOverlay.load(std::memory_order_acquire);
     }
 
-    bool ToggleEnabled() {
-        bool newState = !s_state.manualEnabled.load(std::memory_order_acquire);
-        s_state.manualEnabled.store(newState, std::memory_order_release);
-        return newState;
+    bool ToggleEnabled()
+    {
+        bool expected = s_state.manualEnabled.load(std::memory_order_relaxed);
+        while (!s_state.manualEnabled.compare_exchange_weak(
+            expected, !expected,
+            std::memory_order_acq_rel, std::memory_order_relaxed))
+        {
+        }
+        return !expected;
     }
 
     static ImFont* GetFontAt(int index)
