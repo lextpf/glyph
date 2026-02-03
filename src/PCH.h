@@ -24,12 +24,11 @@
 #include <xbyak/xbyak.h>
 #include <srell.hpp>
 
-#include "imgui_impl_win32.h"
-#include "imgui_internal.h"
-
 #include <imgui.h>
 #include <imgui_freetype.h>
 #include <imgui_impl_dx11.h>
+#include <imgui_impl_win32.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 
 /// Export macro for DLL entry points
@@ -94,6 +93,15 @@ std::size_t hash_value(const BSPointerHandle<T>& a_handle)
  */
 namespace Stl
 {
+/// Redirect a 5-byte `call` instruction to `T::thunk` via SKSE's trampoline.
+///
+/// The original callee address is saved in `T::func` so the hook can
+/// forward to it.
+///
+/// @tparam T Hook descriptor providing `static decltype(func) func` and
+///           `static thunk(...)`.
+/// @param a_src Address of the `call` instruction to patch.
+/// @pre @p a_src points to a 5-byte relative `call` instruction.
 template <class T>
 void WriteThunkCall(std::uintptr_t a_src)
 {
@@ -101,6 +109,12 @@ void WriteThunkCall(std::uintptr_t a_src)
     T::func = trampoline.write_call<5>(a_src, T::thunk);
 }
 
+/// Overwrite a vtable entry with `T::thunk`.
+///
+/// Saves the original function pointer in `T::func`.
+///
+/// @tparam F Class whose vtable is patched. Must provide `VTABLE`.
+/// @tparam T Hook descriptor providing `idx`, `func`, and `thunk`.
 template <class F, class T>
 void WriteVfunc()
 {
@@ -108,6 +122,18 @@ void WriteVfunc()
     T::func = vtbl.write_vfunc(T::idx, T::thunk);
 }
 
+/// Prologue-patching hook for functions that cannot use a simple call redirect.
+///
+/// Uses Xbyak to generate a trampoline that copies the first @p BYTES bytes
+/// of the original function, then jumps back to `a_src + BYTES`. A 5-byte
+/// branch at @p a_src is overwritten to redirect to `T::thunk`. The
+/// trampoline address is stored in `T::func` so `T::thunk` can call the
+/// original prologue.
+///
+/// @tparam T     Hook descriptor providing `func` and `thunk`.
+/// @tparam BYTES Number of prologue bytes to relocate (must be >= 5).
+/// @param a_src  Address of the function prologue to patch.
+/// @pre @p BYTES covers complete instructions at @p a_src (no mid-instruction split).
 template <class T, std::size_t BYTES>
 void HookFunctionPrologue(std::uintptr_t a_src)
 {
@@ -162,14 +188,20 @@ constexpr inline auto EnumRange(auto first, auto last)
 template <typename E, std::size_t N>
 struct EnumStringMap
 {
+    /// A single enum-value / string-name pair.
     struct Entry
     {
-        std::string_view name;
-        E value;
+        std::string_view name;  ///< Display name for the enumerator.
+        E value;                ///< Corresponding enum value.
     };
 
     std::array<Entry, N> entries;
 
+    /// Look up an enum value by its string name.
+    ///
+    /// @param s        String to search for (exact match).
+    /// @param fallback Value returned when no entry matches @p s.
+    /// @return The matching enum value, or @p fallback if not found.
     constexpr E fromString(std::string_view s, E fallback) const
     {
         for (const auto& e : entries)
@@ -182,6 +214,10 @@ struct EnumStringMap
         return fallback;
     }
 
+    /// Convert an enum value to its string name.
+    ///
+    /// @param v Enum value to look up.
+    /// @return The matching name, or `"unknown"` if not found.
     constexpr std::string_view toString(E v) const
     {
         for (const auto& e : entries)

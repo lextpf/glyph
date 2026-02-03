@@ -40,7 +40,7 @@
  *     classDef process fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
  *     classDef render fill:#1a3a2a,stroke:#10b981,color:#e2e8f0
  *
- *     A[PNG Files]:::io --> B[stb_image Load]:::process
+ *     A[PNG Files]:::io --> B[WIC Load]:::process
  *     B --> C[ID3D11Texture2D]:::process
  *     C --> D[Shader Resource View]:::process
  *     D --> E[ImGui Textured Quad]:::render
@@ -56,11 +56,12 @@
  */
 namespace ParticleTextures
 {
+/// Blend modes for particle sprite rendering.
 enum class BlendMode
 {
-    Alpha = 0,
-    Additive = 1,
-    Screen = 2
+    Alpha = 0,     ///< Standard alpha blending (default)
+    Additive = 1,  ///< Additive blending for bright, glowing particles
+    Screen = 2     ///< Screen-like blend for softer luminous sprites
 };
 
 /**

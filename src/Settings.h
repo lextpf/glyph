@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -27,11 +29,9 @@
  * | `[Display]`        | Format string for nameplate composition  |
  * | `[Appearance]`     | NPC appearance template settings         |
  *
- * @note Documented defaults on extern variables refer to the values shipped in
- * the default INI file. Variables without explicit C++ initializers default to
- * zero/empty until Load() populates them from `glyph.ini`. Variables with
- * explicit C++ initializers (e.g., `EnableGlow`, `GlowRadius`) use those
- * values as fallbacks when the INI key is absent.
+ * @note All struct members have explicit C++ initializers that serve as
+ * fallback defaults when the corresponding INI key is absent. Load() overwrites
+ * these with values from `glyph.ini` when the key is present.
  *
  * ## :material-refresh: Hot Reload
  *
@@ -276,64 +276,86 @@ struct SpecialTitleDefinition
     std::string rightOrnaments;  ///< Right side ornament characters
 };
 
-// Display Format
-extern std::string TitleFormat;             ///< Format string for title line (e.g., "%t")
-extern std::vector<Segment> DisplayFormat;  ///< Segments for main nameplate line
+// Collection accessors (function-local statics for safe destruction order)
+std::string& TitleFormat();             ///< Format string for title line (e.g., "%t")
+std::vector<Segment>& DisplayFormat();  ///< Segments for main nameplate line
+std::vector<TierDefinition>& Tiers();   ///< All tier definitions (indexed by tier number)
+std::vector<SpecialTitleDefinition>& SpecialTitles();  ///< Special title overrides
 
-// Tier Definitions
-extern std::vector<TierDefinition> Tiers;  ///< All tier definitions (indexed by tier number)
+/// Distance and visibility fade/scale settings.
+struct DistanceSettings
+{
+    float FadeStartDistance = 200.0f;   ///< Distance where fade begins
+    float FadeEndDistance = 2500.0f;    ///< Distance where fully transparent
+    float ScaleStartDistance = 200.0f;  ///< Distance where font size scaling begins
+    float ScaleEndDistance = 2500.0f;   ///< Distance where minimum font size is reached
+    float MinimumScale = .1f;           ///< Smallest font size multiplier
+    float MaxScanDistance = 3000.0f;    ///< Maximum actor scan distance
+};
+DistanceSettings& Distance();
 
-// Special Titles (Admin, Moderator, VIP, etc.)
-extern std::vector<SpecialTitleDefinition> SpecialTitles;  ///< Special title overrides
+/// Occlusion culling settings.
+struct OcclusionSettings
+{
+    bool Enabled = true;      ///< Enable LOS-based occlusion
+    float SettleTime = .58f;  ///< Fade settle time in seconds
+    int CheckInterval = 3;    ///< Frames between LOS checks
+};
+OcclusionSettings& Occlusion();
 
-// Distance & Visibility
-extern float FadeStartDistance;   ///< Distance where fade begins (default: 200.0)
-extern float FadeEndDistance;     ///< Distance where fully transparent (default: 2500.0)
-extern float ScaleStartDistance;  ///< Distance where font size scaling begins (default: 200.0)
-extern float ScaleEndDistance;    ///< Distance where minimum font size is reached (default: 2500.0)
-extern float MinimumScale;        ///< Smallest font size multiplier (default: 0.1)
-extern float MaxScanDistance;     ///< Maximum actor scan distance (default: 3000.0)
+/// Shadow offsets, segment padding, and outline settings.
+struct ShadowOutlineSettings
+{
+    float TitleShadowOffsetX = 2.0f;   ///< Title shadow X offset in pixels
+    float TitleShadowOffsetY = 2.0f;   ///< Title shadow Y offset in pixels
+    float MainShadowOffsetX = 4.0f;    ///< Main text shadow X offset
+    float MainShadowOffsetY = 4.0f;    ///< Main text shadow Y offset
+    float SegmentPadding = 4.0f;       ///< Horizontal padding between segments
+    float OutlineWidthMin = 2.0f;      ///< Base outline width
+    float OutlineWidthMax = 2.5f;      ///< Additional width for high tiers
+    bool FastOutlines = false;         ///< Use 4-dir outlines instead of 8-dir
+    float TitleMainGap = .0f;          ///< Vertical gap between title and main line (pixels)
+    float OutlineMinScale = .65f;      ///< Minimum outline width ratio for smaller text
+    bool ProportionalSpacing = false;  ///< Scale pixel spacings with text size
+};
+ShadowOutlineSettings& ShadowOutline();
 
-// Occlusion Culling
-extern bool EnableOcclusionCulling;  ///< Enable LOS-based occlusion (default: true)
-extern float OcclusionSettleTime;    ///< Fade settle time in seconds (default: 0.58)
-extern int OcclusionCheckInterval;   ///< Frames between LOS checks (default: 3)
+/// Glow effect settings.
+struct GlowSettings
+{
+    bool Enabled = false;   ///< Enable glow effect
+    float Radius = 4.0f;    ///< Glow spread in pixels
+    float Intensity = .5f;  ///< Glow brightness 0-1
+    int Samples = 8;        ///< Quality samples 8-16
+};
+GlowSettings& Glow();
 
-// Shadow & Visual Effects
-extern float TitleShadowOffsetX;  ///< Title shadow X offset in pixels (default: 2.0)
-extern float TitleShadowOffsetY;  ///< Title shadow Y offset in pixels (default: 2.0)
-extern float MainShadowOffsetX;   ///< Main text shadow X offset (default: 4.0)
-extern float MainShadowOffsetY;   ///< Main text shadow Y offset (default: 4.0)
-extern float SegmentPadding;      ///< Horizontal padding between segments (default: 4.0)
+/// Typewriter reveal effect settings.
+struct TypewriterSettings
+{
+    bool Enabled = false;  ///< Enable typewriter reveal
+    float Speed = 30.0f;   ///< Characters per second
+    float Delay = .0f;     ///< Delay before reveal starts
+};
+TypewriterSettings& Typewriter();
 
-// Outline Settings
-extern float OutlineWidthMin;  ///< Base outline width (default: 2.0)
-extern float OutlineWidthMax;  ///< Additional width for high tiers (default: 2.5)
-extern bool FastOutlines;      ///< Use 4-dir outlines instead of 8-dir (default: false)
-
-// Glow Effect
-extern bool EnableGlow;      ///< Enable glow effect (default: false)
-extern float GlowRadius;     ///< Glow spread in pixels (default: 4.0)
-extern float GlowIntensity;  ///< Glow brightness 0-1 (default: 0.5)
-extern int GlowSamples;      ///< Quality samples 8-16 (default: 8)
-
-// Typewriter Effect
-extern bool EnableTypewriter;  ///< Enable typewriter reveal (default: false)
-extern float TypewriterSpeed;  ///< Characters per second (default: 30.0)
-extern float TypewriterDelay;  ///< Delay before reveal starts (default: 0.0)
-
-// Debug Settings
-extern bool EnableDebugOverlay;  ///< Show performance/cache overlay (default: false)
-
-// Side Ornaments
-extern bool EnableOrnaments;   ///< Enable side ornaments (default: true)
-extern float OrnamentScale;    ///< Size multiplier (default: 1.0)
-extern float OrnamentSpacing;  ///< Distance from text edges (default: 3.0)
+/// Side ornament settings.
+struct OrnamentSettings
+{
+    bool Enabled = true;     ///< Enable side ornaments
+    float Scale = 1.0f;      ///< Size multiplier
+    float Spacing = 3.0f;    ///< Distance from text edges
+    std::string FontPath;    ///< Path to ornament font (TTF/OTF)
+    float FontSize = 64.0f;  ///< Ornament font size in points
+    bool AnchorToMainLine =
+        true;  ///< Anchor ornaments to main text line instead of nameplate center
+};
+OrnamentSettings& Ornament();
 
 /**
  * Visual styles for particle aura effects.
  *
- * @see EnableParticleAura, TextEffects::DrawParticleAura
+ * @see ParticleSettings, TextEffects::DrawParticleAura
  */
 enum class ParticleStyle
 {
@@ -344,45 +366,82 @@ enum class ParticleStyle
     Orbs     ///< Soft glowing orbs
 };
 
-// Particle Aura
-extern bool EnableParticleAura;   ///< Master enable for particle aura (default: true)
-extern bool UseParticleTextures;  ///< Use texture sprites instead of shapes (default: true)
-// Textures are now loaded from subfolders: Data/SKSE/Plugins/glyph/particles/<type>/
+/// Particle aura settings.
+struct ParticleSettings
+{
+    bool Enabled = true;              ///< Master enable for particle aura
+    bool UseParticleTextures = true;  ///< Use texture sprites instead of shapes
+    bool EnableStars = true;          ///< Enable twinkling stars
+    bool EnableSparks = false;        ///< Enable fire-like sparks
+    bool EnableWisps = false;         ///< Enable ethereal wisps
+    bool EnableRunes = false;         ///< Enable magical runes
+    bool EnableOrbs = false;          ///< Enable glowing orbs
+    int Count = 8;                    ///< Particles per type
+    float Size = 3.0f;                ///< Particle size in pixels
+    float Speed = 1.0f;               ///< Animation speed multiplier
+    float Spread = 20.0f;             ///< How far particles spread from text
+    float Alpha = .8f;                ///< Maximum particle opacity
+    int BlendMode = 0;                ///< 0=Additive, 1=Screen, 2=Alpha
+};
+ParticleSettings& Particle();
 
-extern bool EnableStars;      ///< Enable twinkling stars (default: true)
-extern bool EnableSparks;     ///< Enable fire-like sparks (default: false)
-extern bool EnableWisps;      ///< Enable ethereal wisps (default: false)
-extern bool EnableRunes;      ///< Enable magical runes (default: false)
-extern bool EnableOrbs;       ///< Enable glowing orbs (default: false)
-extern int ParticleCount;     ///< Particles per type (default: 8)
-extern float ParticleSize;    ///< Particle size in pixels (default: 3.0)
-extern float ParticleSpeed;   ///< Animation speed multiplier (default: 1.0)
-extern float ParticleSpread;  ///< How far particles spread from text (default: 20.0)
-extern float ParticleAlpha;   ///< Maximum particle opacity (default: 0.8)
+/// Display behavior settings.
+struct DisplaySettings
+{
+    float VerticalOffset = 8.0f;      ///< Height above actor's head in units
+    bool HidePlayer = false;          ///< Hide player's own nameplate
+    bool HideCreatures = false;       ///< Hide nameplates for non-NPC actors
+    int ReloadKey = 0;                ///< Virtual key code for hot reload (0 = disabled)
+    bool EnableDebugOverlay = false;  ///< Show performance/cache overlay
+};
+DisplaySettings& Display();
 
-// Display Options
-extern float VerticalOffset;  ///< Height above actor's head in units (default: 8.0)
-extern bool HidePlayer;       ///< Hide player's own nameplate (default: false)
-extern bool HideCreatures;    ///< Hide nameplates for non-NPC actors (default: false)
-extern int ReloadKey;         ///< Virtual key code for hot reload (default: 0 = disabled)
+/// Animation speed and color/effect intensity settings.
+struct AnimColorSettings
+{
+    float AnimSpeedLowTier = .35f;    ///< Speed for tiers 0-7
+    float AnimSpeedMidTier = .20f;    ///< Speed for tier 8
+    float AnimSpeedHighTier = .10f;   ///< Speed for tier 9+
+    float ColorWashAmount = .50f;     ///< Desaturation toward white 0-1
+    float NameColorMix = .35f;        ///< Base color strength 0-1
+    float EffectAlphaMin = .20f;      ///< Minimum effect alpha
+    float EffectAlphaMax = .60f;      ///< Maximum effect alpha
+    float StrengthMin = .15f;         ///< Minimum effect strength
+    float StrengthMax = .60f;         ///< Maximum effect strength
+    float AlphaSettleTime = .46f;     ///< Alpha settle time in seconds
+    float ScaleSettleTime = .46f;     ///< Font scale settle time in seconds
+    float PositionSettleTime = .38f;  ///< Position settle time for NPCs in seconds
+};
+AnimColorSettings& AnimColor();
 
-// Animation Speed
-extern float AnimSpeedLowTier;   ///< Speed for tiers 0-7 (default: 0.35)
-extern float AnimSpeedMidTier;   ///< Speed for tier 8 (default: 0.20)
-extern float AnimSpeedHighTier;  ///< Speed for tier 9+ (default: 0.1)
+/// Font path and size settings.
+struct FontSettings
+{
+    std::string NameFontPath;     ///< Path to name font TTF file
+    float NameFontSize = 122.0f;  ///< Name font size in points
+    std::string LevelFontPath;    ///< Path to level font TTF file
+    float LevelFontSize = 61.0f;  ///< Level font size in points
+    std::string TitleFontPath;    ///< Path to title font TTF file
+    float TitleFontSize = 42.0f;  ///< Title font size in points
+};
+FontSettings& Font();
 
-// Color & Effect Intensity
-extern float ColorWashAmount;  ///< Desaturation toward white 0-1 (default: 0.5)
-extern float NameColorMix;     ///< Base color strength 0-1 (default: 0.35)
-extern float EffectAlphaMin;   ///< Minimum effect alpha (default: 0.20)
-extern float EffectAlphaMax;   ///< Maximum effect alpha (default: 0.60)
-extern float StrengthMin;      ///< Minimum effect strength (default: 0.15)
-extern float StrengthMax;      ///< Maximum effect strength (default: 0.60)
-
-// Smoothing
-extern float AlphaSettleTime;     ///< Alpha settle time in seconds (default: 0.46)
-extern float ScaleSettleTime;     ///< Font scale settle time in seconds (default: 0.46)
-extern float PositionSettleTime;  ///< Position settle time for NPCs in seconds (default: 0.38)
+/// NPC appearance template settings.
+struct AppearanceSettings
+{
+    std::string TemplateFormID;            ///< FormID of template NPC (hex, e.g., "0x12345")
+    std::string TemplatePlugin;            ///< Plugin file containing template
+    bool UseTemplateAppearance = false;    ///< Whether to apply template appearance to player
+    bool TemplateIncludeRace = false;      ///< Whether to copy race
+    bool TemplateIncludeBody = false;      ///< Whether to copy height/body morphs
+    bool TemplateCopyFaceGen = true;       ///< Whether to load and apply FaceGen NIF/tint
+    bool TemplateCopySkin = false;         ///< Whether to copy skin textures
+    bool TemplateCopyOverlays = false;     ///< Whether to copy RaceMenu overlays
+    bool TemplateCopyOutfit = false;       ///< Whether to copy equipped armor
+    bool TemplateReapplyOnReload = false;  ///< Whether to re-apply on hot reload
+    std::string TemplateFaceGenPlugin;     ///< Optional override for FaceGen plugin path
+};
+AppearanceSettings& Appearance();
 
 /// Visual polish settings, encapsulated to avoid non-const globals.
 struct VisualSettings
@@ -417,36 +476,6 @@ struct VisualSettings
 };
 VisualSettings& Visual();
 
-// Font Settings
-extern std::string NameFontPath;   ///< Path to name font TTF file
-extern float NameFontSize;         ///< Name font size in points (default: 122.0)
-extern std::string LevelFontPath;  ///< Path to level font TTF file
-extern float LevelFontSize;        ///< Level font size in points (default: 61.0)
-extern std::string TitleFontPath;  ///< Path to title font TTF file
-extern float TitleFontSize;        ///< Title font size in points (default: 42.0)
-
-// Ornament Font Settings
-extern std::string OrnamentFontPath;  ///< Path to ornament font (TTF/OTF)
-extern float OrnamentFontSize;        ///< Ornament font size in points (default: 64.0)
-
-// Appearance Template Settings
-extern std::string TemplateFormID;  ///< FormID of template NPC (hex, e.g., "0x12345")
-extern std::string TemplatePlugin;  ///< Plugin file containing template (e.g., "MyFollower.esp")
-extern bool UseTemplateAppearance;  ///< Whether to apply template appearance to player
-extern bool TemplateIncludeRace;    ///< Whether to copy race (required for cross-race templates)
-extern bool TemplateIncludeBody;    ///< Whether to copy height/body morphs
-extern bool TemplateCopyFaceGen;    ///< Whether to load and apply FaceGen NIF/tint (default: true)
-extern bool
-    TemplateCopySkin;  ///< Whether to copy skin textures (default: false, risky for custom bodies)
-extern bool
-    TemplateCopyOverlays;  ///< Whether to copy RaceMenu overlays if available (default: false)
-extern bool
-    TemplateCopyOutfit;  ///< Whether to copy equipped armor from template actor (default: false)
-extern bool
-    TemplateReapplyOnReload;  ///< Whether to re-apply appearance on hot reload (default: false)
-extern std::string
-    TemplateFaceGenPlugin;  ///< Optional override for FaceGen plugin path (empty = auto-detect)
-
 /**
  * Shared settings mutex.
  *
@@ -454,6 +483,14 @@ extern std::string
  * long operations. Settings::Load() acquires a unique lock.
  */
 [[nodiscard]] std::shared_mutex& Mutex();
+
+/**
+ * Settings generation counter.
+ *
+ * Incremented each time Load() finishes. Consumers can compare against
+ * a cached value to avoid re-copying settings when nothing has changed.
+ */
+[[nodiscard]] std::atomic<uint32_t>& Generation();
 
 /**
  * Load all settings from glyph.ini.

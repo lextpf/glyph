@@ -305,6 +305,38 @@ static int LoadTexturesFromFolder(ID3D11Device* device,
     return loadedCount;
 }
 
+// RAII wrapper for COM initialization.
+// Only calls CoUninitialize if this scope actually initialized COM
+// (avoids unbalancing the ref count when a third-party hook already initialized it).
+struct ComScope
+{
+    bool ownsInit = false;
+    bool usable = false;
+
+    ComScope()
+    {
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        ownsInit = SUCCEEDED(hr);
+        usable = ownsInit || hr == RPC_E_CHANGED_MODE;
+        if (!usable)
+        {
+            SKSE::log::warn("ParticleTextures: COM initialization failed (hr=0x{:08X})",
+                            static_cast<unsigned int>(hr));
+        }
+    }
+
+    ~ComScope()
+    {
+        if (ownsInit)
+        {
+            CoUninitialize();
+        }
+    }
+
+    ComScope(const ComScope&) = delete;
+    ComScope& operator=(const ComScope&) = delete;
+};
+
 bool Initialize(ID3D11Device* device)
 {
     std::lock_guard<std::mutex> lock(InitMutex());
@@ -322,14 +354,10 @@ bool Initialize(ID3D11Device* device)
 
     SKSE::log::info("ParticleTextures: Initializing particle textures...");
 
-    // Initialize COM once for the full load pass.
-    const HRESULT comHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool comUsable = SUCCEEDED(comHr) || comHr == RPC_E_CHANGED_MODE;
-    const bool needsCoUninitialize = SUCCEEDED(comHr);
-    if (!comUsable)
+    // Initialize COM for WIC texture loading. RAII ensures cleanup on all exit paths.
+    ComScope com;
+    if (!com.usable)
     {
-        SKSE::log::warn("ParticleTextures: COM initialization failed (hr=0x{:08X})",
-                        static_cast<unsigned int>(comHr));
         return false;
     }
 
@@ -420,10 +448,6 @@ bool Initialize(ID3D11Device* device)
     {
         SKSE::log::error("ParticleTextures: Failed to create WIC factory (hr=0x{:08X})",
                          static_cast<unsigned int>(wicHr));
-        if (needsCoUninitialize)
-        {
-            CoUninitialize();
-        }
         return false;
     }
 
@@ -460,11 +484,6 @@ bool Initialize(ID3D11Device* device)
             SKSE::log::warn("ParticleTextures: [{}] NO textures found in {}", m.folder, folderPath);
         }
         totalLoaded += count;
-    }
-
-    if (needsCoUninitialize)
-    {
-        CoUninitialize();
     }
 
     s_Initialized.store(totalLoaded > 0, std::memory_order_release);
