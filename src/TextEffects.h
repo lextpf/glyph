@@ -3,6 +3,8 @@
 #include "PCH.h"
 #include "Settings.h"
 
+#include <algorithm>
+
 /**
  * @namespace TextEffects
  * @brief Collection of text rendering effects for ImGui.
@@ -38,7 +40,10 @@ namespace TextEffects
  *
  * @return Value clamped to [0.0, 1.0].
  */
-float Saturate(float x);
+constexpr float Saturate(float x)
+{
+    return std::clamp(x, .0f, 1.0f);
+}
 
 /**
  * Quintic smoothstep (smootherstep).
@@ -52,7 +57,11 @@ float Saturate(float x);
  *
  * @return Smoothly interpolated value in [0, 1].
  */
-float SmoothStep(float t);
+constexpr float SmoothStep(float t)
+{
+    t = Saturate(t);
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
 
 /**
  * Linearly interpolate between two packed colors.
@@ -71,6 +80,60 @@ float SmoothStep(float t);
  * @see Saturate
  */
 ImU32 LerpColorU32(ImU32 a, ImU32 b, float t);
+
+/**
+ * Draw outline around text position (4-dir or 8-dir based on Settings::FastOutlines).
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position for text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param outline Outline color.
+ * @param w Outline width in pixels.
+ */
+void DrawOutline(ImDrawList* list,
+                 ImFont* font,
+                 float size,
+                 const ImVec2& pos,
+                 const char* text,
+                 ImU32 outline,
+                 float w);
+
+/**
+ * Generic outline wrapper: draws outline then delegates to any effect function.
+ *
+ * Replaces the boilerplate `AddTextOutline4<Effect>` wrappers. Usage:
+ * @code
+ * WithOutline<AddTextHorizontalGradient>(list, font, size, pos, text,
+ *                                        outline, w, colLeft, colRight);
+ * @endcode
+ *
+ * @tparam EffectFn Pointer to the non-outline effect function.
+ * @tparam Args     Additional effect-specific argument types.
+ */
+template <auto EffectFn, typename... Args>
+inline void WithOutline(ImDrawList* list,
+                        ImFont* font,
+                        float size,
+                        const ImVec2& pos,
+                        const char* text,
+                        ImU32 outline,
+                        float w,
+                        Args&&... args)
+{
+    static_assert(
+        std::is_invocable_v<decltype(EffectFn),
+                            ImDrawList*,
+                            ImFont*,
+                            float,
+                            const ImVec2&,
+                            const char*,
+                            Args...>,
+        "EffectFn must accept (ImDrawList*, ImFont*, float, const ImVec2&, const char*, Args...)");
+    DrawOutline(list, font, size, pos, text, outline, w);
+    EffectFn(list, font, size, pos, text, std::forward<Args>(args)...);
+}
 
 /**
  * Draw text with outline.
@@ -119,7 +182,6 @@ void AddTextOutline4(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4Gradient
  */
 void AddTextHorizontalGradient(ImDrawList* list,
                                ImFont* font,
@@ -128,35 +190,6 @@ void AddTextHorizontalGradient(ImDrawList* list,
                                const char* text,
                                ImU32 colLeft,
                                ImU32 colRight);
-
-/**
- * Draw text with horizontal gradient and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param colLeft Left gradient color.
- * @param colRight Right gradient color.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- *
- * @see AddTextHorizontalGradient, AddTextOutline4
- */
-void AddTextOutline4Gradient(ImDrawList* list,
-                             ImFont* font,
-                             float size,
-                             const ImVec2& pos,
-                             const char* text,
-                             ImU32 colLeft,
-                             ImU32 colRight,
-                             ImU32 outline,
-                             float w);
 
 /**
  * Draw text with vertical gradient (no outline).
@@ -175,7 +208,6 @@ void AddTextOutline4Gradient(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4VerticalGradient
  */
 void AddTextVerticalGradient(ImDrawList* list,
                              ImFont* font,
@@ -184,33 +216,6 @@ void AddTextVerticalGradient(ImDrawList* list,
                              const char* text,
                              ImU32 top,
                              ImU32 bottom);
-
-/**
- * Draw text with vertical gradient and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param top Top gradient color.
- * @param bottom Bottom gradient color.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4VerticalGradient(ImDrawList* list,
-                                     ImFont* font,
-                                     float size,
-                                     const ImVec2& pos,
-                                     const char* text,
-                                     ImU32 top,
-                                     ImU32 bottom,
-                                     ImU32 outline,
-                                     float w);
 
 /**
  * Draw text with diagonal gradient.
@@ -230,7 +235,6 @@ void AddTextOutline4VerticalGradient(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4DiagonalGradient
  */
 void AddTextDiagonalGradient(ImDrawList* list,
                              ImFont* font,
@@ -240,35 +244,6 @@ void AddTextDiagonalGradient(ImDrawList* list,
                              ImU32 a,
                              ImU32 b,
                              ImVec2 dir);
-
-/**
- * Draw text with diagonal gradient and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param a Start gradient color.
- * @param b End gradient color.
- * @param dir Gradient direction vector (normalized).
- * @param outline Outline color.
- * @param w Outline width in pixels.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4DiagonalGradient(ImDrawList* list,
-                                     ImFont* font,
-                                     float size,
-                                     const ImVec2& pos,
-                                     const char* text,
-                                     ImU32 a,
-                                     ImU32 b,
-                                     ImVec2 dir,
-                                     ImU32 outline,
-                                     float w);
 
 /**
  * Draw text with radial gradient (center to edge).
@@ -296,7 +271,6 @@ void AddTextOutline4DiagonalGradient(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4RadialGradient
  */
 void AddTextRadialGradient(ImDrawList* list,
                            ImFont* font,
@@ -307,35 +281,6 @@ void AddTextRadialGradient(ImDrawList* list,
                            ImU32 colEdge,
                            float gamma = 1.0f,
                            ImVec2* overrideCenter = nullptr);
-
-/**
- * Draw text with radial gradient and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param colCenter Center color.
- * @param colEdge Edge color.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param gamma Gamma correction (1.0 = linear).
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4RadialGradient(ImDrawList* list,
-                                   ImFont* font,
-                                   float size,
-                                   const ImVec2& pos,
-                                   const char* text,
-                                   ImU32 colCenter,
-                                   ImU32 colEdge,
-                                   ImU32 outline,
-                                   float w,
-                                   float gamma = 1.0f);
 
 /**
  * Draw text with pulsing brightness.
@@ -357,7 +302,6 @@ void AddTextOutline4RadialGradient(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4PulseGradient
  */
 void AddTextPulseGradient(ImDrawList* list,
                           ImFont* font,
@@ -369,39 +313,6 @@ void AddTextPulseGradient(ImDrawList* list,
                           float time,
                           float freqHz,
                           float amp);
-
-/**
- * Draw text with pulsing gradient and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param a First gradient color.
- * @param b Second gradient color.
- * @param time Current time in seconds.
- * @param freqHz Pulse frequency in Hz.
- * @param amp Pulse amplitude [0, 1].
- * @param outline Outline color.
- * @param w Outline width in pixels.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4PulseGradient(ImDrawList* list,
-                                  ImFont* font,
-                                  float size,
-                                  const ImVec2& pos,
-                                  const char* text,
-                                  ImU32 a,
-                                  ImU32 b,
-                                  float time,
-                                  float freqHz,
-                                  float amp,
-                                  ImU32 outline,
-                                  float w);
 
 /**
  * Draw text with shimmer effect (moving highlight band).
@@ -428,7 +339,6 @@ void AddTextOutline4PulseGradient(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4Shimmer, AddTextOutline4ChromaticShimmer
  */
 void AddTextShimmer(ImDrawList* list,
                     ImFont* font,
@@ -441,93 +351,6 @@ void AddTextShimmer(ImDrawList* list,
                     float phase01,
                     float bandWidth01,
                     float strength01 = 1.0f);
-
-/**
- * Draw text with shimmer effect and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseL Left base gradient color.
- * @param baseR Right base gradient color.
- * @param highlight Highlight color for shimmer band.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param phase01 Animation phase [0, 1].
- * @param bandWidth01 Band width as fraction [0, 1].
- * @param strength01 Highlight intensity [0, 1].
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4Shimmer(ImDrawList* list,
-                            ImFont* font,
-                            float size,
-                            const ImVec2& pos,
-                            const char* text,
-                            ImU32 baseL,
-                            ImU32 baseR,
-                            ImU32 highlight,
-                            ImU32 outline,
-                            float w,
-                            float phase01,
-                            float bandWidth01,
-                            float strength01 = 1.0f);
-
-/**
- * Draw text with gradient base and shimmer (internal helper).
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseL Left base gradient color.
- * @param baseR Right base gradient color.
- * @param highlight Shimmer highlight color.
- * @param phase01 Animation phase [0, 1].
- * @param bandWidth01 Band width fraction [0, 1].
- * @param strength01 Highlight strength [0, 1].
- */
-void AddTextGradientShimmer(ImDrawList* list,
-                            ImFont* font,
-                            float size,
-                            const ImVec2& pos,
-                            const char* text,
-                            ImU32 baseL,
-                            ImU32 baseR,
-                            ImU32 highlight,
-                            float phase01,
-                            float bandWidth01,
-                            float strength01);
-
-/**
- * Draw text with solid base and shimmer (internal helper).
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param base Solid base color.
- * @param highlight Shimmer highlight color.
- * @param phase01 Animation phase [0, 1].
- * @param bandWidth01 Band width fraction [0, 1].
- * @param strength01 Highlight strength [0, 1].
- */
-void AddTextSolidShimmer(ImDrawList* list,
-                         ImFont* font,
-                         float size,
-                         const ImVec2& pos,
-                         const char* text,
-                         ImU32 base,
-                         ImU32 highlight,
-                         float phase01,
-                         float bandWidth01,
-                         float strength01);
 
 /**
  * Draw text with chromatic aberration shimmer.
@@ -555,7 +378,7 @@ void AddTextSolidShimmer(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4Shimmer
+ * @see AddTextShimmer
  */
 void AddTextOutline4ChromaticShimmer(ImDrawList* list,
                                      ImFont* font,
@@ -744,7 +567,6 @@ void AddTextOutline4ConicRainbow(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4Aurora
  */
 void AddTextAurora(ImDrawList* list,
                    ImFont* font,
@@ -757,41 +579,6 @@ void AddTextAurora(ImDrawList* list,
                    float waves,
                    float intensity,
                    float sway);
-
-/**
- * Draw text with aurora effect and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param colA First aurora color.
- * @param colB Second aurora color.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param speed Animation speed multiplier.
- * @param waves Number of wave cycles.
- * @param intensity Color blend intensity.
- * @param sway Horizontal sway amount.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4Aurora(ImDrawList* list,
-                           ImFont* font,
-                           float size,
-                           const ImVec2& pos,
-                           const char* text,
-                           ImU32 colA,
-                           ImU32 colB,
-                           ImU32 outline,
-                           float w,
-                           float speed,
-                           float waves,
-                           float intensity,
-                           float sway);
 
 /**
  * Draw text with sparkle/glitter effect.
@@ -818,7 +605,6 @@ void AddTextOutline4Aurora(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4Sparkle
  */
 void AddTextSparkle(ImDrawList* list,
                     ImFont* font,
@@ -831,41 +617,6 @@ void AddTextSparkle(ImDrawList* list,
                     float density,
                     float speed,
                     float intensity);
-
-/**
- * Draw text with sparkle effect and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseL Left base gradient color.
- * @param baseR Right base gradient color.
- * @param sparkleColor Sparkle highlight color.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param density Sparkle density [0, 1].
- * @param speed Twinkle animation speed.
- * @param intensity Sparkle brightness multiplier.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4Sparkle(ImDrawList* list,
-                            ImFont* font,
-                            float size,
-                            const ImVec2& pos,
-                            const char* text,
-                            ImU32 baseL,
-                            ImU32 baseR,
-                            ImU32 sparkleColor,
-                            ImU32 outline,
-                            float w,
-                            float density,
-                            float speed,
-                            float intensity);
 
 /**
  * Draw text with classic plasma effect.
@@ -892,7 +643,6 @@ void AddTextOutline4Sparkle(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4Plasma
  */
 void AddTextPlasma(ImDrawList* list,
                    ImFont* font,
@@ -904,39 +654,6 @@ void AddTextPlasma(ImDrawList* list,
                    float freq1,
                    float freq2,
                    float speed);
-
-/**
- * Draw text with plasma effect and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param colA First plasma color.
- * @param colB Second plasma color.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param freq1 First sine wave frequency.
- * @param freq2 Second sine wave frequency.
- * @param speed Animation speed multiplier.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4Plasma(ImDrawList* list,
-                           ImFont* font,
-                           float size,
-                           const ImVec2& pos,
-                           const char* text,
-                           ImU32 colA,
-                           ImU32 colB,
-                           ImU32 outline,
-                           float w,
-                           float freq1,
-                           float freq2,
-                           float speed);
 
 /**
  * Draw text with horizontal scanline effect.
@@ -960,7 +677,6 @@ void AddTextOutline4Plasma(ImDrawList* list,
  * @pre font != nullptr
  * @pre text != nullptr
  *
- * @see AddTextOutline4Scanline
  */
 void AddTextScanline(ImDrawList* list,
                      ImFont* font,
@@ -973,41 +689,6 @@ void AddTextScanline(ImDrawList* list,
                      float speed,
                      float width,
                      float intensity);
-
-/**
- * Draw text with scanline effect and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseL Left base gradient color.
- * @param baseR Right base gradient color.
- * @param scanColor Scanline highlight color.
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param speed Scan speed (cycles per second).
- * @param width Scanline width [0, 1].
- * @param intensity Scanline brightness multiplier.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4Scanline(ImDrawList* list,
-                             ImFont* font,
-                             float size,
-                             const ImVec2& pos,
-                             const char* text,
-                             ImU32 baseL,
-                             ImU32 baseR,
-                             ImU32 scanColor,
-                             ImU32 outline,
-                             float w,
-                             float speed,
-                             float width,
-                             float intensity);
 
 /**
  * Draw soft glow/bloom effect behind text.
@@ -1043,99 +724,35 @@ void AddTextGlow(ImDrawList* list,
                  float intensity,
                  int samples);
 
-/**
- * Draw decorative ornaments on sides of a text region.
- *
- * Renders ornamental characters from the ornament font extending
- * from both sides, suitable for high-tier character names.
- *
- * @param list ImGui draw list to render to.
- * @param center Center point of the text being decorated.
- * @param textWidth Width of the text in pixels.
- * @param textHeight Height of the text in pixels.
- * @param color Ornament color (ImU32).
- * @param alpha Opacity [0, 1].
- * @param scale Size multiplier for ornament dimensions.
- * @param spacing Distance from text edges in pixels.
- * @param animated If true, applies subtle pulse animation.
- * @param time Current time for animation (from ImGui::GetTime()).
- * @param outlineWidth Outline thickness matching text outline.
- * @param enableGlow Enable glow effect matching text glow.
- * @param glowRadius Glow spread radius in pixels.
- * @param glowIntensity Glow brightness [0, 1].
- * @param glowSamples Number of glow samples.
- * @param leftOrnaments Characters to draw on the left side.
- * @param rightOrnaments Characters to draw on the right side.
- * @param ornamentScale Additional scale multiplier (default: 1.0).
- * @param isSpecialTitle If true, uses special title styling.
- *
- * @pre list != nullptr
- *
- * @see Settings::EnableOrnaments
- */
-void DrawSideOrnaments(ImDrawList* list,
-                       const ImVec2& center,
-                       float textWidth,
-                       float textHeight,
-                       ImU32 color,
-                       float alpha,
-                       float scale,
-                       float spacing,
-                       bool animated,
-                       float time,
-                       float outlineWidth,
-                       bool enableGlow,
-                       float glowRadius,
-                       float glowIntensity,
-                       int glowSamples,
-                       const std::string& leftOrnaments,
-                       const std::string& rightOrnaments,
-                       float ornamentScale = 1.0f,
-                       bool isSpecialTitle = false);
+/// Parameters for DrawParticleAura.
+struct ParticleAuraParams
+{
+    ImDrawList* list;               ///< ImGui draw list to render to
+    ImVec2 center;                  ///< Center of particle region
+    float radiusX;                  ///< Horizontal spread radius in pixels
+    float radiusY;                  ///< Vertical spread radius in pixels
+    ImU32 color;                    ///< Particle base color
+    float alpha;                    ///< Maximum particle opacity [0, 1]
+    Settings::ParticleStyle style;  ///< Particle visual style
+    int particleCount;              ///< Number of particles to draw
+    float particleSize;             ///< Base particle size in pixels
+    float speed;                    ///< Animation speed multiplier
+    float time;                     ///< Current time for animation
+    int styleIndex = 0;             ///< Index among enabled styles (for spatial offset)
+    int enabledStyleCount = 1;      ///< Total number of enabled particle styles
+};
 
 /**
  * Draw floating particle aura around a text region.
  *
  * Creates an aura of animated particles around the nameplate.
- * Multiple visual styles are available:
+ * Multiple visual styles are available (see ParticleAuraParams).
  *
- * | Style | Description |
- * |-------|-------------|
- * | Stars | Twinkling star points (classic) |
- * | Sparks | Fast, erratic fire-like sparks |
- * | Wisps | Slow, flowing ethereal wisps |
- * | Runes | Small magical rune symbols |
- * | Orbs | Soft glowing orbs |
+ * @param params Particle aura parameters.
  *
- * @param list ImGui draw list to render to.
- * @param center Center of the particle region.
- * @param radiusX Horizontal spread radius in pixels.
- * @param radiusY Vertical spread radius in pixels.
- * @param color Particle base color.
- * @param alpha Maximum particle opacity [0, 1].
- * @param style Particle visual style from Settings::ParticleStyle.
- * @param particleCount Number of particles to draw.
- * @param particleSize Base particle size in pixels.
- * @param speed Animation speed multiplier.
- * @param time Current time for animation.
- * @param styleIndex Index of this style among enabled styles (for spatial offset).
- * @param enabledStyleCount Total number of enabled particle styles.
+ * @pre params.list != nullptr
  *
- * @pre list != nullptr
- *
- * @see Settings::ParticleStyle, Settings::EnableParticleAura
+ * @see ParticleAuraParams, Settings::ParticleStyle, Settings::EnableParticleAura
  */
-void DrawParticleAura(ImDrawList* list,
-                      const ImVec2& center,
-                      float radiusX,
-                      float radiusY,
-                      ImU32 color,
-                      float alpha,
-                      Settings::ParticleStyle style,
-                      int particleCount,
-                      float particleSize,
-                      float speed,
-                      float time,
-                      int styleIndex = 0,
-                      int enabledStyleCount = 1);
+void DrawParticleAura(const ParticleAuraParams& params);
 }  // namespace TextEffects

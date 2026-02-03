@@ -137,6 +137,13 @@ void HookFunctionPrologue(std::uintptr_t a_src)
     T::func = reinterpret_cast<std::uintptr_t>(alloc);
 }
 
+/// Create a view over enum values from @p first (inclusive) to @p last (exclusive).
+///
+/// Maps each underlying integer back to the enum type via `static_cast`.
+/// @tparam E  Enum type (deduced from arguments).
+/// @param first First enumerator in the range (included).
+/// @param last  Past-the-end enumerator (excluded).
+/// @return A `views::iota | views::transform` range of enum values.
 constexpr inline auto EnumRange(auto first, auto last)
 {
     auto result =
@@ -145,6 +152,48 @@ constexpr inline auto EnumRange(auto first, auto last)
 
     return result;
 }
+
+/**
+ * Compile-time bidirectional enum-string mapping.
+ *
+ * @tparam E    Enum type.
+ * @tparam N    Number of entries.
+ */
+template <typename E, std::size_t N>
+struct EnumStringMap
+{
+    struct Entry
+    {
+        std::string_view name;
+        E value;
+    };
+
+    std::array<Entry, N> entries;
+
+    constexpr E fromString(std::string_view s, E fallback) const
+    {
+        for (const auto& e : entries)
+        {
+            if (e.name == s)
+            {
+                return e.value;
+            }
+        }
+        return fallback;
+    }
+
+    constexpr std::string_view toString(E v) const
+    {
+        for (const auto& e : entries)
+        {
+            if (e.value == v)
+            {
+                return e.name;
+            }
+        }
+        return "unknown";
+    }
+};
 }  // namespace Stl
 
 /**

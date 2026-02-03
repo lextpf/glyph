@@ -47,18 +47,29 @@
 namespace RenderConstants
 {
 // Actor Processing Limits
-static constexpr int MAX_ACTORS = 16;  ///< Maximum actors to display nameplates for at once
-static constexpr int MAX_SCAN = 32;    ///< Maximum actors to iterate when scanning
+inline constexpr int MAX_ACTORS = 16;  ///< Maximum actors to display nameplates for at once
+inline constexpr int MAX_SCAN = 32;    ///< Maximum actors to iterate when scanning
 
 // Cache Management
-static constexpr uint32_t CACHE_GRACE_FRAMES =
+inline constexpr uint32_t CACHE_GRACE_FRAMES =
     60;  ///< Frames to keep cache entries after actor leaves view (~1s at 60fps)
-static constexpr int POSITION_HISTORY_SIZE =
+inline constexpr int POSITION_HISTORY_SIZE =
     8;  ///< Position history buffer size for moving average smoothing
 
 // Debug Overlay
-static constexpr float RELOAD_NOTIFICATION_DURATION =
+inline constexpr float RELOAD_NOTIFICATION_DURATION =
     2.f;  ///< Duration to show "Reloaded!" notification (seconds)
-static constexpr int FRAME_TIME_SAMPLES = 60;  ///< Number of frame time samples for averaging
+inline constexpr int FRAME_TIME_SAMPLES = 60;  ///< Number of frame time samples for averaging
+
+// Font Indices
+inline constexpr int FONT_INDEX_NAME = 0;      ///< Name font (loaded first)
+inline constexpr int FONT_INDEX_LEVEL = 1;     ///< Level font
+inline constexpr int FONT_INDEX_TITLE = 2;     ///< Title font
+inline constexpr int FONT_INDEX_ORNAMENT = 3;  ///< Ornament/flourish font
+
+// INI Parsing Limits
+inline constexpr int MAX_TIER_INDEX =
+    100;  ///< Maximum tier index in INI (prevents unbounded allocation)
+inline constexpr int MAX_SPECIAL_TITLE_INDEX = 50;  ///< Maximum special title index in INI
 
 }  // namespace RenderConstants

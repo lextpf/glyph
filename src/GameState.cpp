@@ -1,7 +1,9 @@
-#include "PCH.h"
-
 #include "GameState.h"
 
+#include "PCH.h"
+
+namespace GameState
+{
 bool CanDrawOverlay()
 {
     auto* main = RE::Main::GetSingleton();
@@ -63,3 +65,4 @@ bool CanDrawOverlay()
 
     return true;
 }
+}  // namespace GameState

@@ -97,9 +97,9 @@ namespace Occlusion
  */
 namespace Constants
 {
-static constexpr float CLOSE_DISTANCE_THRESHOLD =
+inline constexpr float CLOSE_DISTANCE_THRESHOLD =
     100.0f;  ///< Visible when $\|p_{actor} - p_{cam}\| < 100$ game units
-static constexpr float BEHIND_CAMERA_DOT_THRESHOLD =
+inline constexpr float BEHIND_CAMERA_DOT_THRESHOLD =
     -.2f;  ///< Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$)
 }  // namespace Constants
 
@@ -127,10 +127,14 @@ bool HasLineOfSightToActor(RE::Actor* actor);
  * @param actor The actor to check.
  * @param player The player actor.
  * @param actorWorldPos The world position to check from.
+ * @param occlusionEnabled Whether occlusion culling is enabled (from Settings).
  *
  * @return `true` if the actor is occluded and nameplate should be hidden.
  */
-bool IsActorOccluded(RE::Actor* actor, RE::Actor* player, const RE::NiPoint3& actorWorldPos);
+bool IsActorOccluded(RE::Actor* actor,
+                     RE::Actor* player,
+                     const RE::NiPoint3& actorWorldPos,
+                     bool occlusionEnabled);
 
 /**
  * Get camera position and forward direction.
