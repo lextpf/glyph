@@ -46,16 +46,19 @@
  */
 namespace RenderConstants
 {
-    // Actor Processing Limits
-    constexpr int kMaxActors = 16;  ///< Maximum actors to display nameplates for at once
-    constexpr int kMaxScan = 32;    ///< Maximum actors to iterate when scanning
+// Actor Processing Limits
+constexpr int kMaxActors = 16;  ///< Maximum actors to display nameplates for at once
+constexpr int kMaxScan = 32;    ///< Maximum actors to iterate when scanning
 
-    // Cache Management
-    constexpr uint32_t kCacheGraceFrames = 60;  ///< Frames to keep cache entries after actor leaves view (~1s at 60fps)
-    constexpr int kPositionHistorySize = 8;     ///< Position history buffer size for moving average smoothing
+// Cache Management
+constexpr uint32_t kCacheGraceFrames =
+    60;  ///< Frames to keep cache entries after actor leaves view (~1s at 60fps)
+constexpr int kPositionHistorySize =
+    8;  ///< Position history buffer size for moving average smoothing
 
-    // Debug Overlay
-    constexpr float kReloadNotificationDuration = 2.0f;  ///< Duration to show "Reloaded!" notification (seconds)
-    constexpr int kFrameTimeSamples = 60;                ///< Number of frame time samples for averaging
+// Debug Overlay
+constexpr float kReloadNotificationDuration =
+    2.0f;                              ///< Duration to show "Reloaded!" notification (seconds)
+constexpr int kFrameTimeSamples = 60;  ///< Number of frame time samples for averaging
 
-}
+}  // namespace RenderConstants

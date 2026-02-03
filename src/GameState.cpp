@@ -19,23 +19,14 @@ bool CanDrawOverlay()
 
     if (auto ui = RE::UI::GetSingleton())
     {
-        if (ui->IsMenuOpen("Loading Menu") ||
-            ui->IsMenuOpen("Main Menu") ||
-            ui->IsMenuOpen("MapMenu") ||
-            ui->IsMenuOpen("Fader Menu") ||
-            ui->IsMenuOpen("Menu") ||
-            ui->IsMenuOpen("Console") ||
-            ui->IsMenuOpen("TweenMenu") ||
-            ui->IsMenuOpen("Journal Menu") ||
-            ui->IsMenuOpen("InventoryMenu") ||
-            ui->IsMenuOpen("MagicMenu") ||
-            ui->IsMenuOpen("ContainerMenu") ||
-            ui->IsMenuOpen("BarterMenu") ||
-            ui->IsMenuOpen("GiftMenu") ||
-            ui->IsMenuOpen("Crafting Menu") ||
-            ui->IsMenuOpen("FavoritesMenu") ||
-            ui->IsMenuOpen("Lockpicking Menu") ||
-            ui->IsMenuOpen("Sleep/Wait Menu") ||
+        if (ui->IsMenuOpen("Loading Menu") || ui->IsMenuOpen("Main Menu") ||
+            ui->IsMenuOpen("MapMenu") || ui->IsMenuOpen("Fader Menu") || ui->IsMenuOpen("Menu") ||
+            ui->IsMenuOpen("Console") || ui->IsMenuOpen("TweenMenu") ||
+            ui->IsMenuOpen("Journal Menu") || ui->IsMenuOpen("InventoryMenu") ||
+            ui->IsMenuOpen("MagicMenu") || ui->IsMenuOpen("ContainerMenu") ||
+            ui->IsMenuOpen("BarterMenu") || ui->IsMenuOpen("GiftMenu") ||
+            ui->IsMenuOpen("Crafting Menu") || ui->IsMenuOpen("FavoritesMenu") ||
+            ui->IsMenuOpen("Lockpicking Menu") || ui->IsMenuOpen("Sleep/Wait Menu") ||
             ui->IsMenuOpen("StatsMenu"))
         {
             return false;

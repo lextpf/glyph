@@ -3,10 +3,11 @@ REM ============================================================================
 REM build.bat - Complete build pipeline for glyph
 REM ============================================================================
 REM This script:
-REM   1. Configures the project using CMake with the vs2022-windows preset
-REM   2. Builds the Release configuration
-REM   3. Generates API documentation with doxide (if available)
-REM   4. Builds the documentation site with mkdocs (if available)
+REM   1. Formats source code with clang-format (if available)
+REM   2. Configures the project using CMake with the vs2022-windows preset
+REM   3. Builds the Release configuration
+REM   4. Generates API documentation with doxide (if available)
+REM   5. Builds the documentation site with mkdocs (if available)
 REM ============================================================================
 
 setlocal enabledelayedexpansion
@@ -17,9 +18,27 @@ echo ===========================================================================
 echo.
 
 REM ============================================================================
-REM STEP 1: CMake Configuration
+REM STEP 1: Format Source Code (clang-format)
 REM ============================================================================
-echo [1/4] Configuring with CMake...
+echo [1/5] Formatting source code...
+echo ----------------------------------------------------------------------------
+where clang-format >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo SKIP: clang-format not found in PATH
+) else (
+    for %%f in (src\*.cpp src\*.h src\*.hpp src\*.c) do (
+        if exist "%%f" (
+            clang-format -i "%%f"
+        )
+    )
+    echo Formatting complete.
+)
+echo.
+
+REM ============================================================================
+REM STEP 2: CMake Configuration
+REM ============================================================================
+echo [2/5] Configuring with CMake...
 echo ----------------------------------------------------------------------------
 cmake --preset vs2022-windows
 if %ERRORLEVEL% neq 0 (
@@ -31,7 +50,7 @@ echo.
 REM ============================================================================
 REM STEP 2: Build Release
 REM ============================================================================
-echo [2/4] Building Release...
+echo [3/5] Building Release...
 echo ----------------------------------------------------------------------------
 cmake --build build --config Release
 if %ERRORLEVEL% neq 0 (
@@ -43,7 +62,7 @@ echo.
 REM ============================================================================
 REM STEP 3: Generate API Documentation (doxide)
 REM ============================================================================
-echo [3/4] Generating API documentation...
+echo [4/5] Generating API documentation...
 echo ----------------------------------------------------------------------------
 where doxide >nul 2>&1
 if %ERRORLEVEL% neq 0 (
@@ -66,7 +85,7 @@ echo.
 REM ============================================================================
 REM STEP 4: Build Documentation Site (mkdocs)
 REM ============================================================================
-echo [4/4] Building documentation site...
+echo [5/5] Building documentation site...
 echo ----------------------------------------------------------------------------
 where mkdocs >nul 2>&1
 if %ERRORLEVEL% neq 0 (
