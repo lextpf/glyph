@@ -81,6 +81,14 @@ namespace ConsoleCommands
         std::uint32_t commandCount = RE::SCRIPT_FUNCTION::Commands::kConsoleCommandsEnd -
                                      RE::SCRIPT_FUNCTION::Commands::kConsoleOpBase;
 
+        for (std::uint32_t i = 0; i < commandCount; ++i) {
+            auto* cmd = &commands[i];
+            if (cmd && cmd->functionName && _stricmp(cmd->functionName, "glyph") == 0) {
+                logger::info("Console command 'glyph' already registered");
+                return;
+            }
+        }
+
         // Find an unused command slot to replace
         bool found = false;
         for (std::uint32_t i = 0; i < commandCount && !found; ++i) {
@@ -116,6 +124,20 @@ namespace ConsoleCommands
  */
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
+    auto readTemplateSettingsSnapshot = []() {
+        struct Snapshot {
+            bool enabled = false;
+            std::string formID;
+            std::string plugin;
+        } snapshot;
+
+        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+        snapshot.enabled = Settings::UseTemplateAppearance;
+        snapshot.formID = Settings::TemplateFormID;
+        snapshot.plugin = Settings::TemplatePlugin;
+        return snapshot;
+    };
+
     switch (a_msg->type) {
         case SKSE::MessagingInterface::kPostLoad:
             logger::debug("Post load event received");
@@ -136,7 +158,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
         case SKSE::MessagingInterface::kPostLoadGame:
             // Loading a save, player should be available soon
             logger::debug("Post load game event received");
-            if (Settings::UseTemplateAppearance) {
+            if (readTemplateSettingsSnapshot().enabled) {
                 AppearanceTemplate::SetPendingAppearanceApply();
             }
             // Test overlay interface after game load
@@ -145,14 +167,17 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 
         case SKSE::MessagingInterface::kNewGame:
             // New game, player won't exist until after character creation
-            logger::debug("New game event received - will apply after character creation");
-            logger::info("UseTemplateAppearance={}, FormID={}, Plugin={}",
-                Settings::UseTemplateAppearance, Settings::TemplateFormID, Settings::TemplatePlugin);
-            if (Settings::UseTemplateAppearance) {
-                AppearanceTemplate::SetPendingAppearanceApply();
-                logger::info("Pending appearance flag set to TRUE");
-            } else {
-                logger::warn("UseTemplateAppearance is FALSE, not setting pending flag");
+            {
+                const auto snapshot = readTemplateSettingsSnapshot();
+                logger::debug("New game event received - will apply after character creation");
+                logger::info("UseTemplateAppearance={}, FormID={}, Plugin={}",
+                    snapshot.enabled, snapshot.formID, snapshot.plugin);
+                if (snapshot.enabled) {
+                    AppearanceTemplate::SetPendingAppearanceApply();
+                    logger::info("Pending appearance flag set to TRUE");
+                } else {
+                    logger::warn("UseTemplateAppearance is FALSE, not setting pending flag");
+                }
             }
             break;
     }
@@ -173,8 +198,6 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
     SKSE::Init(a_skse);
     SKSE::AllocTrampoline(1 << 8);
 
-    Settings::Load();
-
     // Setup logging
     auto path = logger::log_directory();
     if (!path) {
@@ -192,6 +215,7 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
     spdlog::set_pattern("[%H:%M:%S] [%^%l%$] %v"s);
 
     logger::debug("glyph loaded");
+    Settings::Load();
 
     // Register for SKSE messages
     auto messaging = SKSE::GetMessagingInterface();

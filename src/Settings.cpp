@@ -1,12 +1,29 @@
 #include "Settings.h"
+#include <SKSE/SKSE.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
+#include <mutex>
 #include <sstream>
+#include <shared_mutex>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace Settings
 {
+    // Parser helper forward declaration (used before definition).
+    static std::string Trim(const std::string& str);
+
+    std::shared_mutex& Mutex()
+    {
+        static std::shared_mutex settingsMutex;
+        return settingsMutex;
+    }
+
     std::string TitleFormat;
     std::vector<Segment> DisplayFormat;
 
@@ -129,12 +146,402 @@ namespace Settings
     bool TemplateReapplyOnReload = false;  // Re-apply appearance on hot reload
     std::string TemplateFaceGenPlugin;     // Optional override for FaceGen plugin (empty = auto-detect)
 
+    static TierDefinition MakeDefaultTier()
+    {
+        TierDefinition tier{};
+        tier.minLevel = 1;
+        tier.maxLevel = 250;
+        tier.title = "Unknown";
+        tier.leftColor[0] = tier.leftColor[1] = tier.leftColor[2] = 1.0f;
+        tier.rightColor[0] = tier.rightColor[1] = tier.rightColor[2] = 1.0f;
+        tier.highlightColor[0] = tier.highlightColor[1] = tier.highlightColor[2] = 1.0f;
+        tier.titleEffect.type = EffectType::Gradient;
+        tier.nameEffect.type = EffectType::Gradient;
+        tier.levelEffect.type = EffectType::Gradient;
+        tier.leftOrnaments.clear();
+        tier.rightOrnaments.clear();
+        tier.particleTypes.clear();
+        tier.particleCount = 0;
+        return tier;
+    }
+
+    static std::string ToLowerAscii(std::string_view input)
+    {
+        std::string out(input);
+        for (auto& c : out) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        return out;
+    }
+
+    static std::string CanonicalizeKey(const std::string& rawKey)
+    {
+        static const std::unordered_map<std::string, std::string> kKeyMap = {
+            // Tier keys
+            { "name", "Name" },
+            { "title", "Name" },  // Alias for tier title
+            { "minlevel", "MinLevel" },
+            { "maxlevel", "MaxLevel" },
+            { "leftcolor", "LeftColor" },
+            { "rightcolor", "RightColor" },
+            { "highlightcolor", "HighlightColor" },
+            { "titleeffect", "TitleEffect" },
+            { "nameeffect", "NameEffect" },
+            { "leveleffect", "LevelEffect" },
+            { "ornaments", "Ornaments" },
+            { "particletypes", "ParticleTypes" },
+            { "particlecount", "ParticleCount" },
+
+            // Special title keys
+            { "keyword", "Keyword" },
+            { "displaytitle", "DisplayTitle" },
+            { "color", "Color" },
+            { "glowcolor", "GlowColor" },
+            { "forceornaments", "ForceOrnaments" },
+            { "forceflourishes", "ForceFlourishes" },
+            { "forceparticles", "ForceParticles" },
+            { "priority", "Priority" },
+
+            // Display
+            { "format", "Format" },
+
+            // Global settings
+            { "fadestartdistance", "FadeStartDistance" },
+            { "fadeenddistance", "FadeEndDistance" },
+            { "scalestartdistance", "ScaleStartDistance" },
+            { "scaleenddistance", "ScaleEndDistance" },
+            { "minimumscale", "MinimumScale" },
+            { "maxscandistance", "MaxScanDistance" },
+
+            { "enableocclusionculling", "EnableOcclusionCulling" },
+            { "occlusionsettletime", "OcclusionSettleTime" },
+            { "occlusioncheckinterval", "OcclusionCheckInterval" },
+
+            { "titleshadowoffsetx", "TitleShadowOffsetX" },
+            { "titleshadowoffsety", "TitleShadowOffsetY" },
+            { "mainshadowoffsetx", "MainShadowOffsetX" },
+            { "mainshadowoffsety", "MainShadowOffsetY" },
+            { "segmentpadding", "SegmentPadding" },
+
+            { "outlinewidthmin", "OutlineWidthMin" },
+            { "outlinewidthmax", "OutlineWidthMax" },
+            { "fastoutlines", "FastOutlines" },
+
+            { "enableglow", "EnableGlow" },
+            { "glowradius", "GlowRadius" },
+            { "glowintensity", "GlowIntensity" },
+            { "glowsamples", "GlowSamples" },
+
+            { "enabletypewriter", "EnableTypewriter" },
+            { "typewriterspeed", "TypewriterSpeed" },
+            { "typewriterdelay", "TypewriterDelay" },
+
+            { "enabledebugoverlay", "EnableDebugOverlay" },
+
+            { "enableornaments", "EnableOrnaments" },
+            { "enableflourishes", "EnableFlourishes" },
+            { "ornamentscale", "OrnamentScale" },
+            { "flourishscale", "FlourishScale" },
+            { "ornamentspacing", "OrnamentSpacing" },
+            { "flourishspacing", "FlourishSpacing" },
+
+            { "enableparticleaura", "EnableParticleAura" },
+            { "useparticletextures", "UseParticleTextures" },
+            { "enablestars", "EnableStars" },
+            { "enablesparks", "EnableSparks" },
+            { "enablewisps", "EnableWisps" },
+            { "enablerunes", "EnableRunes" },
+            { "enableorbs", "EnableOrbs" },
+            { "particlesize", "ParticleSize" },
+            { "particlespeed", "ParticleSpeed" },
+            { "particlespread", "ParticleSpread" },
+            { "particlealpha", "ParticleAlpha" },
+
+            { "verticaloffset", "VerticalOffset" },
+            { "hideplayer", "HidePlayer" },
+            { "hidecreatures", "HideCreatures" },
+            { "reloadkey", "ReloadKey" },
+
+            { "animspeedlowtier", "AnimSpeedLowTier" },
+            { "animspeedmidtier", "AnimSpeedMidTier" },
+            { "animspeedhightier", "AnimSpeedHighTier" },
+
+            { "colorwashamount", "ColorWashAmount" },
+            { "namecolormix", "NameColorMix" },
+            { "effectalphamin", "EffectAlphaMin" },
+            { "effectalphamax", "EffectAlphaMax" },
+            { "strengthmin", "StrengthMin" },
+            { "strengthmax", "StrengthMax" },
+
+            { "alphasettletime", "AlphaSettleTime" },
+            { "scalesettletime", "ScaleSettleTime" },
+            { "positionsettletime", "PositionSettleTime" },
+
+            // Visual sub-settings
+            { "enabledistanceoutlinescale", "EnableDistanceOutlineScale" },
+            { "outlinedistancemin", "OutlineDistanceMin" },
+            { "outlinedistancemax", "OutlineDistanceMax" },
+            { "minimumpixelheight", "MinimumPixelHeight" },
+            { "enablelod", "EnableLOD" },
+            { "lodfardistance", "LODFarDistance" },
+            { "lodmiddistance", "LODMidDistance" },
+            { "lodtransitionrange", "LODTransitionRange" },
+            { "titlealphamultiplier", "TitleAlphaMultiplier" },
+            { "levelalphamultiplier", "LevelAlphaMultiplier" },
+            { "enableoverlapprevention", "EnableOverlapPrevention" },
+            { "overlappaddingy", "OverlapPaddingY" },
+            { "overlapiterations", "OverlapIterations" },
+            { "positionsmoothingblend", "PositionSmoothingBlend" },
+            { "largemovementthreshold", "LargeMovementThreshold" },
+            { "largemovementblend", "LargeMovementBlend" },
+            { "enabletiereffectgating", "EnableTierEffectGating" },
+            { "glowmintier", "GlowMinTier" },
+            { "particlemintier", "ParticleMinTier" },
+            { "ornamentmintier", "OrnamentMinTier" },
+
+            // Fonts
+            { "namefontpath", "NameFontPath" },
+            { "namefontsize", "NameFontSize" },
+            { "levelfontpath", "LevelFontPath" },
+            { "levelfontsize", "LevelFontSize" },
+            { "titlefontpath", "TitleFontPath" },
+            { "titlefontsize", "TitleFontSize" },
+            { "ornamentfontpath", "OrnamentFontPath" },
+            { "ornamentfontsize", "OrnamentFontSize" },
+
+            // Appearance template
+            { "templateformid", "TemplateFormID" },
+            { "templateplugin", "TemplatePlugin" },
+            { "usetemplateappearance", "UseTemplateAppearance" },
+            { "templateincluderace", "TemplateIncludeRace" },
+            { "templateincludebody", "TemplateIncludeBody" },
+            { "templatecopyfacegen", "TemplateCopyFaceGen" },
+            { "templatecopyskin", "TemplateCopySkin" },
+            { "templatecopyoverlays", "TemplateCopyOverlays" },
+            { "templatecopyoutfit", "TemplateCopyOutfit" },
+            { "templatereapplyonreload", "TemplateReapplyOnReload" },
+            { "templatefacegenplugin", "TemplateFaceGenPlugin" },
+        };
+
+        const std::string lowered = ToLowerAscii(Trim(rawKey));
+        if (const auto it = kKeyMap.find(lowered); it != kKeyMap.end()) {
+            return it->second;
+        }
+        return Trim(rawKey);
+    }
+
+    static void ResetToDefaults()
+    {
+        TitleFormat = "%t";
+        DisplayFormat = { { "%n", false }, { " Lv.%l", true } };
+
+        Tiers.clear();
+        Tiers.push_back(MakeDefaultTier());
+        SpecialTitles.clear();
+
+        FadeStartDistance = 200.0f;
+        FadeEndDistance = 2500.0f;
+        ScaleStartDistance = 200.0f;
+        ScaleEndDistance = 2500.0f;
+        MinimumScale = 0.1f;
+        MaxScanDistance = 3000.0f;
+
+        EnableOcclusionCulling = true;
+        OcclusionSettleTime = 0.58f;
+        OcclusionCheckInterval = 3;
+
+        TitleShadowOffsetX = 2.0f;
+        TitleShadowOffsetY = 2.0f;
+        MainShadowOffsetX = 4.0f;
+        MainShadowOffsetY = 4.0f;
+        SegmentPadding = 4.0f;
+
+        OutlineWidthMin = 2.0f;
+        OutlineWidthMax = 2.5f;
+        FastOutlines = false;
+
+        EnableGlow = false;
+        GlowRadius = 4.0f;
+        GlowIntensity = 0.5f;
+        GlowSamples = 8;
+
+        EnableTypewriter = false;
+        TypewriterSpeed = 30.0f;
+        TypewriterDelay = 0.0f;
+
+        EnableDebugOverlay = false;
+
+        EnableOrnaments = true;
+        OrnamentScale = 1.0f;
+        OrnamentSpacing = 3.0f;
+
+        EnableParticleAura = true;
+        UseParticleTextures = true;
+        EnableStars = true;
+        EnableSparks = false;
+        EnableWisps = false;
+        EnableRunes = false;
+        EnableOrbs = false;
+        ParticleCount = 8;
+        ParticleSize = 3.0f;
+        ParticleSpeed = 1.0f;
+        ParticleSpread = 20.0f;
+        ParticleAlpha = 0.8f;
+
+        VerticalOffset = 8.0f;
+        HidePlayer = false;
+        HideCreatures = false;
+        ReloadKey = 0;
+
+        AnimSpeedLowTier = 0.35f;
+        AnimSpeedMidTier = 0.20f;
+        AnimSpeedHighTier = 0.10f;
+
+        ColorWashAmount = 0.50f;
+        NameColorMix = 0.35f;
+        EffectAlphaMin = 0.20f;
+        EffectAlphaMax = 0.60f;
+        StrengthMin = 0.15f;
+        StrengthMax = 0.60f;
+
+        AlphaSettleTime = 0.46f;
+        ScaleSettleTime = 0.46f;
+        PositionSettleTime = 0.38f;
+
+        Visual() = VisualSettings{};
+
+        NameFontPath = "Data/SKSE/Plugins/glyph/fonts/bd1aab18-7649-4946-9f7b-6ddd6a81311d.ttf";
+        NameFontSize = 122.0f;
+        LevelFontPath = "Data/SKSE/Plugins/glyph/fonts/96120cca-4be2-4d10-b10a-b8183ac18467.ttf";
+        LevelFontSize = 61.0f;
+        TitleFontPath = "Data/SKSE/Plugins/glyph/fonts/56cb786e-c94e-452c-ac54-360c46381de1.ttf";
+        TitleFontSize = 42.0f;
+        OrnamentFontPath = "Data/SKSE/Plugins/glyph/fonts/050986eb-c23a-4891-a951-9fed313e44c2.otf";
+        OrnamentFontSize = 64.0f;
+
+        TemplateFormID.clear();
+        TemplatePlugin.clear();
+        UseTemplateAppearance = false;
+        TemplateIncludeRace = false;
+        TemplateIncludeBody = false;
+        TemplateCopyFaceGen = true;
+        TemplateCopySkin = false;
+        TemplateCopyOverlays = false;
+        TemplateCopyOutfit = false;
+        TemplateReapplyOnReload = false;
+        TemplateFaceGenPlugin.clear();
+    }
+
+    static void ClampAndValidate()
+    {
+        FadeStartDistance = std::max(0.0f, FadeStartDistance);
+        FadeEndDistance = std::max(FadeStartDistance + 1.0f, FadeEndDistance);
+
+        ScaleStartDistance = std::max(0.0f, ScaleStartDistance);
+        ScaleEndDistance = std::max(ScaleStartDistance + 1.0f, ScaleEndDistance);
+        MinimumScale = std::clamp(MinimumScale, 0.01f, 5.0f);
+        MaxScanDistance = std::max(0.0f, MaxScanDistance);
+
+        OcclusionSettleTime = std::max(0.01f, OcclusionSettleTime);
+        OcclusionCheckInterval = std::max(1, OcclusionCheckInterval);
+
+        GlowRadius = std::max(0.0f, GlowRadius);
+        GlowIntensity = std::clamp(GlowIntensity, 0.0f, 1.0f);
+        GlowSamples = std::clamp(GlowSamples, 1, 64);
+
+        TypewriterSpeed = std::max(0.0f, TypewriterSpeed);
+        TypewriterDelay = std::max(0.0f, TypewriterDelay);
+
+        ParticleCount = std::max(0, ParticleCount);
+        ParticleSize = std::max(0.0f, ParticleSize);
+        ParticleSpeed = std::max(0.0f, ParticleSpeed);
+        ParticleSpread = std::max(0.0f, ParticleSpread);
+        ParticleAlpha = std::clamp(ParticleAlpha, 0.0f, 1.0f);
+
+        ColorWashAmount = std::clamp(ColorWashAmount, 0.0f, 1.0f);
+        NameColorMix = std::clamp(NameColorMix, 0.0f, 1.0f);
+        EffectAlphaMin = std::clamp(EffectAlphaMin, 0.0f, 1.0f);
+        EffectAlphaMax = std::clamp(EffectAlphaMax, 0.0f, 1.0f);
+        StrengthMin = std::max(0.0f, StrengthMin);
+        StrengthMax = std::max(0.0f, StrengthMax);
+
+        AlphaSettleTime = std::max(0.01f, AlphaSettleTime);
+        ScaleSettleTime = std::max(0.01f, ScaleSettleTime);
+        PositionSettleTime = std::max(0.01f, PositionSettleTime);
+
+        Visual().OverlapIterations = std::clamp(Visual().OverlapIterations, 1, 16);
+        Visual().LODTransitionRange = std::max(1.0f, Visual().LODTransitionRange);
+        Visual().PositionSmoothingBlend = std::clamp(Visual().PositionSmoothingBlend, 0.0f, 1.0f);
+        Visual().LargeMovementThreshold = std::max(0.0f, Visual().LargeMovementThreshold);
+        Visual().LargeMovementBlend = std::clamp(Visual().LargeMovementBlend, 0.0f, 1.0f);
+
+        if (Tiers.empty()) {
+            Tiers.push_back(MakeDefaultTier());
+        }
+
+        for (auto& tier : Tiers) {
+            if (tier.maxLevel < tier.minLevel) {
+                std::swap(tier.maxLevel, tier.minLevel);
+            }
+            tier.particleCount = std::max(0, tier.particleCount);
+            for (int i = 0; i < 3; ++i) {
+                tier.leftColor[i] = std::clamp(tier.leftColor[i], 0.0f, 1.0f);
+                tier.rightColor[i] = std::clamp(tier.rightColor[i], 0.0f, 1.0f);
+                tier.highlightColor[i] = std::clamp(tier.highlightColor[i], 0.0f, 1.0f);
+            }
+        }
+
+        for (auto& special : SpecialTitles) {
+            special.keyword = Trim(special.keyword);
+            special.keywordLower = ToLowerAscii(special.keyword);
+            for (int i = 0; i < 3; ++i) {
+                special.color[i] = std::clamp(special.color[i], 0.0f, 1.0f);
+                special.glowColor[i] = std::clamp(special.glowColor[i], 0.0f, 1.0f);
+            }
+        }
+    }
+
     // Helper function: Remove leading/trailing whitespace
     static std::string Trim(const std::string& str) {
         size_t first = str.find_first_not_of(" \t\r\n");
         if (std::string::npos == first) return str;
         size_t last = str.find_last_not_of(" \t\r\n");
         return str.substr(first, (last - first + 1));
+    }
+
+    // Helper function: strip inline comments while preserving quoted text.
+    static std::string StripInlineComment(const std::string& str) {
+        bool inQuote = false;
+        bool escaped = false;
+        for (size_t i = 0; i < str.size(); ++i) {
+            const char c = str[i];
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' && inQuote) {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inQuote = !inQuote;
+                continue;
+            }
+            if (!inQuote && (c == ';' || c == '#')) {
+                return Trim(str.substr(0, i));
+            }
+        }
+        return Trim(str);
+    }
+
+    static std::string StripUtf8Bom(const std::string& str) {
+        if (str.size() >= 3 &&
+            static_cast<unsigned char>(str[0]) == 0xEF &&
+            static_cast<unsigned char>(str[1]) == 0xBB &&
+            static_cast<unsigned char>(str[2]) == 0xBF) {
+            return str.substr(3);
+        }
+        return str;
     }
 
     // Helper function: Parse float with fallback default
@@ -160,7 +567,7 @@ namespace Settings
     static bool ParseBool(const std::string& str) {
         std::string lower = str;
         for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return (lower == "true" || lower == "1" || lower == "yes");
+        return (lower == "true" || lower == "1" || lower == "yes" || lower == "on" || lower == "enabled");
     }
 
     // Helper function: Parse comma-separated RGB color (0.0-1.0)
@@ -177,39 +584,71 @@ namespace Settings
     // Helper function: Parse effect type name to enum
     static EffectType ParseEffectType(const std::string& str) {
         std::string s = Trim(str);
+        for (auto& c : s) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
         // Map string names to effect types
-        if (s == "None") return EffectType::None;
-        if (s == "Gradient") return EffectType::Gradient;
-        if (s == "VerticalGradient") return EffectType::VerticalGradient;
-        if (s == "DiagonalGradient") return EffectType::DiagonalGradient;
-        if (s == "RadialGradient") return EffectType::RadialGradient;
-        if (s == "Shimmer") return EffectType::Shimmer;
-        if (s == "ChromaticShimmer") return EffectType::ChromaticShimmer;
-        if (s == "PulseGradient") return EffectType::PulseGradient;
-        if (s == "RainbowWave") return EffectType::RainbowWave;
-        if (s == "ConicRainbow") return EffectType::ConicRainbow;
-        if (s == "Aurora") return EffectType::Aurora;
-        if (s == "Sparkle") return EffectType::Sparkle;
-        if (s == "Plasma") return EffectType::Plasma;
-        if (s == "Scanline") return EffectType::Scanline;
+        if (s == "none") return EffectType::None;
+        if (s == "gradient") return EffectType::Gradient;
+        if (s == "verticalgradient") return EffectType::VerticalGradient;
+        if (s == "diagonalgradient") return EffectType::DiagonalGradient;
+        if (s == "radialgradient") return EffectType::RadialGradient;
+        if (s == "shimmer") return EffectType::Shimmer;
+        if (s == "chromaticshimmer") return EffectType::ChromaticShimmer;
+        if (s == "pulsegradient") return EffectType::PulseGradient;
+        if (s == "rainbowwave") return EffectType::RainbowWave;
+        if (s == "conicrainbow") return EffectType::ConicRainbow;
+        if (s == "aurora") return EffectType::Aurora;
+        if (s == "sparkle") return EffectType::Sparkle;
+        if (s == "plasma") return EffectType::Plasma;
+        if (s == "scanline") return EffectType::Scanline;
         // Default to simple gradient if unknown
         return EffectType::Gradient;
     }
 
     void Load()
     {
+        std::unique_lock<std::shared_mutex> settingsWriteLock(Mutex());
+
+        ResetToDefaults();
+
         // File is located in Skyrim's Data folder under SKSE plugins directory
         std::ifstream file("Data/SKSE/Plugins/glyph.ini");
-        if (!file.is_open()) return;  // Silently use defaults if file not found
+        if (!file.is_open()) {
+            ClampAndValidate();
+            SKSE::log::warn("Settings: glyph.ini not found, using defaults");
+            return;  // Use defaults if file not found
+        }
 
         std::string line;
-        std::string currentSection;    // Tracks current [Section] header for multi-section parsing
+        std::string currentSection;
+        std::string currentSectionLower;
         int currentTier = -1;          // Tracks which tier we're parsing (-1 = global settings)
         int currentSpecialTitle = -1;  // Tracks which special title we're parsing (-1 = none)
+        size_t lineNumber = 0;
+        size_t malformedLineCount = 0;
+        size_t unknownKeyCount = 0;
+        size_t unknownSectionCount = 0;
+        std::vector<std::string> parseWarnings;
+        std::unordered_set<std::string> warnedUnknownSections;
+
+        auto addWarning = [&](size_t lineNo, const std::string& message) {
+            constexpr size_t kMaxWarnings = 48;
+            if (parseWarnings.size() < kMaxWarnings) {
+                std::ostringstream ss;
+                ss << "L" << lineNo << ": " << message;
+                parseWarnings.push_back(ss.str());
+            }
+        };
 
         // Line-by-line parsing allows for flexible format with sections
         while (std::getline(file, line)) {
+            const size_t currentLineNumber = lineNumber + 1;
+            if (lineNumber++ == 0) {
+                line = StripUtf8Bom(line);
+            }
             line = Trim(line);
+            line = StripInlineComment(line);
 
             // Skip empty lines and comments (both ; and # style for user convenience)
             if (line.empty() || line[0] == ';' || line[0] == '#') continue;
@@ -218,15 +657,18 @@ namespace Settings
             // Section headers change the parsing context for subsequent kv pairs
             if (line.size() >= 2 && line[0] == '[' && line.back() == ']') {
                 currentSection = line.substr(1, line.size() - 2);
+                currentSection = Trim(currentSection);
+                currentSectionLower = ToLowerAscii(currentSection);
 
                 // Tier numbers are 0-indexed and can be any non-negative integer
-                if (currentSection.size() >= 4 && currentSection.substr(0, 4) == "Tier") {
+                if (currentSectionLower.size() >= 4 && currentSectionLower.rfind("tier", 0) == 0) {
                     std::string numStr = currentSection.substr(4);
                     currentTier = ParseInt(numStr, -1);
                     currentSpecialTitle = -1;  // Not in a special title section
 
                     if (currentTier < 0) {
                         currentTier = -1;  // Invalid tier number, treat as non-tier section
+                        addWarning(currentLineNumber, "Invalid tier section '" + currentSection + "'");
                     } else {
                         // Dynamically grow the Tiers vector to accommodate the specified tier
                         while (static_cast<int>(Tiers.size()) <= currentTier) {
@@ -250,7 +692,7 @@ namespace Settings
                     }
                 }
                 // Special title sections like [SpecialTitle0], [SpecialTitle1], etc.
-                else if (currentSection.size() >= 12 && currentSection.substr(0, 12) == "SpecialTitle") {
+                else if (currentSectionLower.size() >= 12 && currentSectionLower.rfind("specialtitle", 0) == 0) {
                     std::string numStr = currentSection.substr(12);
                     currentSpecialTitle = ParseInt(numStr, -1);
                     currentTier = -1;  // Not in a tier section
@@ -268,19 +710,45 @@ namespace Settings
                             newSpecial.priority = 0;
                             SpecialTitles.push_back(newSpecial);
                         }
+                    } else {
+                        addWarning(currentLineNumber, "Invalid special title section '" + currentSection + "'");
                     }
                 } else {
                     currentTier = -1;  // Non-tier section, switch to global context
                     currentSpecialTitle = -1;
+
+                    static const std::unordered_set<std::string> kKnownSections = {
+                        "",
+                        "general",
+                        "display",
+                        "appearance",
+                        "appearancetemplate",
+                        "debug",
+                        "visual",
+                        "fonts",
+                        "particles",
+                        "occlusion"
+                    };
+                    if (kKnownSections.find(currentSectionLower) == kKnownSections.end()) {
+                        ++unknownSectionCount;
+                        if (warnedUnknownSections.insert(currentSectionLower).second) {
+                            addWarning(currentLineNumber, "Unknown section [" + currentSection + "]");
+                        }
+                    }
                 }
                 continue;
             }
 
             // Parse kv pairs
             size_t eq = line.find('=');
-            if (eq == std::string::npos) continue;  // No '=' found, skip malformed line
+            if (eq == std::string::npos) {
+                ++malformedLineCount;
+                addWarning(currentLineNumber, "Ignoring malformed setting line (missing '=')");
+                continue;
+            }
 
-            std::string key = Trim(line.substr(0, eq));
+            std::string keyRaw = Trim(line.substr(0, eq));
+            std::string key = CanonicalizeKey(keyRaw);
             std::string val = Trim(line.substr(eq + 1));
 
             bool handled = false;
@@ -294,11 +762,15 @@ namespace Settings
                     handled = true;
                 } else if (key == "MinLevel") {
                     // Inclusive lower bound for this tier's level range
-                    Tiers[currentTier].minLevel = static_cast<uint16_t>(ParseInt(val, 1));
+                    const int parsed = ParseInt(val, 1);
+                    const int clamped = std::clamp(parsed, 0, static_cast<int>((std::numeric_limits<uint16_t>::max)()));
+                    Tiers[currentTier].minLevel = static_cast<uint16_t>(clamped);
                     handled = true;
                 } else if (key == "MaxLevel") {
                     // Inclusive upper bound for this tier's level range
-                    Tiers[currentTier].maxLevel = static_cast<uint16_t>(ParseInt(val, 25));
+                    const int parsed = ParseInt(val, 25);
+                    const int clamped = std::clamp(parsed, 0, static_cast<int>((std::numeric_limits<uint16_t>::max)()));
+                    Tiers[currentTier].maxLevel = static_cast<uint16_t>(clamped);
                     handled = true;
                 } else if (key == "LeftColor") {
                     // Left/start color for gradient effects (RGB floats 0.0-1.0)
@@ -334,7 +806,8 @@ namespace Settings
 
                     // Check for "whiteBase" keyword
                     // When enabled, renders white text layer under effects
-                    size_t wbPos = paramsStr.find("whiteBase");
+                    std::string paramsLower = ToLowerAscii(paramsStr);
+                    size_t wbPos = paramsLower.find("whitebase");
                     if (wbPos != std::string::npos) {
                         effect.useWhiteBase = true;
                         paramsStr = paramsStr.substr(0, wbPos);  // Strip flag from params
@@ -385,7 +858,7 @@ namespace Settings
                     handled = true;
                 } else if (key == "ParticleCount") {
                     // Number of particles for this tier (0 = use global)
-                    Tiers[currentTier].particleCount = std::stoi(val);
+                    Tiers[currentTier].particleCount = ParseInt(val, 0);
                     handled = true;
                 }
             }
@@ -409,11 +882,11 @@ namespace Settings
                     ParseColor3(val, SpecialTitles[currentSpecialTitle].glowColor);
                     handled = true;
                 } else if (key == "ForceOrnaments" || key == "ForceFlourishes") {
-                    SpecialTitles[currentSpecialTitle].forceOrnaments = (val == "1" || val == "true" || val == "yes");
+                    SpecialTitles[currentSpecialTitle].forceOrnaments = ParseBool(val);
                     handled = true;
                 } else if (key == "ForceParticles") {
                     // Always show particle aura
-                    SpecialTitles[currentSpecialTitle].forceParticles = (val == "1" || val == "true" || val == "yes");
+                    SpecialTitles[currentSpecialTitle].forceParticles = ParseBool(val);
                     handled = true;
                 } else if (key == "Priority") {
                     // Higher priority = checked first
@@ -436,9 +909,10 @@ namespace Settings
                 }
             }
 
+            if (!handled) {
             // Format key requires special parsing because it contains multiple quoted segments
             // Syntax: Format = "%t" "%n" "Lv.%l"
-            if (!handled && key == "Format") {
+            if (key == "Format") {
                 std::vector<Segment> newDisplayFormat;
                 std::string newTitleFormat;
                 bool titleFound = false;
@@ -503,7 +977,7 @@ namespace Settings
             else if (key == "MinimumScale") MinimumScale = ParseFloat(val, 0.0f);
             else if (key == "MaxScanDistance") MaxScanDistance = ParseFloat(val, 0.0f);
             // Occlusion Settings
-            else if (key == "EnableOcclusionCulling") EnableOcclusionCulling = (ParseInt(val, 1) != 0);
+            else if (key == "EnableOcclusionCulling") EnableOcclusionCulling = ParseBool(val);
             else if (key == "OcclusionSettleTime") OcclusionSettleTime = ParseFloat(val, 0.58f);
             else if (key == "OcclusionCheckInterval") OcclusionCheckInterval = ParseInt(val, 3);
             else if (key == "TitleShadowOffsetX") TitleShadowOffsetX = ParseFloat(val, 0.0f);
@@ -513,29 +987,29 @@ namespace Settings
             else if (key == "SegmentPadding") SegmentPadding = ParseFloat(val, 0.0f);
             else if (key == "OutlineWidthMin") OutlineWidthMin = ParseFloat(val, 0.0f);
             else if (key == "OutlineWidthMax") OutlineWidthMax = ParseFloat(val, 0.0f);
-            else if (key == "FastOutlines") FastOutlines = (ParseInt(val, 0) != 0);
+            else if (key == "FastOutlines") FastOutlines = ParseBool(val);
             // Glow Settings
-            else if (key == "EnableGlow") EnableGlow = (ParseInt(val, 0) != 0);
+            else if (key == "EnableGlow") EnableGlow = ParseBool(val);
             else if (key == "GlowRadius") GlowRadius = ParseFloat(val, 4.0f);
             else if (key == "GlowIntensity") GlowIntensity = ParseFloat(val, 0.5f);
             else if (key == "GlowSamples") GlowSamples = ParseInt(val, 8);
             // Typewriter Settings
-            else if (key == "EnableTypewriter") EnableTypewriter = (ParseInt(val, 0) != 0);
+            else if (key == "EnableTypewriter") EnableTypewriter = ParseBool(val);
             else if (key == "TypewriterSpeed") TypewriterSpeed = ParseFloat(val, 30.0f);
             else if (key == "TypewriterDelay") TypewriterDelay = ParseFloat(val, 0.0f);
             // Debug Settings
-            else if (key == "EnableDebugOverlay") EnableDebugOverlay = (ParseInt(val, 0) != 0);
+            else if (key == "EnableDebugOverlay") EnableDebugOverlay = ParseBool(val);
             // Side Ornaments
-            else if (key == "EnableOrnaments" || key == "EnableFlourishes") EnableOrnaments = (ParseInt(val, 1) != 0);
+            else if (key == "EnableOrnaments" || key == "EnableFlourishes") EnableOrnaments = ParseBool(val);
             else if (key == "OrnamentScale" || key == "FlourishScale") OrnamentScale = ParseFloat(val, 1.0f);
             else if (key == "OrnamentSpacing" || key == "FlourishSpacing") OrnamentSpacing = ParseFloat(val, 6.0f);
             // Particle Aura
-            else if (key == "EnableParticleAura") EnableParticleAura = (ParseInt(val, 1) != 0);
-            else if (key == "EnableStars") EnableStars = (ParseInt(val, 1) != 0);
-            else if (key == "EnableSparks") EnableSparks = (ParseInt(val, 0) != 0);
-            else if (key == "EnableWisps") EnableWisps = (ParseInt(val, 0) != 0);
-            else if (key == "EnableRunes") EnableRunes = (ParseInt(val, 0) != 0);
-            else if (key == "EnableOrbs") EnableOrbs = (ParseInt(val, 0) != 0);
+            else if (key == "EnableParticleAura") EnableParticleAura = ParseBool(val);
+            else if (key == "EnableStars") EnableStars = ParseBool(val);
+            else if (key == "EnableSparks") EnableSparks = ParseBool(val);
+            else if (key == "EnableWisps") EnableWisps = ParseBool(val);
+            else if (key == "EnableRunes") EnableRunes = ParseBool(val);
+            else if (key == "EnableOrbs") EnableOrbs = ParseBool(val);
             else if (key == "ParticleCount") ParticleCount = ParseInt(val, 8);
             else if (key == "ParticleSize") ParticleSize = ParseFloat(val, 3.0f);
             else if (key == "ParticleSpeed") ParticleSpeed = ParseFloat(val, 1.0f);
@@ -545,8 +1019,8 @@ namespace Settings
             // Textures now auto-loaded from glyph/particles/<type>/ folders
             // Display Options
             else if (key == "VerticalOffset") VerticalOffset = ParseFloat(val, 8.0f);
-            else if (key == "HidePlayer") HidePlayer = (ParseInt(val, 0) != 0);
-            else if (key == "HideCreatures") HideCreatures = (ParseInt(val, 0) != 0);
+            else if (key == "HidePlayer") HidePlayer = ParseBool(val);
+            else if (key == "HideCreatures") HideCreatures = ParseBool(val);
             else if (key == "ReloadKey") ReloadKey = ParseInt(val, 0);
             else if (key == "AnimSpeedLowTier") AnimSpeedLowTier = ParseFloat(val, 0.0f);
             else if (key == "AnimSpeedMidTier") AnimSpeedMidTier = ParseFloat(val, 0.0f);
@@ -561,13 +1035,13 @@ namespace Settings
             else if (key == "ScaleSettleTime") ScaleSettleTime = ParseFloat(val, 0.46f);
             else if (key == "PositionSettleTime") PositionSettleTime = ParseFloat(val, 0.38f);
             // Distance-Based Outline
-            else if (key == "EnableDistanceOutlineScale") Visual().EnableDistanceOutlineScale = (ParseInt(val, 0) != 0);
+            else if (key == "EnableDistanceOutlineScale") Visual().EnableDistanceOutlineScale = ParseBool(val);
             else if (key == "OutlineDistanceMin") Visual().OutlineDistanceMin = ParseFloat(val, 0.8f);
             else if (key == "OutlineDistanceMax") Visual().OutlineDistanceMax = ParseFloat(val, 1.5f);
             // Minimum Readable Size
             else if (key == "MinimumPixelHeight") Visual().MinimumPixelHeight = ParseFloat(val, 0.0f);
             // LOD by Distance
-            else if (key == "EnableLOD") Visual().EnableLOD = (ParseInt(val, 0) != 0);
+            else if (key == "EnableLOD") Visual().EnableLOD = ParseBool(val);
             else if (key == "LODFarDistance") Visual().LODFarDistance = ParseFloat(val, 1800.0f);
             else if (key == "LODMidDistance") Visual().LODMidDistance = ParseFloat(val, 800.0f);
             else if (key == "LODTransitionRange") Visual().LODTransitionRange = ParseFloat(val, 200.0f);
@@ -575,7 +1049,7 @@ namespace Settings
             else if (key == "TitleAlphaMultiplier") Visual().TitleAlphaMultiplier = ParseFloat(val, 0.80f);
             else if (key == "LevelAlphaMultiplier") Visual().LevelAlphaMultiplier = ParseFloat(val, 0.85f);
             // Overlap Prevention
-            else if (key == "EnableOverlapPrevention") Visual().EnableOverlapPrevention = (ParseInt(val, 0) != 0);
+            else if (key == "EnableOverlapPrevention") Visual().EnableOverlapPrevention = ParseBool(val);
             else if (key == "OverlapPaddingY") Visual().OverlapPaddingY = ParseFloat(val, 4.0f);
             else if (key == "OverlapIterations") Visual().OverlapIterations = ParseInt(val, 3);
             // Position Smoothing Tuning
@@ -583,7 +1057,7 @@ namespace Settings
             else if (key == "LargeMovementThreshold") Visual().LargeMovementThreshold = ParseFloat(val, 50.0f);
             else if (key == "LargeMovementBlend") Visual().LargeMovementBlend = ParseFloat(val, 0.5f);
             // Tier Effect Gating
-            else if (key == "EnableTierEffectGating") Visual().EnableTierEffectGating = (ParseInt(val, 0) != 0);
+            else if (key == "EnableTierEffectGating") Visual().EnableTierEffectGating = ParseBool(val);
             else if (key == "GlowMinTier") Visual().GlowMinTier = ParseInt(val, 5);
             else if (key == "ParticleMinTier") Visual().ParticleMinTier = ParseInt(val, 10);
             else if (key == "OrnamentMinTier") Visual().OrnamentMinTier = ParseInt(val, 10);
@@ -609,6 +1083,26 @@ namespace Settings
             else if (key == "TemplateCopyOutfit") TemplateCopyOutfit = ParseBool(val);
             else if (key == "TemplateReapplyOnReload") TemplateReapplyOnReload = ParseBool(val);
             else if (key == "TemplateFaceGenPlugin") TemplateFaceGenPlugin = val;
+            else {
+                ++unknownKeyCount;
+                std::string sectionName = currentSection.empty() ? "<global>" : currentSection;
+                addWarning(currentLineNumber, "Unknown key '" + keyRaw + "' in section " + sectionName);
+            }
+            }
+        }
+
+        ClampAndValidate();
+
+        if (malformedLineCount > 0 || unknownKeyCount > 0 || unknownSectionCount > 0) {
+            SKSE::log::warn(
+                "Settings: parsed glyph.ini with {} malformed lines, {} unknown keys, {} unknown sections",
+                malformedLineCount, unknownKeyCount, unknownSectionCount);
+            for (const auto& warning : parseWarnings) {
+                SKSE::log::warn("Settings: {}", warning);
+            }
+            if (parseWarnings.size() == 48) {
+                SKSE::log::warn("Settings: warning output truncated");
+            }
         }
     }
 }

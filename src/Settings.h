@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <shared_mutex>
 #include <vector>
 
 /**
@@ -224,6 +225,7 @@ namespace Settings
      */
     struct SpecialTitleDefinition {
         std::string keyword;         ///< Keyword to match in name (case-insensitive)
+        std::string keywordLower;    ///< Cached lowercase keyword for fast runtime matching
         std::string displayTitle;    ///< Title to display
         float color[3];              ///< RGB color for name/title
         float glowColor[3];          ///< RGB glow color (more saturated)
@@ -397,6 +399,14 @@ namespace Settings
     extern bool TemplateCopyOutfit;        ///< Whether to copy equipped armor from template actor (default: false)
     extern bool TemplateReapplyOnReload;   ///< Whether to re-apply appearance on hot reload (default: false)
     extern std::string TemplateFaceGenPlugin;  ///< Optional override for FaceGen plugin path (empty = auto-detect)
+
+    /**
+     * Shared settings mutex.
+     *
+     * Readers should hold a shared lock while consuming settings during
+     * long operations. Settings::Load() acquires a unique lock.
+     */
+    std::shared_mutex& Mutex();
 
     /**
      * Load all settings from glyph.ini.
