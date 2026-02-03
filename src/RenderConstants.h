@@ -21,8 +21,8 @@
  *
  * | Constant      | Value | Description                              |
  * |---------------|:-----:|------------------------------------------|
- * | `kMaxActors`  | 16    | Max nameplates rendered simultaneously   |
- * | `kMaxScan`    | 32    | Max actors iterated per scan pass        |
+ * | `MAX_ACTORS`  | 16    | Max nameplates rendered simultaneously   |
+ * | `MAX_SCAN`    | 32    | Max actors iterated per scan pass        |
  *
  * ## :material-chart-bell-curve-cumulative: Position Smoothing
  *
@@ -47,18 +47,18 @@
 namespace RenderConstants
 {
 // Actor Processing Limits
-constexpr int kMaxActors = 16;  ///< Maximum actors to display nameplates for at once
-constexpr int kMaxScan = 32;    ///< Maximum actors to iterate when scanning
+static constexpr int MAX_ACTORS = 16;  ///< Maximum actors to display nameplates for at once
+static constexpr int MAX_SCAN = 32;    ///< Maximum actors to iterate when scanning
 
 // Cache Management
-constexpr uint32_t kCacheGraceFrames =
+static constexpr uint32_t CACHE_GRACE_FRAMES =
     60;  ///< Frames to keep cache entries after actor leaves view (~1s at 60fps)
-constexpr int kPositionHistorySize =
+static constexpr int POSITION_HISTORY_SIZE =
     8;  ///< Position history buffer size for moving average smoothing
 
 // Debug Overlay
-constexpr float kReloadNotificationDuration =
-    2.0f;                              ///< Duration to show "Reloaded!" notification (seconds)
-constexpr int kFrameTimeSamples = 60;  ///< Number of frame time samples for averaging
+static constexpr float RELOAD_NOTIFICATION_DURATION =
+    2.f;  ///< Duration to show "Reloaded!" notification (seconds)
+static constexpr int FRAME_TIME_SAMPLES = 60;  ///< Number of frame time samples for averaging
 
 }  // namespace RenderConstants

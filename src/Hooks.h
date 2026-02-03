@@ -96,8 +96,8 @@
  *
  * |  Hook Type | Bytes Required | Function                   |
  * |------------|----------------|----------------------------|
- * | Thunk call |    5 bytes     | `stl::write_thunk_call<T>` |
- * |     VTable | 8 bytes (ptr)  | `stl::write_vfunc<F, T>`   |
+ * | Thunk call |    5 bytes     | `Stl::WriteThunkCall<T>` |
+ * |     VTable | 8 bytes (ptr)  | `Stl::WriteVfunc<F, T>`   |
  *
  * ## :material-bookmark: Address Library Compatibility
  *
@@ -118,7 +118,7 @@
  * @note Trampoline must be allocated before calling `Install()`.
  * @note Hook failures are logged but don't prevent plugin loading.
  *
- * @see stl::write_thunk_call, stl::write_vfunc, Renderer::Draw
+ * @see Stl::WriteThunkCall, Stl::WriteVfunc, Renderer::Draw
  */
 namespace Hooks
 {

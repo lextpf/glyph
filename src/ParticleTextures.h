@@ -74,16 +74,16 @@ enum class BlendMode
 bool Initialize(ID3D11Device* device);
 
 /**
-     * Check if particle textures have been loaded.
-     * @return true if textures are
+ * Check if particle textures have been loaded.
+ * @return true if textures are
  * available for use
-     */
+ */
 bool IsInitialized();
 
 /**
-     * Release all particle texture resources.
-     * Safe to call multiple times.
-     */
+ * Release all particle texture resources.
+ * Safe to call multiple times.
+ */
 void Shutdown();
 
 /**
@@ -122,7 +122,7 @@ void DrawSpriteWithIndex(ImDrawList* list,
                          int particleIndex,
                          ImU32 color,
                          BlendMode blendMode = BlendMode::Alpha,
-                         float rotation = 0.0f);
+                         float rotation = .0f);
 
 /**
  * Push additive blend state onto the draw list via callback.

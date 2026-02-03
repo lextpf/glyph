@@ -27,27 +27,21 @@
  */
 #include "PCH.h"
 
-#include <string>
-
 #include "AppearanceTemplate.h"
 #include "Hooks.h"
 #include "Renderer.h"
 #include "Settings.h"
 
-/**
- * @namespace ConsoleCommands
- * @brief Console command registration and handlers.
- * @ingroup ConsoleCommands
- *
- * Provides the `glyph` console command for toggling nameplate rendering.
- * Registers by replacing an unused vanilla command slot at plugin load.
- */
+#include <string>
+
+// Console command registration and handlers.
+//
+// Provides the `glyph` console command for toggling nameplate rendering.
+// Registers by replacing an unused vanilla command slot at plugin load.
 namespace ConsoleCommands
 {
-/**
- * glyph console command.
- * Usage: Type 'glyph' in console to toggle nameplate rendering on/off.
- */
+// glyph console command.
+// Usage: Type 'glyph' in console to toggle nameplate rendering on/off.
 bool GlyphExecute(const RE::SCRIPT_PARAMETER*,
                   RE::SCRIPT_FUNCTION::ScriptData*,
                   RE::TESObjectREFR*,
@@ -107,7 +101,9 @@ void Register()
     {
         auto* cmd = &commands[i];
         if (!cmd || !cmd->functionName)
+        {
             continue;
+        }
 
         // Replace TestSeenData
         if (_stricmp(cmd->functionName, "TestSeenData") == 0)
@@ -135,11 +131,9 @@ void Register()
 }
 }  // namespace ConsoleCommands
 
-/**
- * SKSE message handler - key lifecycle states:
- * - kDataLoaded: register console commands, retry NiOverride
- * - kPostLoadGame / kNewGame: queue pending appearance template apply
- */
+// SKSE message handler - key lifecycle states:
+// - kDataLoaded: register console commands, retry NiOverride
+// - kPostLoadGame / kNewGame: queue pending appearance template apply
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
     auto readTemplateSettingsSnapshot = []()
@@ -210,16 +204,14 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
     }
 }
 
-/**
- * SKSE plugin load entry point.
- *
- * Called by SKSE after the plugin DLL is loaded. Initializes logging,
- * loads settings, and installs hooks.
- *
- * @param a_skse SKSE load interface.
- *
- * @return `true` if initialization succeeded.
- */
+// SKSE plugin load entry point.
+//
+// Called by SKSE after the plugin DLL is loaded. Initializes logging,
+// loads settings, and installs hooks.
+//
+// a_skse: SKSE load interface.
+//
+// Returns `true` if initialization succeeded.
 extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
     using namespace std::literals;
@@ -265,11 +257,9 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
     return true;
 }
 
-/**
- * SKSE plugin version information.
- *
- * Provides version, name, and compatibility info to SKSE.
- */
+// SKSE plugin version information.
+//
+// Provides version, name, and compatibility info to SKSE.
 extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []()
 {
     SKSE::PluginVersionData version;
@@ -280,15 +270,13 @@ extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []()
     return version;
 }();
 
-/**
- * SKSE plugin query entry point.
- *
- * Called by SKSE during plugin enumeration. Provides basic plugin info.
- *
- * @param a_info Output plugin information structure.
- *
- * @return `true` always.
- */
+// SKSE plugin query entry point.
+//
+// Called by SKSE during plugin enumeration. Provides basic plugin info.
+//
+// a_info: Output plugin information structure.
+//
+// Returns `true` always.
 extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Query(const SKSE::QueryInterface*,
                                                                SKSE::PluginInfo* a_info)
 {
