@@ -82,7 +82,7 @@ constexpr float SmoothStep(float t)
 ImU32 LerpColorU32(ImU32 a, ImU32 b, float t);
 
 /**
- * Draw outline around text position (4-dir or 8-dir based on Settings::FastOutlines).
+ * Draw outline around text position (4-dir or 8-dir based on fastOutlines).
  *
  * @param list ImGui draw list to render to.
  * @param font Font to use for rendering.
@@ -91,6 +91,7 @@ ImU32 LerpColorU32(ImU32 a, ImU32 b, float t);
  * @param text Null-terminated UTF-8 string to render.
  * @param outline Outline color.
  * @param w Outline width in pixels.
+ * @param fastOutlines If true, uses 4 cardinal directions; otherwise 8 directions.
  */
 void DrawOutline(ImDrawList* list,
                  ImFont* font,
@@ -98,7 +99,8 @@ void DrawOutline(ImDrawList* list,
                  const ImVec2& pos,
                  const char* text,
                  ImU32 outline,
-                 float w);
+                 float w,
+                 bool fastOutlines);
 
 /**
  * Generic outline wrapper: draws outline then delegates to any effect function.
@@ -106,7 +108,7 @@ void DrawOutline(ImDrawList* list,
  * Replaces the boilerplate `AddTextOutline4<Effect>` wrappers. Usage:
  * @code
  * WithOutline<AddTextHorizontalGradient>(list, font, size, pos, text,
- *                                        outline, w, colLeft, colRight);
+ *                                        outline, w, fastOutlines, colLeft, colRight);
  * @endcode
  *
  * @tparam EffectFn Pointer to the non-outline effect function.
@@ -120,6 +122,7 @@ inline void WithOutline(ImDrawList* list,
                         const char* text,
                         ImU32 outline,
                         float w,
+                        bool fastOutlines,
                         Args&&... args)
 {
     static_assert(
@@ -131,15 +134,18 @@ inline void WithOutline(ImDrawList* list,
                             const char*,
                             Args...>,
         "EffectFn must accept (ImDrawList*, ImFont*, float, const ImVec2&, const char*, Args...)");
-    DrawOutline(list, font, size, pos, text, outline, w);
+    DrawOutline(list, font, size, pos, text, outline, w, fastOutlines);
     EffectFn(list, font, size, pos, text, std::forward<Args>(args)...);
 }
 
 /**
  * Draw text with outline.
  *
+ * Despite the `4` in the name (a historical artifact), this function supports
+ * both 4-direction and 8-direction outlines based on the `fastOutlines` parameter.
+ *
  * Renders text with a solid color and surrounding outline for readability.
- * When `Settings::FastOutlines` is true, uses 4 cardinal directions only;
+ * When `fastOutlines` is true, uses 4 cardinal directions only;
  * otherwise draws in 8 directions (cardinal + diagonal).
  *
  * @param list ImGui draw list to render to.
@@ -162,7 +168,8 @@ void AddTextOutline4(ImDrawList* list,
                      const char* text,
                      ImU32 col,
                      ImU32 outline,
-                     float w);
+                     float w,
+                     bool fastOutlines);
 
 /**
  * Draw text with horizontal gradient (no outline).
@@ -473,6 +480,7 @@ void AddTextOutline4RainbowWave(ImDrawList* list,
                                 float alpha,
                                 ImU32 outline,
                                 float w,
+                                bool fastOutlines,
                                 bool useWhiteBase = false);
 
 /**
@@ -543,6 +551,7 @@ void AddTextOutline4ConicRainbow(ImDrawList* list,
                                  float alpha,
                                  ImU32 outline,
                                  float w,
+                                 bool fastOutlines,
                                  bool useWhiteBase = false);
 
 /**
@@ -693,11 +702,15 @@ void AddTextScanline(ImDrawList* list,
 /**
  * Draw soft glow/bloom effect behind text.
  *
- * Creates a blurred glow by drawing multiple offset copies of the text
- * in a circular pattern with decreasing alpha.
+ * Creates a multi-layer soft bloom by drawing offset copies of the text
+ * at multiple radii with per-layer alpha multipliers. Three concentric
+ * layers (outer, middle, inner) produce a smooth falloff:
  *
- * Draws `samples` copies of text at positions around a circle of
- * radius `radius`, with alpha scaled by `intensity / samples`.
+ * - **Outer** (1.5x radius, lowest alpha): wide ambient glow
+ * - **Middle** (1.0x radius, medium alpha): primary bloom
+ * - **Inner** (0.6x radius, highest alpha): bright core halo
+ *
+ * Each layer draws `samples` copies around a circle at its radius.
  *
  * @param list ImGui draw list to render to.
  * @param font Font to use for rendering.
@@ -727,19 +740,21 @@ void AddTextGlow(ImDrawList* list,
 /// Parameters for DrawParticleAura.
 struct ParticleAuraParams
 {
-    ImDrawList* list;               ///< ImGui draw list to render to
-    ImVec2 center;                  ///< Center of particle region
-    float radiusX;                  ///< Horizontal spread radius in pixels
-    float radiusY;                  ///< Vertical spread radius in pixels
-    ImU32 color;                    ///< Particle base color
-    float alpha;                    ///< Maximum particle opacity [0, 1]
-    Settings::ParticleStyle style;  ///< Particle visual style
-    int particleCount;              ///< Number of particles to draw
-    float particleSize;             ///< Base particle size in pixels
-    float speed;                    ///< Animation speed multiplier
-    float time;                     ///< Current time for animation
-    int styleIndex = 0;             ///< Index among enabled styles (for spatial offset)
-    int enabledStyleCount = 1;      ///< Total number of enabled particle styles
+    ImDrawList* list;                 ///< ImGui draw list to render to
+    ImVec2 center;                    ///< Center of particle region
+    float radiusX;                    ///< Horizontal spread radius in pixels
+    float radiusY;                    ///< Vertical spread radius in pixels
+    ImU32 color;                      ///< Particle base color
+    float alpha;                      ///< Maximum particle opacity [0, 1]
+    Settings::ParticleStyle style;    ///< Particle visual style
+    int particleCount;                ///< Number of particles to draw
+    float particleSize;               ///< Base particle size in pixels
+    float speed;                      ///< Animation speed multiplier
+    float time;                       ///< Current time for animation
+    int styleIndex = 0;               ///< Index among enabled styles (for spatial offset)
+    int enabledStyleCount = 1;        ///< Total number of enabled particle styles
+    bool useParticleTextures = true;  ///< Use texture sprites instead of procedural shapes
+    int blendMode = 0;                ///< 0=Additive, 1=Screen, 2=Alpha
 };
 
 /**
@@ -752,7 +767,7 @@ struct ParticleAuraParams
  *
  * @pre params.list != nullptr
  *
- * @see ParticleAuraParams, Settings::ParticleStyle, Settings::EnableParticleAura
+ * @see ParticleAuraParams, Settings::ParticleStyle, Settings::Particle
  */
 void DrawParticleAura(const ParticleAuraParams& params);
 }  // namespace TextEffects
