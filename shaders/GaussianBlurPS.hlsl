@@ -11,10 +11,10 @@ cbuffer BlurCB : register(b0)
     float  _Pad;
 };
 
-// 7-tap kernel: center + 3 on each side.
+// 13-tap kernel: center + 6 on each side.
 // Weights are computed analytically from sigma so the radius
 // adapts to the configured glow spread.
-static const int HALF_KERNEL = 3;
+static const int HALF_KERNEL = 6;
 
 float Gauss(float x, float s)
 {
