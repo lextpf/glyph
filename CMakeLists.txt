@@ -126,6 +126,8 @@ add_library(glyph SHARED
     src/OutfitCopy.cpp
     src/ParticleTextures.h
     src/ParticleTextures.cpp
+    src/TextPostProcess.h
+    src/TextPostProcess.cpp
     src/Utf8Utils.h
     src/Version.h
 )
