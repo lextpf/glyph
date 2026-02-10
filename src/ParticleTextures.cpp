@@ -789,7 +789,7 @@ static float RuneRings(float nx, float ny)
     for (int i = 0; i < 8; ++i)
     {
         float a = static_cast<float>(i) * PROC_PI * .25f;
-        float dr = (i % 2 == 0) ? .47f : .47f;  // all on same ring
+        float dr = .47f;
         float dx = nx - std::cos(a) * dr, dy = ny - std::sin(a) * dr;
         float dotSize = (i % 2 == 0) ? .04f : .025f;  // cardinal dots larger
         dots = (std::max)(dots, PGaussian(std::sqrt(dx * dx + dy * dy), dotSize));
