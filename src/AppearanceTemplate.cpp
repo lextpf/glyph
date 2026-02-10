@@ -260,6 +260,23 @@ bool ApplyIfConfigured()
         return false;
     }
 
+    auto player = RE::PlayerCharacter::GetSingleton();
+    auto playerBase = player ? player->GetActorBase() : nullptr;
+    if (!playerBase)
+    {
+        logger::error("AppearanceTemplate: Player base not available");
+        return false;
+    }
+
+    if (templateNPC->IsFemale() != playerBase->IsFemale())
+    {
+        logger::info(
+            "AppearanceTemplate: Skipping template - sex mismatch (player: {}, template: {})",
+            playerBase->IsFemale() ? "Female" : "Male",
+            templateNPC->IsFemale() ? "Female" : "Male");
+        return false;
+    }
+
     bool racesCompatible = IsRaceCompatible(templateNPC);
     if (!racesCompatible && !cfg.templateIncludeRace)
     {
