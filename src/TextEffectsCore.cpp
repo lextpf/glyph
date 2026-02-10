@@ -90,6 +90,50 @@ void DrawOutlineInternal(ImDrawList* list,
     }
 }
 
+void DrawOutlineGlow(ImDrawList* list,
+                     ImFont* font,
+                     float size,
+                     const ImVec2& pos,
+                     const char* text,
+                     ImU32 glowColor,
+                     float outlineWidth,
+                     float glowScale,
+                     float glowAlpha,
+                     int rings,
+                     bool fastOutlines)
+{
+    if (!list || !font || !text || !text[0] || glowAlpha <= .0f || rings <= 0)
+    {
+        return;
+    }
+
+    // Extract RGB from glow color, we'll modulate alpha per ring
+    const int gr = (glowColor >> IM_COL32_R_SHIFT) & 0xFF;
+    const int gg = (glowColor >> IM_COL32_G_SHIFT) & 0xFF;
+    const int gb = (glowColor >> IM_COL32_B_SHIFT) & 0xFF;
+    const int ga = (glowColor >> IM_COL32_A_SHIFT) & 0xFF;
+
+    // Draw concentric rings from outermost (faintest) to innermost (brightest)
+    for (int ring = rings; ring >= 1; --ring)
+    {
+        // Ring offset scales: ring 1 = 1.6x, ring 2 = 2.2x, ring 3 = 2.8x
+        float ringScale = glowScale + (ring - 1) * .6f;
+        float ringOffset = outlineWidth * ringScale;
+
+        // Alpha falls off per ring: innermost is peak, outermost is faintest
+        float ringAlphaFactor = 1.0f / (float)ring;
+        float finalAlpha = glowAlpha * ringAlphaFactor;
+        int ringAlpha = std::clamp((int)(ga * finalAlpha + .5f), 0, 255);
+        if (ringAlpha <= 0)
+        {
+            continue;
+        }
+
+        ImU32 ringColor = IM_COL32(gr, gg, gb, ringAlpha);
+        DrawOutlineInternal(list, font, size, pos, text, ringColor, ringOffset, fastOutlines);
+    }
+}
+
 void DrawOutline(ImDrawList* list,
                  ImFont* font,
                  float size,
@@ -102,6 +146,72 @@ void DrawOutline(ImDrawList* list,
     DrawOutlineInternal(list, font, size, pos, text, outline, w, fastOutlines);
 }
 
+void DrawDirectionalInnerOutline(ImDrawList* list,
+                                 ImFont* font,
+                                 float size,
+                                 const ImVec2& pos,
+                                 const char* text,
+                                 ImU32 outerColor,
+                                 ImU32 tierColor,
+                                 float outerWidth,
+                                 float innerScale,
+                                 float tintFactor,
+                                 float alphaFactor,
+                                 float lightAngleDeg,
+                                 float lightBias,
+                                 bool fastOutlines)
+{
+    if (!list || !font || !text || !text[0] || alphaFactor <= .0f)
+    {
+        return;
+    }
+
+    ImU32 baseColor = LerpColorU32(outerColor, tierColor, tintFactor);
+    // Apply alpha factor
+    int ba = (baseColor >> IM_COL32_A_SHIFT) & 0xFF;
+    ba = std::clamp((int)(ba * alphaFactor + .5f), 0, 255);
+    baseColor = (baseColor & ~(0xFFu << IM_COL32_A_SHIFT)) | ((ImU32)ba << IM_COL32_A_SHIFT);
+
+    float innerW = outerWidth * innerScale;
+    if (innerW < .5f)
+    {
+        return;
+    }
+
+    if (lightBias <= .001f || fastOutlines)
+    {
+        // Uniform inner outline (no directionality)
+        DrawOutlineInternal(list, font, size, pos, text, baseColor, innerW, fastOutlines);
+        return;
+    }
+
+    // Directional: 8 offsets with per-direction width scaling
+    float lightRad = lightAngleDeg * (3.14159265f / 180.0f);
+    float lx = std::cos(lightRad);
+    float ly = std::sin(lightRad);
+
+    // 8 directions: E, W, N, S, NE, SE, NW, SW
+    constexpr float dirs[][2] = {{1, 0},
+                                 {-1, 0},
+                                 {0, -1},
+                                 {0, 1},
+                                 {.70710678f, -.70710678f},
+                                 {.70710678f, .70710678f},
+                                 {-.70710678f, -.70710678f},
+                                 {-.70710678f, .70710678f}};
+
+    for (const auto& dir : dirs)
+    {
+        // Dot product with light direction: directions opposing light get thicker
+        float dot = dir[0] * lx + dir[1] * ly;
+        float scale = 1.0f - dot * lightBias;  // opposing = thicker
+        float w = innerW * scale;
+        float ox = dir[0] * w;
+        float oy = dir[1] * w;
+        list->AddText(font, size, ImVec2(pos.x + ox, pos.y + oy), baseColor, text);
+    }
+}
+
 void AddTextOutline4(ImDrawList* list,
                      ImFont* font,
                      float size,
@@ -110,11 +220,28 @@ void AddTextOutline4(ImDrawList* list,
                      ImU32 col,
                      ImU32 outline,
                      float w,
-                     bool fastOutlines)
+                     bool fastOutlines,
+                     const OutlineGlowParams* glow)
 {
     if (!list || !font || !text || !text[0])
     {
         return;
+    }
+
+    // Draw outline glow behind everything if enabled
+    if (glow && glow->enabled)
+    {
+        DrawOutlineGlow(list,
+                        font,
+                        size,
+                        pos,
+                        text,
+                        glow->color,
+                        w,
+                        glow->scale,
+                        glow->alpha,
+                        glow->rings,
+                        fastOutlines);
     }
 
     // Draw 4-dir or 8-dir outline based on fastOutlines
@@ -215,6 +342,32 @@ ImVec4 HSVtoRGB(float h, float s, float v, float a)
 
     // Add match value to bring up to desired brightness
     return ImVec4(r + m, g + m, b + m, a);
+}
+
+void ApplyWaveDisplacement(ImDrawList* list,
+                           int vtxStart,
+                           int vtxEnd,
+                           float bbMinX,
+                           float bbWidth,
+                           float amplitude,
+                           float frequency,
+                           float speed,
+                           float time)
+{
+    if (!list || vtxEnd <= vtxStart || bbWidth < 1e-3f || amplitude < .01f)
+    {
+        return;
+    }
+
+    constexpr float TWO_PI = 6.28318530718f;
+
+    for (int i = vtxStart; i < vtxEnd; ++i)
+    {
+        auto& vtx = list->VtxBuffer[i];
+        float nx = (vtx.pos.x - bbMinX) / bbWidth;
+        float wave = std::sin(nx * frequency * TWO_PI + time * speed * TWO_PI) * amplitude;
+        vtx.pos.y += wave;
+    }
 }
 
 }  // namespace TextEffects

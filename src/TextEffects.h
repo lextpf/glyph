@@ -81,6 +81,16 @@ constexpr float SmoothStep(float t)
  */
 ImU32 LerpColorU32(ImU32 a, ImU32 b, float t);
 
+/// Parameters for the white outline glow (back halo behind outlines).
+struct OutlineGlowParams
+{
+    bool enabled = false;  ///< Whether to draw glow rings
+    ImU32 color = 0;       ///< Glow color (typically white with alpha)
+    float scale = 1.6f;    ///< Glow radius as multiplier of outline width
+    float alpha = .20f;    ///< Peak glow ring opacity
+    int rings = 2;         ///< Number of concentric rings (1-3)
+};
+
 /**
  * Draw outline around text position (4-dir or 8-dir based on fastOutlines).
  *
@@ -101,6 +111,64 @@ void DrawOutline(ImDrawList* list,
                  ImU32 outline,
                  float w,
                  bool fastOutlines);
+
+/// Parameters for wave displacement effect.
+struct WaveParams
+{
+    bool enabled = false;
+    float amplitude = 1.5f;
+    float frequency = 3.0f;
+    float speed = 1.0f;
+    float time = .0f;
+};
+
+/**
+ * Apply sine-wave Y displacement to vertices in the given range.
+ * Call after text has been rendered and vertex-colored by an effect.
+ */
+void ApplyWaveDisplacement(ImDrawList* list,
+                           int vtxStart,
+                           int vtxEnd,
+                           float bbMinX,
+                           float bbWidth,
+                           float amplitude,
+                           float frequency,
+                           float speed,
+                           float time);
+
+/**
+ * Draw directional inner outline tinted with tier color.
+ * Sits between the outer outline and the main text for depth.
+ */
+void DrawDirectionalInnerOutline(ImDrawList* list,
+                                 ImFont* font,
+                                 float size,
+                                 const ImVec2& pos,
+                                 const char* text,
+                                 ImU32 outerColor,
+                                 ImU32 tierColor,
+                                 float outerWidth,
+                                 float innerScale,
+                                 float tintFactor,
+                                 float alphaFactor,
+                                 float lightAngleDeg,
+                                 float lightBias,
+                                 bool fastOutlines);
+
+/**
+ * Draw concentric glow rings behind text outline.
+ */
+void DrawOutlineGlow(ImDrawList* list,
+                     ImFont* font,
+                     float size,
+                     const ImVec2& pos,
+                     const char* text,
+                     ImU32 glowColor,
+                     float outlineWidth,
+                     float glowScale,
+                     float glowAlpha,
+                     int rings,
+                     bool fastOutlines);
 
 /**
  * Generic outline wrapper: draws outline then delegates to any effect function.
@@ -138,6 +206,58 @@ inline void WithOutline(ImDrawList* list,
     EffectFn(list, font, size, pos, text, std::forward<Args>(args)...);
 }
 
+/// Parameters for dual-tone directional inner outline (forward declaration for template).
+struct DualOutlineParams
+{
+    bool enabled = false;
+    ImU32 tierColor = 0;       ///< Tier color to blend toward
+    float innerScale = .5f;    ///< Inner outline width as fraction of outer
+    float tintFactor = .3f;    ///< Blend toward tier color (0=outline, 1=tier)
+    float alphaFactor = .5f;   ///< Inner outline opacity
+    float lightAngle = 315.f;  ///< Light direction in degrees
+    float lightBias = .15f;    ///< Directional width variation
+};
+
+/// WithOutline variant that also draws outline glow behind the outline.
+template <auto EffectFn, typename... Args>
+inline void WithOutlineGlow(ImDrawList* list,
+                            ImFont* font,
+                            float size,
+                            const ImVec2& pos,
+                            const char* text,
+                            ImU32 outline,
+                            float w,
+                            bool fastOutlines,
+                            const OutlineGlowParams* glow,
+                            Args&&... args)
+{
+    static_assert(
+        std::is_invocable_v<decltype(EffectFn),
+                            ImDrawList*,
+                            ImFont*,
+                            float,
+                            const ImVec2&,
+                            const char*,
+                            Args...>,
+        "EffectFn must accept (ImDrawList*, ImFont*, float, const ImVec2&, const char*, Args...)");
+    if (glow && glow->enabled)
+    {
+        DrawOutlineGlow(list,
+                        font,
+                        size,
+                        pos,
+                        text,
+                        glow->color,
+                        w,
+                        glow->scale,
+                        glow->alpha,
+                        glow->rings,
+                        fastOutlines);
+    }
+    DrawOutline(list, font, size, pos, text, outline, w, fastOutlines);
+    EffectFn(list, font, size, pos, text, std::forward<Args>(args)...);
+}
+
 /**
  * Draw text with outline.
  *
@@ -169,7 +289,8 @@ void AddTextOutline4(ImDrawList* list,
                      ImU32 col,
                      ImU32 outline,
                      float w,
-                     bool fastOutlines);
+                     bool fastOutlines,
+                     const OutlineGlowParams* glow = nullptr);
 
 /**
  * Draw text with horizontal gradient (no outline).
@@ -310,16 +431,15 @@ void AddTextRadialGradient(ImDrawList* list,
  * @pre text != nullptr
  *
  */
-void AddTextPulseGradient(ImDrawList* list,
-                          ImFont* font,
-                          float size,
-                          const ImVec2& pos,
-                          const char* text,
-                          ImU32 a,
-                          ImU32 b,
-                          float time,
-                          float freqHz,
-                          float amp);
+void AddTextEmber(ImDrawList* list,
+                  ImFont* font,
+                  float size,
+                  const ImVec2& pos,
+                  const char* text,
+                  ImU32 colA,
+                  ImU32 colB,
+                  float speed,
+                  float intensity);
 
 /**
  * Draw text with shimmer effect (moving highlight band).
@@ -699,6 +819,30 @@ void AddTextScanline(ImDrawList* list,
                      float width,
                      float intensity);
 
+/// Draw text with flowing magical energy effect using FBM noise.
+void AddTextEnchant(ImDrawList* list,
+                    ImFont* font,
+                    float size,
+                    const ImVec2& pos,
+                    const char* text,
+                    ImU32 colA,
+                    ImU32 colB,
+                    float speed,
+                    float scale,
+                    float intensity);
+
+/// Draw text with crystalline frost pattern and sparkle flashes.
+void AddTextFrost(ImDrawList* list,
+                  ImFont* font,
+                  float size,
+                  const ImVec2& pos,
+                  const char* text,
+                  ImU32 colA,
+                  ImU32 colB,
+                  float density,
+                  float speed,
+                  float sparkleIntensity);
+
 /**
  * Draw soft glow/bloom effect behind text.
  *
@@ -755,6 +899,7 @@ struct ParticleAuraParams
     int enabledStyleCount = 1;        ///< Total number of enabled particle styles
     bool useParticleTextures = true;  ///< Use texture sprites instead of procedural shapes
     int blendMode = 0;                ///< 0=Additive, 1=Screen, 2=Alpha
+    ImU32 colorSecondary = 0;         ///< Optional second gradient color (0 = use primary only)
 };
 
 /**
