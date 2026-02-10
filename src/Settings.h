@@ -459,6 +459,8 @@ struct AnimColorSettings
     float ScaleSettleTime = .46f;     ///< Font scale settle time in seconds
     float PositionSettleTime = .38f;  ///< Position settle time for NPCs in seconds
     float TierVibrancyBoost = .0f;    ///< Extra color saturation for high tiers 0-1
+    float InnerTextAlpha = 1.0f;      ///< Text body alpha multiplier 0-1 (outlines unaffected)
+    float TextSaturationBoost = .0f;  ///< Extra color saturation for text body 0-2
 };
 AnimColorSettings& AnimColor();
 
