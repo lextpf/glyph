@@ -56,13 +56,15 @@ enum class EffectType {
     RadialGradient,
     Shimmer,
     ChromaticShimmer,
-    PulseGradient,
+    Ember,
     RainbowWave,
     ConicRainbow,
-    Fire,
+    Aurora,
     Sparkle,
     Plasma,
-    Scanline
+    Scanline,
+    Enchant,
+    Frost
 };
 
 static EffectType ParseEffectType(const std::string& str) {
@@ -74,13 +76,16 @@ static EffectType ParseEffectType(const std::string& str) {
     if (s == "RadialGradient") return EffectType::RadialGradient;
     if (s == "Shimmer") return EffectType::Shimmer;
     if (s == "ChromaticShimmer") return EffectType::ChromaticShimmer;
-    if (s == "PulseGradient") return EffectType::PulseGradient;
+    if (s == "Ember") return EffectType::Ember;
+    if (s == "PulseGradient") return EffectType::Ember;  // backward compat
     if (s == "RainbowWave") return EffectType::RainbowWave;
     if (s == "ConicRainbow") return EffectType::ConicRainbow;
-    if (s == "Fire") return EffectType::Fire;
+    if (s == "Aurora") return EffectType::Aurora;
     if (s == "Sparkle") return EffectType::Sparkle;
     if (s == "Plasma") return EffectType::Plasma;
     if (s == "Scanline") return EffectType::Scanline;
+    if (s == "Enchant") return EffectType::Enchant;
+    if (s == "Frost") return EffectType::Frost;
     return EffectType::Gradient;  // Default
 }
 
@@ -239,8 +244,24 @@ TEST(ParseEffectTypeTest, RainbowWave) {
     EXPECT_EQ(ParseEffectType("RainbowWave"), EffectType::RainbowWave);
 }
 
-TEST(ParseEffectTypeTest, Fire) {
-    EXPECT_EQ(ParseEffectType("Fire"), EffectType::Fire);
+TEST(ParseEffectTypeTest, Aurora) {
+    EXPECT_EQ(ParseEffectType("Aurora"), EffectType::Aurora);
+}
+
+TEST(ParseEffectTypeTest, Ember) {
+    EXPECT_EQ(ParseEffectType("Ember"), EffectType::Ember);
+}
+
+TEST(ParseEffectTypeTest, PulseGradientBackwardCompat) {
+    EXPECT_EQ(ParseEffectType("PulseGradient"), EffectType::Ember);
+}
+
+TEST(ParseEffectTypeTest, Enchant) {
+    EXPECT_EQ(ParseEffectType("Enchant"), EffectType::Enchant);
+}
+
+TEST(ParseEffectTypeTest, Frost) {
+    EXPECT_EQ(ParseEffectType("Frost"), EffectType::Frost);
 }
 
 TEST(ParseEffectTypeTest, WithWhitespace) {

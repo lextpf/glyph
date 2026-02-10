@@ -850,7 +850,7 @@ static float RuneEye(float nx, float ny)
     float eyeBot = -ny + .35f - (nx * nx) * 1.2f;  // parabolic lower lid
     float eyeShape = (std::min)(eyeTop, eyeBot);
     float eyeMask = PSmoothstep(.0f, .06f, eyeShape);
-    // Eye outline (where eyeShape ≈ 0)
+    // Eye outline (where eyeShape ~= 0)
     float outline = PGaussian(eyeShape, .03f) * .7f;
     // Pupil: circle in center
     float pupil = PLineAlpha(PRingDist(nx, ny, .15f), .025f, .02f) * .6f;
