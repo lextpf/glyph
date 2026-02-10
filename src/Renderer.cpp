@@ -869,6 +869,12 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.glowIntensity = gl.Intensity;
     snap.glowSamples = gl.Samples;
 
+    const auto& sh = Settings::Shine();
+    snap.enableShine = sh.Enabled;
+    snap.shineIntensity = sh.Intensity;
+    snap.shineFalloff = sh.Falloff;
+    snap.textGlowAlpha = sh.TextGlowAlpha;
+
     const auto& tw = Settings::Typewriter();
     snap.enableTypewriter = tw.Enabled;
     snap.typewriterSpeed = tw.Speed;

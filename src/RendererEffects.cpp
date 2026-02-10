@@ -387,7 +387,8 @@ void ApplyTextEffect(ImDrawList* drawList,
                      bool fastOutlines,
                      const TextEffects::OutlineGlowParams* outlineGlow,
                      const TextEffects::DualOutlineParams* dualOutline,
-                     const TextEffects::WaveParams* wave)
+                     const TextEffects::WaveParams* wave,
+                     const TextEffects::ShineParams* shine)
 {
     // Capture vertex count before rendering for wave displacement
     const int vtxBefore = drawList->VtxBuffer.Size;
@@ -478,6 +479,45 @@ void ApplyTextEffect(ImDrawList* drawList,
                                                  args.dualOutline.lightAngle,
                                                  args.dualOutline.lightBias,
                                                  args.fastOutlines);
+    }
+
+    // Translucent glowing text: boost brightness then reduce alpha so text
+    // looks like a self-luminous light source, not dim transparent glass.
+    // Dark outlines (luminance < 0.15) keep full alpha and original color.
+    if (shine && shine->textGlowAlpha > .0f)
+    {
+        const int vtxTextEnd = drawList->VtxBuffer.Size;
+        const float alphaKeep = 1.0f - shine->textGlowAlpha;
+        const float brightnessBoost = 1.0f + shine->textGlowAlpha * 2.0f;
+        for (int i = vtxBefore; i < vtxTextEnd; ++i)
+        {
+            ImU32 c = drawList->VtxBuffer[i].col;
+            int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
+            int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
+            int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
+            int ca = (c >> IM_COL32_A_SHIFT) & 0xFF;
+
+            float lum = (cr * .299f + cg * .587f + cb * .114f) / 255.0f;
+            if (lum < .15f)
+            {
+                continue;
+            }
+
+            cr = (int)std::min(cr * brightnessBoost, 255.0f);
+            cg = (int)std::min(cg * brightnessBoost, 255.0f);
+            cb = (int)std::min(cb * brightnessBoost, 255.0f);
+            ca = (int)std::clamp(ca * alphaKeep, .0f, 255.0f);
+            drawList->VtxBuffer[i].col = IM_COL32(cr, cg, cb, ca);
+        }
+    }
+
+    // Additive shine overlay (static top-edge highlight)
+    if (shine && shine->enabled && shine->intensity > .0f)
+    {
+        ParticleTextures::PushAdditiveBlend(drawList);
+        TextEffects::AddTextShineOverlay(
+            drawList, font, fontSize, pos, text, shine->intensity, shine->falloff, IM_COL32_WHITE);
+        ParticleTextures::PopBlendState(drawList);
     }
 
     // Apply per-glyph wave displacement to all vertices added during this call
@@ -581,6 +621,20 @@ static TextEffects::WaveParams BuildWaveParams(const RenderSettingsSnapshot& sna
     wave.speed = snap.visual.WaveSpeed;
     wave.time = time;
     return wave;
+}
+
+static TextEffects::ShineParams BuildShineParams(const RenderSettingsSnapshot& snap)
+{
+    TextEffects::ShineParams shine;
+    shine.enabled = snap.enableShine || snap.textGlowAlpha > .0f;
+    shine.textGlowAlpha = snap.textGlowAlpha;
+    if (!shine.enabled)
+    {
+        return shine;
+    }
+    shine.intensity = snap.shineIntensity;
+    shine.falloff = snap.shineFalloff;
+    return shine;
 }
 
 // Computed particle configuration for a single actor label.
@@ -943,6 +997,7 @@ void DrawOrnaments(ImDrawList* dl,
 
     auto ornGlow = BuildOutlineGlow(snap, style);
     auto ornDual = BuildDualOutline(snap, style);
+    auto ornShine = BuildShineParams(snap);
 
     auto drawOrnChar = [&](ImVec2 charPos, const char* ch)
     {
@@ -989,7 +1044,9 @@ void DrawOrnaments(ImDrawList* dl,
                         style.alpha,
                         fastOutlines,
                         ornGlow.enabled ? &ornGlow : nullptr,
-                        ornDual.enabled ? &ornDual : nullptr);
+                        ornDual.enabled ? &ornDual : nullptr,
+                        nullptr,
+                        ornShine.enabled ? &ornShine : nullptr);
     };
 
     const float ornAnchorY =
@@ -1111,6 +1168,7 @@ void DrawTitleText(ImDrawList* dl,
     auto titleGlow = BuildOutlineGlow(snap, style);
     auto titleDual = BuildDualOutline(snap, style);
     auto titleWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
+    auto titleShine = BuildShineParams(snap);
 
     if (d.isPlayer)
     {
@@ -1132,7 +1190,8 @@ void DrawTitleText(ImDrawList* dl,
                         fastOutlines,
                         titleGlow.enabled ? &titleGlow : nullptr,
                         titleDual.enabled ? &titleDual : nullptr,
-                        titleWave.enabled ? &titleWave : nullptr);
+                        titleWave.enabled ? &titleWave : nullptr,
+                        titleShine.enabled ? &titleShine : nullptr);
     }
     else
     {
@@ -1169,6 +1228,7 @@ void DrawMainLineSegments(ImDrawList* dl,
     auto mainGlow = BuildOutlineGlow(snap, style);
     auto mainDual = BuildDualOutline(snap, style);
     auto mainWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
+    auto mainShine = BuildShineParams(snap);
 
     ImVec2 currentPos;
     currentPos.x = layout.startPos.x - layout.totalWidth * .5f +
@@ -1256,7 +1316,8 @@ void DrawMainLineSegments(ImDrawList* dl,
                             fastOutlines,
                             mainGlow.enabled ? &mainGlow : nullptr,
                             mainDual.enabled ? &mainDual : nullptr,
-                            mainWave.enabled ? &mainWave : nullptr);
+                            mainWave.enabled ? &mainWave : nullptr,
+                            mainShine.enabled ? &mainShine : nullptr);
         }
         else
         {
@@ -1280,7 +1341,8 @@ void DrawMainLineSegments(ImDrawList* dl,
                                 fastOutlines,
                                 mainGlow.enabled ? &mainGlow : nullptr,
                                 mainDual.enabled ? &mainDual : nullptr,
-                                mainWave.enabled ? &mainWave : nullptr);
+                                mainWave.enabled ? &mainWave : nullptr,
+                                mainShine.enabled ? &mainShine : nullptr);
             }
             else
             {

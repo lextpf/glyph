@@ -83,6 +83,12 @@ struct RenderSettingsSnapshot
     float outlineColorTint = .0f;
     float shadowColorTint = .0f;
 
+    // Shine Overlay
+    bool enableShine = false;
+    float shineIntensity = .35f;
+    float shineFalloff = 2.0f;
+    float textGlowAlpha = .0f;
+
     // Typewriter
     bool enableTypewriter = false;
     float typewriterSpeed = .0f;
@@ -586,7 +592,8 @@ void ApplyTextEffect(ImDrawList* drawList,
                      bool fastOutlines,
                      const TextEffects::OutlineGlowParams* outlineGlow = nullptr,
                      const TextEffects::DualOutlineParams* dualOutline = nullptr,
-                     const TextEffects::WaveParams* wave = nullptr);
+                     const TextEffects::WaveParams* wave = nullptr,
+                     const TextEffects::ShineParams* shine = nullptr);
 
 /// Draw particle aura effects behind the nameplate.  Renders on splitter
 /// channel 0 (back layer).
