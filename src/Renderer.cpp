@@ -5,6 +5,7 @@
 #include "AppearanceTemplate.h"
 #include "GameState.h"
 #include "ParticleTextures.h"
+#include "TextPostProcess.h"
 
 #include <SKSE/SKSE.h>
 
@@ -333,16 +334,25 @@ static void DrawLabel(const ActorDrawData& d,
         entry.typewriterComplete = false;
     }
 
-    // Reset typewriter on re-entry (actor reappearing or becoming unoccluded)
+    // Reset typewriter and entrance on re-entry (actor reappearing or becoming unoccluded)
     constexpr uint32_t REENTRY_THRESHOLD = 30;
-    if (entry.initialized && entry.typewriterComplete)
+    if (entry.initialized)
     {
         uint32_t framesSinceLastSeen = GetState().frame - prevLastSeenFrame;
         bool becameVisible = entry.wasOccluded && !d.isOccluded;
-        if (framesSinceLastSeen >= REENTRY_THRESHOLD || becameVisible)
+        bool reEntered = framesSinceLastSeen >= REENTRY_THRESHOLD || becameVisible;
+        if (reEntered)
         {
-            entry.typewriterTime = .0f;
-            entry.typewriterComplete = false;
+            if (entry.typewriterComplete)
+            {
+                entry.typewriterTime = .0f;
+                entry.typewriterComplete = false;
+            }
+            if (entry.entranceDone)
+            {
+                entry.entrancePhase = .0f;
+                entry.entranceDone = false;
+            }
         }
     }
 
@@ -363,9 +373,53 @@ static void DrawLabel(const ActorDrawData& d,
         return;
     }
 
+    // Advance entrance/exit animation
+    float entranceAlphaMul = 1.0f;
+    float entranceScaleMul = 1.0f;
+    float entranceYOffset = .0f;
+    if (snap.enableEntrance && !entry.entranceDone)
+    {
+        entry.entrancePhase += dt / std::max(snap.entranceDuration, .05f);
+        if (entry.entrancePhase >= 1.0f)
+        {
+            entry.entrancePhase = 1.0f;
+            entry.entranceDone = true;
+        }
+        const float t = entry.entrancePhase;
+        // Quintic smoothstep for smooth acceleration/deceleration
+        const float ease = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+
+        entranceAlphaMul = ease;
+
+        if (snap.entranceStyle == 0)  // PopIn
+        {
+            // Scale from 0.5 to overshoot, then settle to 1.0
+            const float overshoot = snap.entranceOvershoot;
+            if (t < .7f)
+            {
+                float sub = t / .7f;
+                entranceScaleMul = .5f + sub * (overshoot - .5f);
+            }
+            else
+            {
+                float sub = (t - .7f) / .3f;
+                entranceScaleMul = overshoot + sub * (1.0f - overshoot);
+            }
+        }
+        else if (snap.entranceStyle == 1)  // SlideDown
+        {
+            entranceYOffset = -20.0f * (1.0f - ease);
+        }
+        // Style 2 (Expand) uses the same scale path as PopIn but without overshoot
+        else
+        {
+            entranceScaleMul = .3f + ease * .7f;
+        }
+    }
+
     // Cull off-screen labels
-    const float alpha = entry.alphaSmooth * entry.occlusionSmooth;
-    const float textSizeScale = entry.textSizeScale;
+    const float alpha = entry.alphaSmooth * entry.occlusionSmooth * entranceAlphaMul;
+    const float textSizeScale = entry.textSizeScale * entranceScaleMul;
 
     auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
     if (!renderer)
@@ -397,6 +451,97 @@ static void DrawLabel(const ActorDrawData& d,
     style.outlineWidth = style.nameOutlineWidth;
 
     LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap);
+
+    // Apply entrance Y offset (SlideDown style)
+    if (entranceYOffset != .0f)
+    {
+        layout.startPos.y += entranceYOffset;
+        layout.nameplateCenter.y += entranceYOffset;
+        layout.nameplateTop += entranceYOffset;
+        layout.nameplateBottom += entranceYOffset;
+        layout.mainLineCenterY += entranceYOffset;
+    }
+
+    // Motion trail: push current position and draw ghost copies
+    if (snap.visual.EnableMotionTrail && style.tierIdx >= snap.visual.TrailMinTier &&
+        entry.entranceDone)
+    {
+        ImVec2 curPos = layout.startPos;
+        entry.trailHistory[entry.trailIndex] = curPos;
+        entry.trailIndex = (entry.trailIndex + 1) % ActorCache::TRAIL_HISTORY_SIZE;
+        if (entry.trailIndex == 0)
+        {
+            entry.trailFilled = true;
+        }
+
+        int count = entry.trailFilled ? ActorCache::TRAIL_HISTORY_SIZE : entry.trailIndex;
+        int trailLen = std::min(count, snap.visual.TrailLength);
+
+        if (trailLen > 0)
+        {
+            // Check if label has moved enough
+            int newest = (entry.trailIndex - 1 + ActorCache::TRAIL_HISTORY_SIZE) %
+                         ActorCache::TRAIL_HISTORY_SIZE;
+            int oldest = (entry.trailIndex - trailLen + ActorCache::TRAIL_HISTORY_SIZE) %
+                         ActorCache::TRAIL_HISTORY_SIZE;
+            float dx = entry.trailHistory[newest].x - entry.trailHistory[oldest].x;
+            float dy = entry.trailHistory[newest].y - entry.trailHistory[oldest].y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+
+            if (dist > snap.visual.TrailMinDistance)
+            {
+                const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+                const int chBack = gpuGlow ? 1 : 0;
+                splitter->SetCurrentChannel(drawList, chBack);
+
+                // Draw ghosts from oldest to newest (newest = most visible)
+                for (int i = trailLen - 1; i >= 1; --i)
+                {
+                    int idx = (entry.trailIndex - 1 - i + ActorCache::TRAIL_HISTORY_SIZE) %
+                              ActorCache::TRAIL_HISTORY_SIZE;
+                    ImVec2 ghostPos = entry.trailHistory[idx];
+
+                    float t = (float)i / (float)trailLen;
+                    float ghostAlpha =
+                        snap.visual.TrailAlpha * std::pow(1.0f - t, snap.visual.TrailFalloff);
+                    ghostAlpha *= style.alpha;
+                    if (ghostAlpha < .01f)
+                    {
+                        continue;
+                    }
+
+                    // Render ghost text for each main line segment
+                    float ghostCursorX = ghostPos.x - layout.totalWidth * .5f;
+                    float ghostY = ghostPos.y + layout.mainLineY;
+                    for (const auto& seg : layout.segments)
+                    {
+                        if (seg.displayText.empty())
+                        {
+                            ghostCursorX += seg.size.x + layout.segmentPadding;
+                            continue;
+                        }
+                        float vOff = (layout.mainLineHeight - seg.size.y) * .5f;
+                        ImVec4 ghostCol =
+                            seg.isLevel
+                                ? ImVec4(
+                                      style.LcLevel.x, style.LcLevel.y, style.LcLevel.z, ghostAlpha)
+                                : ImVec4(
+                                      style.LcName.x, style.LcName.y, style.LcName.z, ghostAlpha);
+                        drawList->AddText(seg.font,
+                                          seg.fontSize,
+                                          ImVec2(ghostCursorX, ghostY + vOff),
+                                          ImGui::ColorConvertFloat4ToU32(ghostCol),
+                                          seg.displayText.c_str());
+                        ghostCursorX += seg.size.x + layout.segmentPadding;
+                    }
+                }
+
+                // Restore to front channel
+                const int chFront = gpuGlow ? 2 : 1;
+                splitter->SetCurrentChannel(drawList, chFront);
+            }
+        }
+    }
 
     DrawParticles(drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap);
     DrawOrnaments(
@@ -701,6 +846,22 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.titleMainGap = so.TitleMainGap;
     snap.outlineMinScale = so.OutlineMinScale;
     snap.proportionalSpacing = so.ProportionalSpacing;
+    snap.enableOutlineGlow = so.OutlineGlowEnabled;
+    snap.outlineGlowScale = so.OutlineGlowScale;
+    snap.outlineGlowAlpha = so.OutlineGlowAlpha;
+    snap.outlineGlowRings = so.OutlineGlowRings;
+    snap.outlineGlowR = so.OutlineGlowR;
+    snap.outlineGlowG = so.OutlineGlowG;
+    snap.outlineGlowB = so.OutlineGlowB;
+    snap.outlineGlowTierTint = so.OutlineGlowTierTint;
+    snap.dualOutlineEnabled = so.DualOutlineEnabled;
+    snap.innerOutlineTint = so.InnerOutlineTint;
+    snap.innerOutlineAlpha = so.InnerOutlineAlpha;
+    snap.innerOutlineScale = so.InnerOutlineScale;
+    snap.directionalLightAngle = so.DirectionalLightAngle;
+    snap.directionalLightBias = so.DirectionalLightBias;
+    snap.outlineColorTint = so.OutlineColorTint;
+    snap.shadowColorTint = so.ShadowColorTint;
 
     const auto& gl = Settings::Glow();
     snap.enableGlow = gl.Enabled;
@@ -712,6 +873,14 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.enableTypewriter = tw.Enabled;
     snap.typewriterSpeed = tw.Speed;
     snap.typewriterDelay = tw.Delay;
+
+    const auto& tr = Settings::Transition();
+    snap.enableEntrance = tr.EnableEntrance;
+    snap.entranceStyle = tr.EntranceStyle;
+    snap.entranceDuration = tr.EntranceDuration;
+    snap.entranceOvershoot = tr.EntranceOvershoot;
+    snap.enableExit = tr.EnableExit;
+    snap.exitDuration = tr.ExitDuration;
 
     const auto& orn = Settings::Ornament();
     snap.enableOrnaments = orn.Enabled;
@@ -729,6 +898,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.enableWisps = part.EnableWisps;
     snap.enableRunes = part.EnableRunes;
     snap.enableOrbs = part.EnableOrbs;
+    snap.enableCrystals = part.EnableCrystals;
     snap.particleCount = part.Count;
     snap.particleSize = part.Size;
     snap.particleSpeed = part.Speed;
@@ -746,6 +916,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.effectAlphaMax = ac.EffectAlphaMax;
     snap.strengthMin = ac.StrengthMin;
     snap.strengthMax = ac.StrengthMax;
+    snap.tierVibrancyBoost = ac.TierVibrancyBoost;
     snap.alphaSettleTime = ac.AlphaSettleTime;
     snap.scaleSettleTime = ac.ScaleSettleTime;
     snap.positionSettleTime = ac.PositionSettleTime;
@@ -871,12 +1042,28 @@ void Draw()
         ResolveOverlaps(localSnap, snap);
     }
 
+    // 3-channel splitter: [0]=glow (GPU blur), [1]=particles, [2]=text+shadow+outline
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     ImDrawListSplitter splitter;
-    splitter.Split(drawList, 2);
+    splitter.Split(drawList, gpuGlow ? 3 : 2);
+
+    if (gpuGlow)
+    {
+        TextPostProcess::SetGlowParams(snap.glowRadius, snap.glowIntensity);
+        splitter.SetCurrentChannel(drawList, 0);
+        drawList->AddCallback(TextPostProcess::BeginGlowCapture, nullptr);
+    }
 
     for (auto& d : localSnap)
     {
         DrawLabel(d, drawList, &splitter, snap);
+    }
+
+    if (gpuGlow)
+    {
+        splitter.SetCurrentChannel(drawList, 0);
+        drawList->AddCallback(TextPostProcess::EndGlowAndComposite, nullptr);
+        drawList->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     }
 
     splitter.Merge(drawList);
