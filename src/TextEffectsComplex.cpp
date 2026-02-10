@@ -128,20 +128,9 @@ void AddTextAurora(ImDrawList* list,
         float t =
             Saturate((combined * .6f + curtain * .25f + swayFactor * .15f) * intensity + shimmer);
 
-        // Three-color gradient for rich aurora appearance
-        ImU32 finalColor;
-        if (t < .4f)
-        {
-            finalColor = LerpColorU32(colA, colMid, t * 2.5f);
-        }
-        else if (t < .7f)
-        {
-            finalColor = LerpColorU32(colMid, colB, (t - .4f) * 3.33f);
-        }
-        else
-        {
-            finalColor = LerpColorU32(colB, colBright, (t - .7f) * 3.33f);
-        }
+        // Continuous 4-color gradient with smoothstep transitions
+        ImU32 mid1 = ThreeColorGradient(colA, colMid, colB, t);
+        ImU32 finalColor = LerpColorU32(mid1, colBright, SmoothStep(Saturate(t * 2.0f - 1.0f)));
 
         list->VtxBuffer[i].col = finalColor;
     }
@@ -181,10 +170,11 @@ void AddTextSparkle(ImDrawList* list,
         float totalSparkle = .0f;
         float colorShift = .0f;  // For varying sparkle color
 
-        // Layer 1: Large slow-twinkling stars
+        // Layer 1: Large slow-twinkling stars (soft threshold)
         float seed1 = Hash(std::floor(p.x * .06f), std::floor(p.y * .06f));
-        if (seed1 > (1.0f - density * .4f))
         {
+            float thresh1 = 1.0f - density * .4f;
+            float mask1 = SmoothStep(Saturate((seed1 - thresh1) / (density * .15f + .01f)));
             float phase1 = seed1 * TWO_PI;
             float sparkleTime1 = time * speed * (.6f + seed1 * .4f);
             float sparkle1 = std::sin(sparkleTime1 + phase1);
@@ -198,43 +188,45 @@ void AddTextSparkle(ImDrawList* list,
                 std::sqrt((gridX - .5f) * (gridX - .5f) + (gridY - .5f) * (gridY - .5f));
             float starPattern = std::max(.0f, 1.0f - distFromCenter * 3.0f);
 
-            totalSparkle += sparkle1 * starPattern * .9f;
-            colorShift += sparkle1 * .3f;
+            totalSparkle += sparkle1 * starPattern * .9f * mask1;
+            colorShift += sparkle1 * .3f * mask1;
         }
 
-        // Layer 2: Medium fast-twinkling sparkles
+        // Layer 2: Medium fast-twinkling sparkles (soft threshold)
         float seed2 = Hash(std::floor(p.x * .12f) + 50.0f, std::floor(p.y * .12f) + 50.0f);
-        if (seed2 > (1.0f - density * .7f))
         {
+            float thresh2 = 1.0f - density * .7f;
+            float mask2 = SmoothStep(Saturate((seed2 - thresh2) / (density * .15f + .01f)));
             float phase2 = seed2 * TWO_PI;
             float sparkleTime2 = time * speed * 1.8f * (.8f + seed2 * .4f);
             float sparkle2 = std::sin(sparkleTime2 + phase2);
             sparkle2 = std::max(.0f, sparkle2);
             sparkle2 = std::pow(sparkle2, 5.0f);
-            totalSparkle += sparkle2 * .6f;
+            totalSparkle += sparkle2 * .6f * mask2;
         }
 
-        // Layer 3: Fine shimmer dust
+        // Layer 3: Fine shimmer dust (soft threshold)
         float seed3 = Hash(std::floor(p.x * .2f) + 100.0f, std::floor(p.y * .2f) + 100.0f);
-        if (seed3 > (1.0f - density * .9f))
         {
+            float thresh3 = 1.0f - density * .9f;
+            float mask3 = SmoothStep(Saturate((seed3 - thresh3) / (density * .15f + .01f)));
             float phase3 = seed3 * TWO_PI;
             float sparkle3 = std::sin(time * speed * 2.5f + phase3);
             sparkle3 = std::max(.0f, sparkle3);
             sparkle3 = std::pow(sparkle3, 8.0f);
-            totalSparkle += sparkle3 * .35f;
+            totalSparkle += sparkle3 * .35f * mask3;
         }
 
-        // Layer 4: Rare brilliant flares
+        // Layer 4: Rare brilliant flares (soft threshold)
         float seed4 = Hash(std::floor(p.x * .04f) + 200.0f, std::floor(p.y * .04f) + 200.0f);
-        if (seed4 > .93f)
         {
+            float mask4 = SmoothStep(Saturate((seed4 - .88f) / .1f));
             float phase4 = seed4 * TWO_PI;
             float flare = std::sin(time * speed * .4f + phase4);
             flare = std::max(.0f, flare);
             flare = std::pow(flare, 2.0f);
-            totalSparkle += flare * 1.5f;
-            colorShift += flare * .6f;  // Flares shift toward white
+            totalSparkle += flare * 1.5f * mask4;
+            colorShift += flare * .6f * mask4;
         }
 
         totalSparkle = Saturate(totalSparkle * intensity);
@@ -298,16 +290,8 @@ void AddTextPlasma(ImDrawList* list,
         plasma = (plasma + 5.2f) / 10.4f;
         plasma = SmoothStep(plasma);  // Use quintic smoothing
 
-        // Three-color gradient for richer appearance
-        ImU32 finalColor;
-        if (plasma < .5f)
-        {
-            finalColor = LerpColorU32(colA, colMid, plasma * 2.0f);
-        }
-        else
-        {
-            finalColor = LerpColorU32(colMid, colB, (plasma - .5f) * 2.0f);
-        }
+        // Continuous 3-color gradient with smoothstep transitions
+        ImU32 finalColor = ThreeColorGradient(colA, colMid, colB, plasma);
 
         list->VtxBuffer[i].col = finalColor;
     }
@@ -415,26 +399,15 @@ void AddTextEnchant(ImDrawList* list,
         // Combine for organic, flowing pattern
         float combined = (energy * .6f + energy2 * .4f);
 
-        // Pulsing highlight at noise peaks
-        float highlight = Saturate((combined - .55f) * 4.0f) * intensity;
+        // Pulsing highlight at noise peaks (smooth transition)
+        float highlight = SmoothStep(Saturate((combined - .45f) * 2.5f)) * intensity;
 
         // Smooth base blend driven by noise
         float t = Saturate(combined * intensity);
 
-        // Three-color gradient: colA -> colMid -> colB with bright highlights
-        ImU32 finalColor;
-        if (t < .4f)
-        {
-            finalColor = LerpColorU32(colA, colMid, t * 2.5f);
-        }
-        else if (t < .7f)
-        {
-            finalColor = LerpColorU32(colMid, colB, (t - .4f) * 3.33f);
-        }
-        else
-        {
-            finalColor = LerpColorU32(colB, colBright, (t - .7f) * 3.33f);
-        }
+        // Continuous 4-color gradient with smoothstep transitions
+        ImU32 mid1 = ThreeColorGradient(colA, colMid, colB, t);
+        ImU32 finalColor = LerpColorU32(mid1, colBright, SmoothStep(Saturate(t * 2.0f - 1.0f)));
 
         // Add bright highlight pulse at energy peaks
         if (highlight > .0f)
@@ -484,7 +457,8 @@ void AddTextFrost(ImDrawList* list,
         float frostPattern = (frost1 * .6f + frost2 * .4f) * creep;
 
         // Apply density threshold for crystalline look
-        float frostMask = Saturate((frostPattern - (1.0f - density)) * 3.0f);
+        float frostThreshold = 1.0f - density;
+        float frostMask = SmoothStep(Saturate((frostPattern - frostThreshold + .1f) * 2.0f));
 
         // Tint base color toward icy blue-white at frosted areas
         ImU32 frosted = LerpColorU32(base, iceWhite, frostMask * .4f);
@@ -492,24 +466,25 @@ void AddTextFrost(ImDrawList* list,
         // Sparkle flashes: bright white points that twinkle
         float sparkle = .0f;
 
-        // Layer 1: Medium sparkles
+        // Layer 1: Medium sparkles (soft threshold)
         float seed1 = Hash(std::floor(p.x * .1f) + 100.0f, std::floor(p.y * .1f) + 100.0f);
-        if (seed1 > (1.0f - density * .5f))
         {
+            float fThresh1 = 1.0f - density * .5f;
+            float fMask1 = SmoothStep(Saturate((seed1 - fThresh1) / (density * .15f + .01f)));
             float phase = seed1 * TWO_PI;
             float s1 = std::sin(time * speed * 2.0f + phase);
             s1 = (std::max)(.0f, s1);
-            sparkle += std::pow(s1, 6.0f) * .7f;
+            sparkle += std::pow(s1, 6.0f) * .7f * fMask1;
         }
 
-        // Layer 2: Rare brilliant flash
+        // Layer 2: Rare brilliant flash (soft threshold)
         float seed2 = Hash(std::floor(p.x * .05f) + 200.0f, std::floor(p.y * .05f) + 200.0f);
-        if (seed2 > .9f)
         {
+            float fMask2 = SmoothStep(Saturate((seed2 - .85f) / .1f));
             float phase = seed2 * TWO_PI;
             float s2 = std::sin(time * speed * .8f + phase);
             s2 = (std::max)(.0f, s2);
-            sparkle += std::pow(s2, 3.0f) * 1.2f;
+            sparkle += std::pow(s2, 3.0f) * 1.2f * fMask2;
         }
 
         sparkle = Saturate(sparkle * sparkleIntensity);
@@ -568,7 +543,10 @@ void AddTextGlow(ImDrawList* list,
     for (int layer = 0; layer < numLayers; ++layer)
     {
         float layerRadius = radius * layers[layer].radiusMul;
-        int layerAlpha = (int)(baseAlpha * intensity * layers[layer].alphaMul);
+        // Divide by sample count so additive accumulation reaches the
+        // intended brightness instead of oversaturating at the center.
+        int numOffsets = (samples > 4) ? 8 : 4;
+        int layerAlpha = (int)(baseAlpha * intensity * layers[layer].alphaMul / (float)numOffsets);
         layerAlpha = std::clamp(layerAlpha, 0, 255);
         if (layerAlpha < 3)
         {
@@ -589,7 +567,6 @@ void AddTextGlow(ImDrawList* list,
             {-layerRadius * .707f, -layerRadius * .707f},
         };
 
-        int numOffsets = (samples > 4) ? 8 : 4;
         for (int i = 0; i < numOffsets; ++i)
         {
             list->AddText(

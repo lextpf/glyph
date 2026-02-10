@@ -116,12 +116,15 @@ void DrawOutlineGlow(ImDrawList* list,
     // Draw concentric rings from outermost (faintest) to innermost (brightest)
     for (int ring = rings; ring >= 1; --ring)
     {
-        // Ring offset scales: ring 1 = 1.6x, ring 2 = 2.2x, ring 3 = 2.8x
-        float ringScale = glowScale + (ring - 1) * .6f;
+        // Normalized ring position: 0 = innermost, 1 = outermost
+        float ringT = (float)(ring - 1) / (float)(std::max)(rings - 1, 1);
+
+        // Quadratic spacing growth for wider outer rings
+        float ringScale = glowScale * (1.0f + ringT * ringT * 2.0f);
         float ringOffset = outlineWidth * ringScale;
 
-        // Alpha falls off per ring: innermost is peak, outermost is faintest
-        float ringAlphaFactor = 1.0f / (float)ring;
+        // Gaussian alpha falloff: smooth decay without visible stepping
+        float ringAlphaFactor = std::exp(-2.5f * ringT * ringT);
         float finalAlpha = glowAlpha * ringAlphaFactor;
         int ringAlpha = std::clamp((int)(ga * finalAlpha + .5f), 0, 255);
         if (ringAlpha <= 0)
