@@ -1010,17 +1010,29 @@ void DrawOrnaments(ImDrawList* dl,
     float totalSpacing = snap.ornamentSpacing * 1.35f * spacingScale + extraPadding;
     float ornamentCharGap = std::max(2.0f, ornamentSize * .16f);
 
-    ImU32 ornColL =
-        ImGui::ColorConvertFloat4ToU32(ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha));
-    ImU32 ornColR =
-        ImGui::ColorConvertFloat4ToU32(ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, style.alpha));
+    // Per-tier ornament color overrides bypass pastelization for punchier ornaments.
+    // Special titles keep their dedicated color (already stored in style.Lc/Rc).
+    ImVec4 ornLv, ornRv;
+    if (style.specialTitle)
+    {
+        ornLv = ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha);
+        ornRv = ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, style.alpha);
+    }
+    else
+    {
+        const auto& oL = tier.ornamentLeftColor ? *tier.ornamentLeftColor : tier.leftColor;
+        const auto& oR = tier.ornamentRightColor ? *tier.ornamentRightColor : tier.rightColor;
+        ornLv = ImVec4(oL.r, oL.g, oL.b, style.alpha);
+        ornRv = ImVec4(oR.r, oR.g, oR.b, style.alpha);
+    }
+    ImU32 ornColL = ImGui::ColorConvertFloat4ToU32(ornLv);
+    ImU32 ornColR = ImGui::ColorConvertFloat4ToU32(ornRv);
     ImU32 ornHighlight = ImGui::ColorConvertFloat4ToU32(
         ImVec4(tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.alpha));
     ImU32 ornOutline = IM_COL32(0, 0, 0, (int)(style.alpha * snap.outlineAlpha * 255.0f));
     float ornOutlineWidth = style.outlineWidth * (ornamentSize / layout.nameFontSize);
 
-    ImU32 glowColor =
-        ImGui::ColorConvertFloat4ToU32(ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha));
+    ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(ornLv);
     bool showOrnGlow = snap.enableGlow && snap.glowIntensity > .0f && style.tierAllowsGlow;
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const int chBack = gpuGlow ? 1 : 0;
