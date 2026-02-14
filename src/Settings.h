@@ -246,16 +246,18 @@ struct TierDefinition
     Color3 rightColor;              ///< RGB color for name gradient right/bottom
     Color3 highlightColor;          ///< RGB color for shimmer/sparkle highlights
 
-    /// Per-element color overrides (optional - falls back to derived from leftColor/rightColor)
-    std::optional<Color3> titleLeftColor;   ///< Title gradient left (default: derived from name)
+    /// Per-element color overrides (optional - falls back to derived tier accents)
+    std::optional<Color3>
+        titleLeftColor;  ///< Title gradient left (default: companion accent from tier palette)
     std::optional<Color3> titleRightColor;  ///< Title gradient right
-    std::optional<Color3> levelLeftColor;   ///< Level gradient left (default: mixed from name)
+    std::optional<Color3>
+        levelLeftColor;  ///< Level gradient left (default: softened tier/highlight blend)
     std::optional<Color3> levelRightColor;  ///< Level gradient right
     std::optional<Color3> particleColor;    ///< Particle tint (default: highlightColor)
     std::optional<Color3>
-        ornamentLeftColor;  ///< Ornament gradient left (default: raw tier leftColor)
+        ornamentLeftColor;  ///< Ornament gradient left (default: vivid title/highlight accent)
     std::optional<Color3>
-        ornamentRightColor;  ///< Ornament gradient right (default: raw tier rightColor)
+        ornamentRightColor;  ///< Ornament gradient right (default: vivid title/highlight accent)
 
     EffectParams titleEffect;  ///< Visual effect for title text (player only)
     EffectParams nameEffect;   ///< Visual effect for name text (player only)
