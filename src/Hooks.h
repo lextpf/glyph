@@ -57,12 +57,11 @@
  *
  * ## :material-hook: Hooked Functions
  *
- * | Function | Method | Address/Index | Purpose |
- * |---|---|---|---|
- * | `BSGraphics::Renderer::CreateD3DAndSwapChain` | Thunk call | REL_ID(75595, 77226) | D3D11
- * device/swapchain init | | `HUDMenu::PostDisplay` | VTable | vtable[6] | Per-frame overlay
- * rendering | | `IDXGISwapChain::Present` | COM VTable | vtable[8] | Fallback render for upscaler
- * compat |
+ * | Function                  | Method     | Address/Index        | Purpose              |
+ * |---------------------------|------------|----------------------|----------------------|
+ * | `CreateD3DAndSwapChain`   | Thunk call | REL_ID(75595,77226) | D3D11 device init    |
+ * | `HUDMenu::PostDisplay`    | VTable     | vtable[6]           | Per-frame overlay    |
+ * | `IDXGISwapChain::Present` | COM VTable | vtable[8]           | Upscaler fallback    |
  *
  * The Present hook acts as a safety net: if upscalers (DLSS, FSR) restructure
  * the pipeline and PostDisplay is skipped, the overlay renders in PresentHook

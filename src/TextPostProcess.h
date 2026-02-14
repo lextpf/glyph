@@ -21,6 +21,12 @@
  * ```
  *
  * Replaces the previous 24-call AddTextGlow with a proper Gaussian blur.
+ *
+ * ## :material-divide: Color Divide Pipeline
+ *
+ * ```
+ * Snapshot backbuffer -> nametag draws to offscreen RT -> Photoshop-style Color Divide composite
+ * ```
  */
 namespace TextPostProcess
 {

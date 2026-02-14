@@ -101,7 +101,8 @@ int GetTextureCount(int style);
 
 /**
  * Get a texture based on particle index.
- * Uses particle index to select consistently (no flickering).
+ * Despite the name, selection is deterministic (hash-based, not random)
+ * to avoid flickering across frames.
  * @param style Particle style
  * @param particleIndex Index of the particle
  * @return ImTextureID or empty if not loaded
