@@ -5,7 +5,7 @@ REM ============================================================================
 REM This script:
 REM   1. Runs clang-format on source files
 REM   2. Configures the project using CMake with the vs2022-windows preset
-REM   3. Builds the Release configuration
+REM   3. Builds the Release plugin target serially for deterministic local builds
 REM   4. Generates documentation with doxide (if available)
 REM   5. Builds the documentation site with mkdocs (if available)
 REM ============================================================================
@@ -49,9 +49,9 @@ echo.
 REM ============================================================================
 REM STEP 2: Build Release
 REM ============================================================================
-echo [3/5] Building Release...
+echo [3/5] Building Release plugin target...
 echo ----------------------------------------------------------------------------
-cmake --build build --config Release
+cmake --build build --config Release --target glyph -- /m:1
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Build failed
     exit /b %ERRORLEVEL%
