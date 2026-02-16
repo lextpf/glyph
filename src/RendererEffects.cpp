@@ -78,6 +78,43 @@ static void ApplyTextTransparency(ImDrawList* drawList,
     }
 }
 
+static ImVec4 MixVec4(const ImVec4& a, const ImVec4& b, float t)
+{
+    t = std::clamp(t, .0f, 1.0f);
+    return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.0f);
+}
+
+static void BoostSaturation(ImVec4& c, float amount)
+{
+    float gray = c.x * .299f + c.y * .587f + c.z * .114f;
+    c.x = std::clamp(gray + (c.x - gray) * amount, .0f, 1.0f);
+    c.y = std::clamp(gray + (c.y - gray) * amount, .0f, 1.0f);
+    c.z = std::clamp(gray + (c.z - gray) * amount, .0f, 1.0f);
+}
+
+static ImVec4 DeriveSupportTint(const ImVec4& left,
+                                const ImVec4& right,
+                                const Settings::Color3& highlight,
+                                float highlightMix,
+                                float saturationBoost)
+{
+    ImVec4 support = MixVec4(left, right, .5f);
+    support = MixVec4(support, ImVec4(highlight.r, highlight.g, highlight.b, 1.0f), highlightMix);
+    BoostSaturation(support, saturationBoost);
+    support.w = 1.0f;
+    return support;
+}
+
+static ImU32 PackSupportTint(const ImVec4& tint, float tintFactor, float alpha)
+{
+    tintFactor = std::clamp(tintFactor, .0f, 1.0f);
+    alpha = TextEffects::Saturate(alpha);
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(std::clamp(tint.x * tintFactor, .0f, 1.0f),
+                                                 std::clamp(tint.y * tintFactor, .0f, 1.0f),
+                                                 std::clamp(tint.z * tintFactor, .0f, 1.0f),
+                                                 alpha));
+}
+
 static void ApplyNone(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
@@ -586,7 +623,8 @@ void ApplyTextEffect(ImDrawList* drawList,
 
 // Build outline glow params from snapshot and tier color.
 static TextEffects::OutlineGlowParams BuildOutlineGlow(const RenderSettingsSnapshot& snap,
-                                                       const LabelStyle& style)
+                                                       const ImVec4& supportTint,
+                                                       float alpha)
 {
     TextEffects::OutlineGlowParams glow;
     glow.enabled = snap.enableOutlineGlow;
@@ -607,19 +645,20 @@ static TextEffects::OutlineGlowParams BuildOutlineGlow(const RenderSettingsSnaps
     if (snap.outlineGlowTierTint)
     {
         float t = .35f;  // blend 35% tier color into the glow
-        gr = gr + (style.Lc.x - gr) * t;
-        gg = gg + (style.Lc.y - gg) * t;
-        gb = gb + (style.Lc.z - gb) * t;
+        gr = gr + (supportTint.x - gr) * t;
+        gg = gg + (supportTint.y - gg) * t;
+        gb = gb + (supportTint.z - gb) * t;
     }
 
-    int a = std::clamp((int)(style.alpha * 255.0f + .5f), 0, 255);
+    int a = std::clamp((int)(alpha * 255.0f + .5f), 0, 255);
     glow.color = IM_COL32((int)(gr * 255.0f), (int)(gg * 255.0f), (int)(gb * 255.0f), a);
     return glow;
 }
 
 // Build dual-tone directional outline params from snapshot and tier color.
 static TextEffects::DualOutlineParams BuildDualOutline(const RenderSettingsSnapshot& snap,
-                                                       const LabelStyle& style)
+                                                       const ImVec4& supportTint,
+                                                       float alpha)
 {
     TextEffects::DualOutlineParams dual;
     dual.enabled = snap.dualOutlineEnabled;
@@ -627,10 +666,11 @@ static TextEffects::DualOutlineParams BuildDualOutline(const RenderSettingsSnaps
     {
         return dual;
     }
-    // Use the left tier color as the tint target
-    int a = std::clamp((int)(style.alpha * 255.0f + .5f), 0, 255);
-    dual.tierColor = IM_COL32(
-        (int)(style.Lc.x * 255.0f), (int)(style.Lc.y * 255.0f), (int)(style.Lc.z * 255.0f), a);
+    int a = std::clamp((int)(alpha * 255.0f + .5f), 0, 255);
+    dual.tierColor = IM_COL32((int)(supportTint.x * 255.0f),
+                              (int)(supportTint.y * 255.0f),
+                              (int)(supportTint.z * 255.0f),
+                              a);
     dual.innerScale = snap.innerOutlineScale;
     dual.tintFactor = snap.innerOutlineTint;
     dual.alphaFactor = snap.innerOutlineAlpha;
@@ -1072,17 +1112,20 @@ void DrawOrnaments(ImDrawList* dl,
     ImU32 ornColR = ImGui::ColorConvertFloat4ToU32(ornRv);
     ImU32 ornHighlight = ImGui::ColorConvertFloat4ToU32(
         ImVec4(tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.alpha));
-    ImU32 ornOutline = IM_COL32(0, 0, 0, (int)(style.alpha * snap.outlineAlpha * 255.0f));
+    ImVec4 ornSupportTint = DeriveSupportTint(ornLv, ornRv, tier.highlightColor, .18f, 1.15f);
+    ImU32 ornOutline =
+        PackSupportTint(ornSupportTint, snap.outlineColorTint, style.alpha * snap.outlineAlpha);
     float ornOutlineWidth = style.outlineWidth * (ornamentSize / layout.nameFontSize);
 
-    ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(ornLv);
+    ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(ornSupportTint.x, ornSupportTint.y, ornSupportTint.z, style.alpha));
     bool showOrnGlow = snap.enableGlow && snap.glowIntensity > .0f && style.tierAllowsGlow;
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const int chBack = gpuGlow ? 1 : 0;
     const int chFront = gpuGlow ? 2 : 1;
 
-    auto ornGlow = BuildOutlineGlow(snap, style);
-    auto ornDual = BuildDualOutline(snap, style);
+    auto ornGlow = BuildOutlineGlow(snap, ornSupportTint, style.alpha);
+    auto ornDual = BuildDualOutline(snap, ornSupportTint, style.alpha);
     auto ornShine = BuildShineParams(snap);
     const bool ornNeedsTextAdjust =
         snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
@@ -1199,20 +1242,25 @@ void DrawTitleText(ImDrawList* dl,
                     layout.startPos.y + layout.titleY);
 
     float lodTitleAlpha = style.alpha * lodTitleFactor;
-    ImU32 titleShadow = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlpha * .5f));
+    float lodTitleAlphaFinal = style.titleAlpha * lodTitleFactor;
+    ImU32 titleShadow =
+        d.isPlayer
+            ? PackSupportTint(style.supportTitle, snap.shadowColorTint, lodTitleAlphaFinal * .5f)
+            : ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlpha * .5f));
 
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const int chFront = gpuGlow ? 2 : 1;
 
     if (snap.enableGlow && snap.glowIntensity > .0f && style.tierAllowsGlow)
     {
-        ImVec4 glowColorVec =
-            style.specialTitle
-                ? ImVec4(style.specialGlowColor.x,
-                         style.specialGlowColor.y,
-                         style.specialGlowColor.z,
-                         style.alpha)
-                : ImVec4(style.LcTitle.x, style.LcTitle.y, style.LcTitle.z, style.alpha);
+        ImVec4 glowColorVec = style.specialTitle ? ImVec4(style.specialGlowColor.x,
+                                                          style.specialGlowColor.y,
+                                                          style.specialGlowColor.z,
+                                                          lodTitleAlphaFinal)
+                                                 : ImVec4(style.supportTitle.x,
+                                                          style.supportTitle.y,
+                                                          style.supportTitle.z,
+                                                          lodTitleAlphaFinal);
         ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(glowColorVec);
 
         if (gpuGlow)
@@ -1251,10 +1299,11 @@ void DrawTitleText(ImDrawList* dl,
                 titleShadow,
                 titleDisplayText);
 
-    float lodTitleAlphaFinal = style.titleAlpha * lodTitleFactor;
     float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
-    auto titleGlow = BuildOutlineGlow(snap, style);
-    auto titleDual = BuildDualOutline(snap, style);
+    ImU32 titleOutline = PackSupportTint(
+        style.supportTitle, snap.outlineColorTint, lodTitleAlphaFinal * snap.outlineAlpha);
+    auto titleGlow = BuildOutlineGlow(snap, style.supportTitle, lodTitleAlphaFinal);
+    auto titleDual = BuildDualOutline(snap, style.supportTitle, lodTitleAlphaFinal);
     auto titleWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
     auto titleShine = BuildShineParams(snap);
     const bool titleNeedsTextAdjust =
@@ -1271,7 +1320,7 @@ void DrawTitleText(ImDrawList* dl,
                         style.colLTitle,
                         style.colRTitle,
                         style.highlight,
-                        style.outlineColor,
+                        titleOutline,
                         style.titleOutlineWidth,
                         style.phase01,
                         style.strength,
@@ -1318,8 +1367,18 @@ void DrawMainLineSegments(ImDrawList* dl,
     const float spacingScale = snap.proportionalSpacing ? textSizeScale : 1.0f;
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const int chFront = gpuGlow ? 2 : 1;
-    auto mainGlow = BuildOutlineGlow(snap, style);
-    auto mainDual = BuildDualOutline(snap, style);
+    auto nameGlow = BuildOutlineGlow(snap, style.supportName, style.alpha);
+    auto levelGlow = BuildOutlineGlow(snap, style.supportLevel, style.levelAlpha);
+    auto nameDual = BuildDualOutline(snap, style.supportName, style.alpha);
+    auto levelDual = BuildDualOutline(snap, style.supportLevel, style.levelAlpha);
+    ImU32 nameOutline =
+        PackSupportTint(style.supportName, snap.outlineColorTint, style.alpha * snap.outlineAlpha);
+    ImU32 levelOutline = PackSupportTint(
+        style.supportLevel, snap.outlineColorTint, style.levelAlpha * snap.outlineAlpha);
+    ImU32 nameShadow = PackSupportTint(
+        style.supportName, snap.shadowColorTint, style.alpha * .75f * snap.outlineAlpha);
+    ImU32 levelShadow = PackSupportTint(
+        style.supportLevel, snap.shadowColorTint, style.levelAlpha * .75f * snap.outlineAlpha);
     auto mainWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
     auto mainShine = BuildShineParams(snap);
     const bool mainNeedsTextAdjust =
@@ -1343,15 +1402,18 @@ void DrawMainLineSegments(ImDrawList* dl,
 
         if (snap.enableGlow && snap.glowIntensity > .0f && style.tierAllowsGlow)
         {
-            ImVec4 glowCol =
-                style.specialTitle
-                    ? ImVec4(style.specialGlowColor.x,
-                             style.specialGlowColor.y,
-                             style.specialGlowColor.z,
-                             style.alpha)
-                    : (seg.isLevel
-                           ? ImVec4(style.LcLevel.x, style.LcLevel.y, style.LcLevel.z, style.alpha)
-                           : ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, style.alpha));
+            ImVec4 glowCol = style.specialTitle ? ImVec4(style.specialGlowColor.x,
+                                                         style.specialGlowColor.y,
+                                                         style.specialGlowColor.z,
+                                                         style.alpha)
+                                                : (seg.isLevel ? ImVec4(style.supportLevel.x,
+                                                                        style.supportLevel.y,
+                                                                        style.supportLevel.z,
+                                                                        style.levelAlpha)
+                                                               : ImVec4(style.supportName.x,
+                                                                        style.supportName.y,
+                                                                        style.supportName.z,
+                                                                        style.alpha));
             ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(glowCol);
 
             if (gpuGlow)
@@ -1386,7 +1448,7 @@ void DrawMainLineSegments(ImDrawList* dl,
                     seg.fontSize,
                     ImVec2(pos.x + snap.mainShadowOffsetX * spacingScale,
                            pos.y + snap.mainShadowOffsetY * spacingScale),
-                    style.shadowColor,
+                    seg.isLevel ? levelShadow : nameShadow,
                     seg.displayText.c_str());
 
         float segOutlineWidth = seg.isLevel ? style.levelOutlineWidth : style.nameOutlineWidth;
@@ -1402,15 +1464,15 @@ void DrawMainLineSegments(ImDrawList* dl,
                             style.colLLevel,
                             style.colRLevel,
                             style.highlight,
-                            style.outlineColor,
+                            levelOutline,
                             segOutlineWidth,
                             style.phase01,
                             style.strength,
                             textSizeScale,
                             style.levelAlpha,
                             fastOutlines,
-                            mainGlow.enabled ? &mainGlow : nullptr,
-                            mainDual.enabled ? &mainDual : nullptr,
+                            levelGlow.enabled ? &levelGlow : nullptr,
+                            levelDual.enabled ? &levelDual : nullptr,
                             mainWave.enabled ? &mainWave : nullptr,
                             mainNeedsTextAdjust ? &mainShine : nullptr);
         }
@@ -1427,15 +1489,15 @@ void DrawMainLineSegments(ImDrawList* dl,
                                 style.colL,
                                 style.colR,
                                 style.highlight,
-                                style.outlineColor,
+                                nameOutline,
                                 segOutlineWidth,
                                 style.phase01,
                                 style.strength,
                                 textSizeScale,
                                 style.alpha,
                                 fastOutlines,
-                                mainGlow.enabled ? &mainGlow : nullptr,
-                                mainDual.enabled ? &mainDual : nullptr,
+                                nameGlow.enabled ? &nameGlow : nullptr,
+                                nameDual.enabled ? &nameDual : nullptr,
                                 mainWave.enabled ? &mainWave : nullptr,
                                 mainNeedsTextAdjust ? &mainShine : nullptr);
             }
@@ -1456,7 +1518,9 @@ void DrawMainLineSegments(ImDrawList* dl,
                                              npcOutline,
                                              segOutlineWidth,
                                              fastOutlines,
-                                             mainGlow.enabled ? &mainGlow : nullptr);
+                                             seg.isLevel
+                                                 ? (levelGlow.enabled ? &levelGlow : nullptr)
+                                                 : (nameGlow.enabled ? &nameGlow : nullptr));
                 ApplyTextTransparency(dl, vtxBefore, snap.innerTextAlpha, snap.textGlowAlpha);
             }
         }
