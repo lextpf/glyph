@@ -41,6 +41,21 @@ static void ApplyTextTransparency(ImDrawList* drawList,
         return;
     }
 
+    int maxBatchAlpha = 0;
+    for (int i = vtxStart; i < vtxEnd; ++i)
+    {
+        ImU32 c = drawList->VtxBuffer[i].col;
+        maxBatchAlpha = std::max(maxBatchAlpha, (int)((c >> IM_COL32_A_SHIFT) & 0xFF));
+    }
+    if (maxBatchAlpha <= 0)
+    {
+        return;
+    }
+
+    // Main text fill is the brightest pass that also carries the highest alpha in
+    // the batch. Lower-alpha support layers such as inner outlines, glows, and
+    // shimmer accents should not be made more transparent a second time.
+    const int bodyAlphaThreshold = std::max(8, (maxBatchAlpha * 5 + 5) / 6);
     const float alphaKeep = 1.0f - textGlowAlpha * .20f;
     const float brightnessBoost = 1.0f + textGlowAlpha * .30f;
 
@@ -55,7 +70,7 @@ static void ApplyTextTransparency(ImDrawList* drawList,
         int ca = (c >> IM_COL32_A_SHIFT) & 0xFF;
         const float lum = (cr * .299f + cg * .587f + cb * .114f) / 255.0f;
         const int maxCh = std::max({cr, cg, cb});
-        const bool isTextFill = lum >= .22f && maxCh >= 80;
+        const bool isTextFill = lum >= .22f && maxCh >= 80 && ca >= bodyAlphaThreshold;
 
         if (reduceAlpha && isTextFill)
         {
