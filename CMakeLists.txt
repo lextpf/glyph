@@ -34,7 +34,6 @@ FetchContent_MakeAvailable(CommonLibSSE-NG)
 
 find_package(imgui CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
-find_package(minhook CONFIG REQUIRED)
 find_package(xbyak CONFIG REQUIRED)
 find_path(RAPIDCSV_INCLUDE_DIRS "rapidcsv.h") # Added for CommonLibSSE-NG dependency
 
@@ -144,7 +143,6 @@ target_link_libraries(whois PRIVATE
     CommonLibSSE
     imgui::imgui
     spdlog::spdlog
-    minhook::minhook
     xbyak::xbyak
 )
 # Note: boost-unordered and srell are header-only, no linking needed

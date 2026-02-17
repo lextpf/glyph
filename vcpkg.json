@@ -13,7 +13,6 @@
     },
     "spdlog",
     "rapidcsv",
-    "minhook",
     "boost-unordered",
     "srell",
     "xbyak",
