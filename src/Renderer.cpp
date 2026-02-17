@@ -183,19 +183,6 @@ namespace Renderer
         return 1;  // Invalid, treat as single byte
     }
 
-    // Extract UTF-8 characters from string into a vector of strings
-    static std::vector<std::string> Utf8ToChars(const std::string& str)
-    {
-        std::vector<std::string> chars;
-        const char* s = str.c_str();
-        while (*s) {
-            size_t len = Utf8CharLen(s);
-            chars.emplace_back(s, len);
-            s += len;
-        }
-        return chars;
-    }
-
     // Calculate tight vertical bounds of text glyphs
     static void CalcTightYBoundsFromTop(ImFont *font, float fontSize, const char *text, float &outTop, float &outBottom)
     {
