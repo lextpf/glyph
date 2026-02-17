@@ -50,6 +50,18 @@ ImU32 LerpColorU32(ImU32 a, ImU32 b, float t) {
 
 static inline float Frac(float x) { return x - std::floor(x); }
 
+float LerpRange(float minVal, float maxVal, float t) {
+    t = Saturate(t);
+    return minVal + (maxVal - minVal) * t;
+}
+
+bool IsPrimaryTextBody(int r, int g, int b, int a, int maxBatchAlpha) {
+    const float lum = (r * .299f + g * .587f + b * .114f) / 255.0f;
+    const int maxCh = std::max({r, g, b});
+    const int bodyAlphaThreshold = std::max(8, (maxBatchAlpha * 5 + 5) / 6);
+    return lum >= .22f && maxCh >= 80 && a >= bodyAlphaThreshold;
+}
+
 struct ImVec4 { float x, y, z, w; };
 
 ImVec4 HSVtoRGB(float h, float s, float v, float a) {
@@ -245,4 +257,36 @@ TEST(FracTest, HandlesNegative) {
 TEST(FracTest, HandlesWholeNumbers) {
     EXPECT_NEAR(Frac(5.0f), 0.0f, 0.0001f);
     EXPECT_NEAR(Frac(0.0f), 0.0f, 0.0001f);
+}
+
+// ============================================================================
+// Tests: LerpRange
+// ============================================================================
+
+TEST(LerpRangeTest, ReturnsMinimumAtZero) {
+    EXPECT_FLOAT_EQ(LerpRange(0.2f, 0.6f, 0.0f), 0.2f);
+}
+
+TEST(LerpRangeTest, ReturnsMaximumAtOne) {
+    EXPECT_FLOAT_EQ(LerpRange(0.2f, 0.6f, 1.0f), 0.6f);
+}
+
+TEST(LerpRangeTest, InterpolatesMidpoint) {
+    EXPECT_NEAR(LerpRange(0.15f, 0.60f, 0.5f), 0.375f, 0.0001f);
+}
+
+// ============================================================================
+// Tests: IsPrimaryTextBody
+// ============================================================================
+
+TEST(TextBodyHeuristicTest, IncludesMainFillAtCurrentBatchAlpha) {
+    EXPECT_TRUE(IsPrimaryTextBody(210, 180, 120, 96, 96));
+}
+
+TEST(TextBodyHeuristicTest, ExcludesLowAlphaSupportPass) {
+    EXPECT_FALSE(IsPrimaryTextBody(210, 180, 120, 48, 255));
+}
+
+TEST(TextBodyHeuristicTest, ExcludesDarkOutlinePass) {
+    EXPECT_FALSE(IsPrimaryTextBody(24, 24, 24, 255, 255));
 }
