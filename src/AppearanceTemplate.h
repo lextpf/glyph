@@ -175,6 +175,23 @@ namespace AppearanceTemplate
     bool IsRaceCompatible(RE::TESNPC* templateNPC);
 
     /**
+     * @brief Poll for player readiness and apply pending appearance template.
+     *
+     * Called each frame from the render hook. If a pending apply was requested
+     * (via SetPendingAppearanceApply), waits until the player is fully loaded
+     * and then applies the template.
+     */
+    void CheckPendingAppearanceTemplate();
+
+    /**
+     * @brief Request that the appearance template be applied when the player is ready.
+     *
+     * Sets the pending flag so that CheckPendingAppearanceTemplate() will apply
+     * the template once the player character is fully initialized.
+     */
+    void SetPendingAppearanceApply();
+
+    /**
      * @brief Initialize overlay system (no-op, kept for compatibility).
      */
     void QueryNiOverrideInterface();

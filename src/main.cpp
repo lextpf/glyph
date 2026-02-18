@@ -27,7 +27,6 @@
  */
 #include "PCH.h"
 
-#include <atomic>
 #include <string>
 
 #include "AppearanceTemplate.h"
@@ -102,45 +101,6 @@ namespace ConsoleCommands
     }
 }
 
-// Flag to indicate we're waiting to apply appearance template
-static std::atomic<bool> s_pendingAppearanceApply{false};
-static std::atomic<int> s_checkCount{0};
-
-void CheckPendingAppearanceTemplate()
-{
-    // Log once to confirm function is being called
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        logger::info("CheckPendingAppearanceTemplate called for first time");
-        loggedOnce = true;
-    }
-
-    if (!s_pendingAppearanceApply.load()) {
-        return;
-    }
-
-    // Log every 60 frames to avoid spam
-    int count = s_checkCount.fetch_add(1);
-    bool shouldLog = (count % 60 == 0);
-
-    auto player = RE::PlayerCharacter::GetSingleton();
-    auto playerBase = player ? player->GetActorBase() : nullptr;
-    bool is3DLoaded = player ? player->Is3DLoaded() : false;
-
-    if (shouldLog) {
-        logger::debug("Appearance check #{}: player={}, base={}, 3D={}",
-            count, player != nullptr, playerBase != nullptr, is3DLoaded);
-    }
-
-    // Check if player is fully initialized and in game world
-    if (player && playerBase && is3DLoaded) {
-        logger::info("Player ready after {} checks, applying appearance template", count);
-        s_pendingAppearanceApply.store(false);
-        s_checkCount.store(0);
-        AppearanceTemplate::ApplyIfConfigured();
-    }
-}
-
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
     switch (a_msg->type) {
@@ -164,7 +124,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
             // Loading a save, player should be available soon
             logger::debug("Post load game event received");
             if (Settings::UseTemplateAppearance) {
-                s_pendingAppearanceApply.store(true);
+                AppearanceTemplate::SetPendingAppearanceApply();
             }
             // Test overlay interface after game load
             AppearanceTemplate::TestOverlayOnPlayer();
@@ -176,7 +136,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
             logger::info("UseTemplateAppearance={}, FormID={}, Plugin={}",
                 Settings::UseTemplateAppearance, Settings::TemplateFormID, Settings::TemplatePlugin);
             if (Settings::UseTemplateAppearance) {
-                s_pendingAppearanceApply.store(true);
+                AppearanceTemplate::SetPendingAppearanceApply();
                 logger::info("Pending appearance flag set to TRUE");
             } else {
                 logger::warn("UseTemplateAppearance is FALSE, not setting pending flag");

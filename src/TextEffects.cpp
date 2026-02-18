@@ -1613,11 +1613,11 @@ namespace TextEffects
                         int trailA = std::clamp(static_cast<int>(a * 0.25f), 0, 255);
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, trailA),
-                                                            ParticleTextures::BlendMode::Alpha, prevRotation);
+                                                            ParticleTextures::BlendMode::Additive, prevRotation);
                         // Crisp core sprite — original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
-                                                            ParticleTextures::BlendMode::Alpha, rotation);
+                                                            ParticleTextures::BlendMode::Additive, rotation);
                     }
                     else
                     {
@@ -1691,12 +1691,12 @@ namespace TextEffects
                             int trailA = std::clamp(static_cast<int>(a * (0.3f - 0.1f * t)), 0, 255);
                             ParticleTextures::DrawSpriteWithIndex(list, ImVec2(tx, ty), finalSize * 6.0f,
                                                                 texStyleId, i, IM_COL32(255, 255, 255, trailA),
-                                                                ParticleTextures::BlendMode::Alpha, curveAngle);
+                                                                ParticleTextures::BlendMode::Additive, curveAngle);
                         }
                         // Crisp core sprite — original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
-                                                            ParticleTextures::BlendMode::Alpha, curveAngle);
+                                                            ParticleTextures::BlendMode::Additive, curveAngle);
                     }
                     else
                     {
@@ -1744,11 +1744,11 @@ namespace TextEffects
                         int echoA = std::clamp(static_cast<int>(a * 0.3f), 0, 255);
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(ex, ey), finalSize * 5.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, echoA),
-                                                            ParticleTextures::BlendMode::Alpha, moveAngle);
+                                                            ParticleTextures::BlendMode::Additive, moveAngle);
                         // Crisp core sprite — original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
-                                                            ParticleTextures::BlendMode::Alpha, moveAngle);
+                                                            ParticleTextures::BlendMode::Additive, moveAngle);
                     }
                     else
                     {
@@ -1786,7 +1786,7 @@ namespace TextEffects
                         // Crisp core sprite with surge intensity — original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), surgedSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, surgedA),
-                                                            ParticleTextures::BlendMode::Alpha, runeOrbit + wobble);
+                                                            ParticleTextures::BlendMode::Additive, runeOrbit + wobble);
                     }
                     else
                     {
@@ -1823,7 +1823,7 @@ namespace TextEffects
                         // Crisp core sprite — original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
-                                                            ParticleTextures::BlendMode::Alpha, 0.0f);
+                                                            ParticleTextures::BlendMode::Additive, 0.0f);
                     }
                     else
                     {
