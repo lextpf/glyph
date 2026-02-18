@@ -124,9 +124,11 @@ void AddTextAurora(ImDrawList* list,
         float swayedX = nx + swayOffset;
         float swayFactor = std::sin(swayedX * TWO_PI * waves + time) * .5f + .5f;
 
-        // Blend all factors
+        // Blend all factors (whisper: cap aurora amplitude)
+        static constexpr float kAmplitudeCap = .35f;
         float t =
-            Saturate((combined * .6f + curtain * .25f + swayFactor * .15f) * intensity + shimmer);
+            Saturate((combined * .6f + curtain * .25f + swayFactor * .15f) * intensity + shimmer) *
+            kAmplitudeCap;
 
         // Continuous 4-color gradient with smoothstep transitions
         ImU32 mid1 = ThreeColorGradient(colA, colMid, colB, t);
@@ -229,136 +231,15 @@ void AddTextSparkle(ImDrawList* list,
             colorShift += flare * .6f * mask4;
         }
 
-        totalSparkle = Saturate(totalSparkle * intensity);
+        // Whisper: cap sparkle amplitude so each twinkle reads as a glint,
+        // not a flare.
+        static constexpr float kAmplitudeCap = .35f;
+        totalSparkle = Saturate(totalSparkle * intensity) * kAmplitudeCap;
         colorShift = Saturate(colorShift);
 
         // Blend sparkle color with white based on intensity for brighter sparkles
         ImU32 finalSparkle = LerpColorU32(sparkleColor, sparkleTint, colorShift);
         list->VtxBuffer[i].col = LerpColorU32(base, finalSparkle, totalSparkle);
-    }
-}
-
-void AddTextPlasma(ImDrawList* list,
-                   ImFont* font,
-                   float size,
-                   const ImVec2& pos,
-                   const char* text,
-                   ImU32 colA,
-                   ImU32 colB,
-                   float freq1,
-                   float freq2,
-                   float speed)
-{
-    TextVertexSetup s;
-    if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
-    {
-        return;
-    }
-
-    const float time = (float)ImGui::GetTime() * speed;
-    ImU32 colMid = LerpColorU32(colA, colB, .5f);
-
-    for (int i = s.vtxStart; i < s.vtxEnd; ++i)
-    {
-        const ImVec2 p = list->VtxBuffer[i].pos;
-        const float nx = s.normalizedX(p.x);
-        const float ny = s.normalizedY(p.y);
-
-        // Enhanced plasma with more organic patterns
-        float plasma = .0f;
-
-        // Primary waves with varied phases
-        plasma += std::sin(nx * freq1 * TWO_PI + time);
-        plasma += std::sin(ny * freq2 * TWO_PI + time * .7f);
-
-        // Diagonal waves
-        plasma += std::sin((nx + ny) * (freq1 + freq2) * .5f * TWO_PI + time * 1.3f);
-        plasma += std::sin((nx - ny) * freq1 * TWO_PI + time * .9f) * .5f;
-
-        // Radial waves from offset centers for more organic look
-        float cx1 = nx - .3f - std::sin(time * .3f) * .2f;
-        float cy1 = ny - .5f - std::cos(time * .4f) * .15f;
-        float dist1 = std::sqrt(cx1 * cx1 + cy1 * cy1);
-        plasma += std::sin(dist1 * freq1 * TWO_PI * 2.0f - time * 1.2f);
-
-        float cx2 = nx - .7f + std::cos(time * .35f) * .15f;
-        float cy2 = ny - .5f + std::sin(time * .45f) * .2f;
-        float dist2 = std::sqrt(cx2 * cx2 + cy2 * cy2);
-        plasma += std::sin(dist2 * freq2 * TWO_PI * 1.5f + time * .8f) * .7f;
-
-        // Normalize to [0, 1] with smoother transition
-        plasma = (plasma + 5.2f) / 10.4f;
-        plasma = SmoothStep(plasma);  // Use quintic smoothing
-
-        // Continuous 3-color gradient with smoothstep transitions
-        ImU32 finalColor = ThreeColorGradient(colA, colMid, colB, plasma);
-
-        list->VtxBuffer[i].col = finalColor;
-    }
-}
-
-void AddTextScanline(ImDrawList* list,
-                     ImFont* font,
-                     float size,
-                     const ImVec2& pos,
-                     const char* text,
-                     ImU32 baseL,
-                     ImU32 baseR,
-                     ImU32 scanColor,
-                     float speed,
-                     float scanWidth,
-                     float intensity)
-{
-    TextVertexSetup s;
-    if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
-    {
-        return;
-    }
-
-    const float time = (float)ImGui::GetTime();
-    float phase1 = std::sin(time * speed * PI) * .5f + .5f;
-    float phase2 = std::sin(time * speed * PI + 2.0f) * .5f + .5f;
-
-    const float bandWidth = (std::max)(scanWidth, .05f);
-    const float bandHalf = bandWidth * .5f;
-
-    for (int i = s.vtxStart; i < s.vtxEnd; ++i)
-    {
-        const ImVec2 p = list->VtxBuffer[i].pos;
-        const float nx = s.normalizedX(p.x);
-        const float ny = s.normalizedY(p.y);
-
-        // Base gradient color
-        ImU32 base = LerpColorU32(baseL, baseR, nx);
-
-        // Primary scanline with smooth quintic falloff
-        float d1 = std::abs(ny - phase1);
-        float scan1 = .0f;
-        if (d1 < bandHalf)
-        {
-            scan1 = 1.0f - SmoothStep(d1 / bandHalf);
-        }
-
-        // Secondary scanline
-        float d2 = std::abs(ny - phase2);
-        float scan2 = .0f;
-        if (d2 < bandHalf * .7f)
-        {
-            scan2 = (1.0f - SmoothStep(d2 / (bandHalf * .7f))) * .4f;
-        }
-
-        // Subtle horizontal scan lines
-        float crtLines = std::sin(ny * s.height() * .5f) * .5f + .5f;
-        crtLines = crtLines * .08f;  // Very subtle
-
-        // Combine effects
-        float totalScan = Saturate((scan1 + scan2) * intensity + crtLines);
-
-        // Add slight glow around the main scanline
-        float glow = std::exp(-d1 * d1 * 20.0f) * .15f * intensity;
-        totalScan = Saturate(totalScan + glow);
-
-        list->VtxBuffer[i].col = LerpColorU32(base, scanColor, totalScan);
     }
 }
 
@@ -399,17 +280,21 @@ void AddTextEnchant(ImDrawList* list,
         // Combine for organic, flowing pattern
         float combined = (energy * .6f + energy2 * .4f);
 
+        // Whisper: cap amplitude so enchant reads as a faint magical fabric.
+        static constexpr float kAmplitudeCap = .30f;
+
         // Pulsing highlight at noise peaks (smooth transition)
-        float highlight = SmoothStep(Saturate((combined - .45f) * 2.5f)) * intensity;
+        float highlight =
+            SmoothStep(Saturate((combined - .45f) * 2.5f)) * intensity * kAmplitudeCap;
 
         // Smooth base blend driven by noise
-        float t = Saturate(combined * intensity);
+        float t = Saturate(combined * intensity) * kAmplitudeCap;
 
         // Continuous 4-color gradient with smoothstep transitions
         ImU32 mid1 = ThreeColorGradient(colA, colMid, colB, t);
         ImU32 finalColor = LerpColorU32(mid1, colBright, SmoothStep(Saturate(t * 2.0f - 1.0f)));
 
-        // Add bright highlight pulse at energy peaks
+        // Add bright highlight pulse at energy peaks (softer blend)
         if (highlight > .0f)
         {
             finalColor = LerpColorU32(finalColor, colBright, highlight * .5f);
@@ -460,8 +345,12 @@ void AddTextFrost(ImDrawList* list,
         float frostThreshold = 1.0f - density;
         float frostMask = SmoothStep(Saturate((frostPattern - frostThreshold + .1f) * 2.0f));
 
-        // Tint base color toward icy blue-white at frosted areas
-        ImU32 frosted = LerpColorU32(base, iceWhite, frostMask * .4f);
+        // Whisper: frost should feel like a cold breath, not a glaze.
+        static constexpr float kFrostTintCap = .20f;
+        static constexpr float kSparkleCap = .40f;
+
+        // Tint base color toward icy blue-white at frosted areas (gentler)
+        ImU32 frosted = LerpColorU32(base, iceWhite, frostMask * kFrostTintCap);
 
         // Sparkle flashes: bright white points that twinkle
         float sparkle = .0f;
@@ -487,10 +376,56 @@ void AddTextFrost(ImDrawList* list,
             sparkle += std::pow(s2, 3.0f) * 1.2f * fMask2;
         }
 
-        sparkle = Saturate(sparkle * sparkleIntensity);
+        sparkle = Saturate(sparkle * sparkleIntensity) * kSparkleCap;
 
         // Blend: frosted base + sparkle highlights
         list->VtxBuffer[i].col = LerpColorU32(frosted, iceWhite, sparkle);
+    }
+}
+
+void AddTextDrift(ImDrawList* list,
+                  ImFont* font,
+                  float size,
+                  const ImVec2& pos,
+                  const char* text,
+                  ImU32 baseL,
+                  ImU32 baseR,
+                  float speed,
+                  float hueRangeDeg)
+{
+    TextVertexSetup s;
+    if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
+    {
+        return;
+    }
+
+    // Uniform hue wander: the whole text drifts by the same hue offset per
+    // frame, so color slowly breathes between the two flanks of the base pair
+    // without pattern, band, or character variation.
+    const float time = (float)ImGui::GetTime();
+    const float hueShift = (hueRangeDeg / 360.0f) * std::sin(TWO_PI * time * speed);
+
+    for (int i = s.vtxStart; i < s.vtxEnd; ++i)
+    {
+        const float t = s.normalizedX(list->VtxBuffer[i].pos.x);
+        ImU32 base = LerpColorU32(baseL, baseR, t);
+
+        const int rI = (base >> IM_COL32_R_SHIFT) & 0xFF;
+        const int gI = (base >> IM_COL32_G_SHIFT) & 0xFF;
+        const int bI = (base >> IM_COL32_B_SHIFT) & 0xFF;
+        const int aI = (base >> IM_COL32_A_SHIFT) & 0xFF;
+
+        float hue = .0f, sat = .0f, val = .0f;
+        ImGui::ColorConvertRGBtoHSV(rI / 255.0f, gI / 255.0f, bI / 255.0f, hue, sat, val);
+        hue = Frac(hue + hueShift);
+
+        float nr = .0f, ng = .0f, nb = .0f;
+        ImGui::ColorConvertHSVtoRGB(hue, sat, val, nr, ng, nb);
+
+        list->VtxBuffer[i].col = IM_COL32(static_cast<int>(std::clamp(nr * 255.0f, .0f, 255.0f)),
+                                          static_cast<int>(std::clamp(ng * 255.0f, .0f, 255.0f)),
+                                          static_cast<int>(std::clamp(nb * 255.0f, .0f, 255.0f)),
+                                          aI);
     }
 }
 

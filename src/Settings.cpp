@@ -21,24 +21,22 @@
 namespace Settings
 {
 // Single source of truth for EffectType <-> lowercase string mapping.
-static constexpr Stl::EnumStringMap<EffectType, 17> kEffectTypeMap{{
+static constexpr Stl::EnumStringMap<EffectType, 15> kEffectTypeMap{{
     {{"none", EffectType::None},
      {"gradient", EffectType::Gradient},
      {"verticalgradient", EffectType::VerticalGradient},
      {"diagonalgradient", EffectType::DiagonalGradient},
      {"radialgradient", EffectType::RadialGradient},
      {"shimmer", EffectType::Shimmer},
-     {"chromaticshimmer", EffectType::ChromaticShimmer},
      {"ember", EffectType::Ember},
-     {"pulsegradient", EffectType::Ember},  // backward compat alias
-     {"rainbowwave", EffectType::RainbowWave},
-     {"conicrainbow", EffectType::ConicRainbow},
      {"aurora", EffectType::Aurora},
      {"sparkle", EffectType::Sparkle},
-     {"plasma", EffectType::Plasma},
-     {"scanline", EffectType::Scanline},
      {"enchant", EffectType::Enchant},
-     {"frost", EffectType::Frost}},
+     {"frost", EffectType::Frost},
+     {"breathe", EffectType::Breathe},
+     {"drift", EffectType::Drift},
+     {"mote", EffectType::Mote},
+     {"wander", EffectType::Wander}},
 }};
 
 // Parser helper forward declarations (used before definitions).
