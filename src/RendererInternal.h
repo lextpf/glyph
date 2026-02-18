@@ -607,6 +607,15 @@ void ApplyTextEffect(ImDrawList* drawList,
                      const TextEffects::WaveParams* wave = nullptr,
                      const TextEffects::ShineParams* shine = nullptr);
 
+/// Draw a soft backplate halo behind the full nameplate, title, and main line.
+/// Uses the glow layer so it stays behind particles, outlines, and text.
+void DrawBackgroundGlow(ImDrawList* dl,
+                        const LabelStyle& style,
+                        const LabelLayout& layout,
+                        float lodTitleFactor,
+                        ImDrawListSplitter* splitter,
+                        const RenderSettingsSnapshot& snap);
+
 /// Draw particle aura effects behind the nameplate.  Renders on splitter
 /// channel 0 (back layer).
 void DrawParticles(ImDrawList* dl,

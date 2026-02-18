@@ -237,40 +237,6 @@ static void ApplyShimmer(
         ParamOr(a.effect.param2, 1.0f) * a.strength);
 }
 
-static void ApplyChromaticShimmer(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    if (a.outlineGlow.enabled)
-    {
-        TextEffects::DrawOutlineGlow(dl,
-                                     font,
-                                     sz,
-                                     pos,
-                                     text,
-                                     a.outlineGlow.color,
-                                     a.outlineWidth,
-                                     a.outlineGlow.scale,
-                                     a.outlineGlow.alpha,
-                                     a.outlineGlow.rings,
-                                     a.fastOutlines);
-    }
-    TextEffects::AddTextOutline4ChromaticShimmer(dl,
-                                                 font,
-                                                 sz,
-                                                 pos,
-                                                 text,
-                                                 a.colL,
-                                                 a.colR,
-                                                 a.highlight,
-                                                 a.outlineColor,
-                                                 a.outlineWidth,
-                                                 a.phase01,
-                                                 ParamOr(a.effect.param1, .1f),
-                                                 ParamOr(a.effect.param2, .8f) * a.strength,
-                                                 ParamOr(a.effect.param3, 1.5f) * a.textSizeScale,
-                                                 ParamOr(a.effect.param4, .35f));
-}
-
 static void ApplyEmber(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
@@ -288,73 +254,6 @@ static void ApplyEmber(
         a.colR,
         ParamOr(a.effect.param1, .5f),
         ParamOr(a.effect.param2, .8f) * a.strength);
-}
-
-static void ApplyRainbowWave(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    if (a.outlineGlow.enabled)
-    {
-        TextEffects::DrawOutlineGlow(dl,
-                                     font,
-                                     sz,
-                                     pos,
-                                     text,
-                                     a.outlineGlow.color,
-                                     a.outlineWidth,
-                                     a.outlineGlow.scale,
-                                     a.outlineGlow.alpha,
-                                     a.outlineGlow.rings,
-                                     a.fastOutlines);
-    }
-    TextEffects::AddTextOutline4RainbowWave(dl,
-                                            font,
-                                            sz,
-                                            pos,
-                                            text,
-                                            a.effect.param1,
-                                            ParamOr(a.effect.param2, 1.0f),
-                                            ParamOr(a.effect.param3, .5f),
-                                            ParamOr(a.effect.param4, .85f),
-                                            ParamOr(a.effect.param5, .95f),
-                                            a.alpha,
-                                            a.outlineColor,
-                                            a.outlineWidth,
-                                            a.fastOutlines,
-                                            a.effect.useWhiteBase);
-}
-
-static void ApplyConicRainbow(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    if (a.outlineGlow.enabled)
-    {
-        TextEffects::DrawOutlineGlow(dl,
-                                     font,
-                                     sz,
-                                     pos,
-                                     text,
-                                     a.outlineGlow.color,
-                                     a.outlineWidth,
-                                     a.outlineGlow.scale,
-                                     a.outlineGlow.alpha,
-                                     a.outlineGlow.rings,
-                                     a.fastOutlines);
-    }
-    TextEffects::AddTextOutline4ConicRainbow(dl,
-                                             font,
-                                             sz,
-                                             pos,
-                                             text,
-                                             a.effect.param1,
-                                             ParamOr(a.effect.param2, .4f),
-                                             ParamOr(a.effect.param3, .85f),
-                                             ParamOr(a.effect.param4, .95f),
-                                             a.alpha,
-                                             a.outlineColor,
-                                             a.outlineWidth,
-                                             a.fastOutlines,
-                                             a.effect.useWhiteBase);
 }
 
 static void ApplyAurora(
@@ -399,47 +298,6 @@ static void ApplySparkle(
         ParamOr(a.effect.param3, 1.0f) * a.strength);
 }
 
-static void ApplyPlasma(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    TextEffects::WithOutlineGlow<TextEffects::AddTextPlasma>(
-        dl,
-        font,
-        sz,
-        pos,
-        text,
-        a.outlineColor,
-        a.outlineWidth,
-        a.fastOutlines,
-        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
-        a.colL,
-        a.colR,
-        ParamOr(a.effect.param1, 2.0f),
-        ParamOr(a.effect.param2, 3.0f),
-        ParamOr(a.effect.param3, .5f));
-}
-
-static void ApplyScanline(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    TextEffects::WithOutlineGlow<TextEffects::AddTextScanline>(
-        dl,
-        font,
-        sz,
-        pos,
-        text,
-        a.outlineColor,
-        a.outlineWidth,
-        a.fastOutlines,
-        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
-        a.colL,
-        a.colR,
-        a.highlight,
-        ParamOr(a.effect.param1, .5f),
-        ParamOr(a.effect.param2, .15f),
-        ParamOr(a.effect.param3, 1.0f) * a.strength);
-}
-
 static void ApplyEnchant(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
@@ -478,6 +336,84 @@ static void ApplyFrost(
         ParamOr(a.effect.param1, .4f),
         ParamOr(a.effect.param2, .8f),
         ParamOr(a.effect.param3, 1.0f) * a.strength);
+}
+
+static void ApplyBreathe(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextBreathe>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, .25f),
+        ParamOr(a.effect.param2, .06f) * a.strength);
+}
+
+static void ApplyDrift(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextDrift>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, .08f),
+        ParamOr(a.effect.param2, 8.0f) * a.strength);
+}
+
+static void ApplyMote(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextMote>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        a.highlight,
+        ParamOr(a.effect.param1, 2.5f),
+        ParamOr(a.effect.param2, .4f) * a.strength);
+}
+
+static void ApplyWander(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextWander>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, .4f),
+        ParamOr(a.effect.param2, .05f) * a.strength,
+        ParamOr(a.effect.param3, 1.0f));
 }
 }  // namespace
 
@@ -539,17 +475,8 @@ void ApplyTextEffect(ImDrawList* drawList,
         case Settings::EffectType::Shimmer:
             ApplyShimmer(drawList, font, fontSize, pos, text, args);
             break;
-        case Settings::EffectType::ChromaticShimmer:
-            ApplyChromaticShimmer(drawList, font, fontSize, pos, text, args);
-            break;
         case Settings::EffectType::Ember:
             ApplyEmber(drawList, font, fontSize, pos, text, args);
-            break;
-        case Settings::EffectType::RainbowWave:
-            ApplyRainbowWave(drawList, font, fontSize, pos, text, args);
-            break;
-        case Settings::EffectType::ConicRainbow:
-            ApplyConicRainbow(drawList, font, fontSize, pos, text, args);
             break;
         case Settings::EffectType::Aurora:
             ApplyAurora(drawList, font, fontSize, pos, text, args);
@@ -557,17 +484,23 @@ void ApplyTextEffect(ImDrawList* drawList,
         case Settings::EffectType::Sparkle:
             ApplySparkle(drawList, font, fontSize, pos, text, args);
             break;
-        case Settings::EffectType::Plasma:
-            ApplyPlasma(drawList, font, fontSize, pos, text, args);
-            break;
-        case Settings::EffectType::Scanline:
-            ApplyScanline(drawList, font, fontSize, pos, text, args);
-            break;
         case Settings::EffectType::Enchant:
             ApplyEnchant(drawList, font, fontSize, pos, text, args);
             break;
         case Settings::EffectType::Frost:
             ApplyFrost(drawList, font, fontSize, pos, text, args);
+            break;
+        case Settings::EffectType::Breathe:
+            ApplyBreathe(drawList, font, fontSize, pos, text, args);
+            break;
+        case Settings::EffectType::Drift:
+            ApplyDrift(drawList, font, fontSize, pos, text, args);
+            break;
+        case Settings::EffectType::Mote:
+            ApplyMote(drawList, font, fontSize, pos, text, args);
+            break;
+        case Settings::EffectType::Wander:
+            ApplyWander(drawList, font, fontSize, pos, text, args);
             break;
         default:
             break;
@@ -723,6 +656,230 @@ static TextEffects::ShineParams BuildShineParams(const RenderSettingsSnapshot& s
     return shine;
 }
 
+static ImVec4 PrepareMistTint(ImVec4 tint, float brightnessScale, float saturationBoost)
+{
+    BoostSaturation(tint, saturationBoost);
+    tint.x = std::clamp(tint.x * brightnessScale, .0f, 1.0f);
+    tint.y = std::clamp(tint.y * brightnessScale, .0f, 1.0f);
+    tint.z = std::clamp(tint.z * brightnessScale, .0f, 1.0f);
+    tint.w = 1.0f;
+    return tint;
+}
+
+static ImU32 PackGlowTint(const ImVec4& tint, float alpha)
+{
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(std::clamp(tint.x, .0f, 1.0f),
+                                                 std::clamp(tint.y, .0f, 1.0f),
+                                                 std::clamp(tint.z, .0f, 1.0f),
+                                                 std::clamp(alpha, .0f, 1.0f)));
+}
+
+static void DrawMistVeil(ImDrawList* dl,
+                         const ImVec2& min,
+                         const ImVec2& max,
+                         const ImVec4& leftTint,
+                         const ImVec4& centerTint,
+                         const ImVec4& rightTint,
+                         float baseAlpha,
+                         float expandX,
+                         float expandY,
+                         bool gpuGlow)
+{
+    if (!dl || baseAlpha <= .001f || max.x <= min.x || max.y <= min.y)
+    {
+        return;
+    }
+
+    struct MistLobe
+    {
+        float offsetX;
+        float offsetY;
+        float radiusMul;
+        float alphaMul;
+        float sideMix;
+    };
+
+    static constexpr MistLobe kGpuLobes[] = {
+        {-0.56f, .05f, 1.08f, .14f, -.94f},
+        {-0.34f, -.17f, .92f, .20f, -.62f},
+        {-0.10f, .14f, 1.00f, .23f, -.18f},
+        {.14f, -.11f, .96f, .24f, .18f},
+        {.38f, .11f, .90f, .20f, .62f},
+        {.58f, -.01f, 1.05f, .14f, .94f},
+        {-0.22f, .30f, .72f, .11f, -.18f},
+        {.24f, .29f, .76f, .11f, .18f},
+    };
+    static constexpr MistLobe kCpuLobes[] = {
+        {-0.52f, .04f, 1.02f, .12f, -.88f},
+        {-0.31f, -.15f, .88f, .17f, -.56f},
+        {-0.08f, .13f, .94f, .20f, -.16f},
+        {.12f, -.10f, .92f, .21f, .16f},
+        {.35f, .10f, .86f, .17f, .56f},
+        {.54f, .00f, .98f, .12f, .88f},
+        {-0.20f, .26f, .68f, .09f, -.15f},
+        {.22f, .25f, .72f, .09f, .15f},
+    };
+
+    const float width = (max.x - min.x) + expandX * 2.0f;
+    const float height = (max.y - min.y) + expandY * 2.0f;
+    const ImVec2 center((min.x + max.x) * .5f, (min.y + max.y) * .5f);
+    const float left = center.x - width * .5f;
+    const float right = center.x + width * .5f;
+    const float top = center.y - height * .5f;
+    const float bottom = center.y + height * .5f;
+    const float round = std::max(10.0f, height * .74f);
+
+    // Broad wash that ties the lobes together into a single fog bank.
+    dl->AddRectFilled(ImVec2(left - expandX * .10f, top - expandY * .12f),
+                      ImVec2(right + expandX * .10f, bottom + expandY * .12f),
+                      PackGlowTint(centerTint, baseAlpha * (gpuGlow ? .08f : .06f)),
+                      round);
+
+    const float ribbonHalfHeight = height * .22f;
+    dl->AddRectFilled(ImVec2(center.x - width * .30f, center.y - ribbonHalfHeight),
+                      ImVec2(center.x + width * .30f, center.y + ribbonHalfHeight),
+                      PackGlowTint(centerTint, baseAlpha * (gpuGlow ? .07f : .05f)),
+                      ribbonHalfHeight);
+
+    const float coreRadius = std::max(height * .64f, std::min(width * .21f, height * 1.34f));
+    const float coreOffsets[] = {-0.24f, 0.0f, 0.24f};
+    const float coreAlphas[] = {.09f, .15f, .09f};
+    for (int i = 0; i < 3; ++i)
+    {
+        const float mixT = (coreOffsets[i] + .24f) / .48f;
+        const ImVec4 tint = MixVec4(leftTint, rightTint, mixT);
+        dl->AddCircleFilled(
+            ImVec2(center.x + coreOffsets[i] * width, center.y),
+            coreRadius,
+            PackGlowTint(MixVec4(centerTint, tint, .58f),
+                         baseAlpha * (gpuGlow ? coreAlphas[i] : coreAlphas[i] * .82f)),
+            gpuGlow ? 30 : 24);
+    }
+
+    const MistLobe* lobes = gpuGlow ? kGpuLobes : kCpuLobes;
+    const int lobeCount =
+        gpuGlow ? static_cast<int>(std::size(kGpuLobes)) : static_cast<int>(std::size(kCpuLobes));
+    const float lobeRadius = std::max(height * .84f, std::min(width * .24f, height * 1.54f));
+
+    for (int i = 0; i < lobeCount; ++i)
+    {
+        const MistLobe& lobe = lobes[i];
+        ImVec4 tint = centerTint;
+        if (lobe.sideMix < .0f)
+        {
+            tint = MixVec4(centerTint, leftTint, -lobe.sideMix);
+        }
+        else if (lobe.sideMix > .0f)
+        {
+            tint = MixVec4(centerTint, rightTint, lobe.sideMix);
+        }
+
+        const ImVec2 lobeCenter(center.x + lobe.offsetX * width * .5f,
+                                center.y + lobe.offsetY * height * .6f);
+        dl->AddCircleFilled(lobeCenter,
+                            lobeRadius * lobe.radiusMul,
+                            PackGlowTint(tint, baseAlpha * lobe.alphaMul),
+                            gpuGlow ? 30 : 24);
+    }
+}
+
+void DrawBackgroundGlow(ImDrawList* dl,
+                        const LabelStyle& style,
+                        const LabelLayout& layout,
+                        float lodTitleFactor,
+                        ImDrawListSplitter* splitter,
+                        const RenderSettingsSnapshot& snap)
+{
+    if (!dl || !splitter || !snap.enableGlow || snap.glowIntensity <= .0f || !style.tierAllowsGlow)
+    {
+        return;
+    }
+
+    const bool gpuGlow = TextPostProcess::IsInitialized();
+    const int glowChannel = 0;
+    splitter->SetCurrentChannel(dl, glowChannel);
+
+    if (!gpuGlow)
+    {
+        ParticleTextures::PushAdditiveBlend(dl);
+    }
+
+    const float intensityScale = .58f + snap.glowIntensity * .56f;
+    const float specialBoost = style.specialTitle ? 1.18f : 1.0f;
+
+    // Background mist should read as colored fog from the actual name text,
+    // not a blended white-ish support plate from title/level accents.
+    const ImVec4 nameMidTint = MixVec4(style.LcName, style.RcName, .5f);
+    const ImVec4 mistCenterTint = PrepareMistTint(nameMidTint, 1.10f, 1.10f);
+    const ImVec4 mistLeftTint = PrepareMistTint(style.LcName, 1.14f, 1.12f);
+    const ImVec4 mistRightTint = PrepareMistTint(style.RcName, 1.14f, 1.12f);
+
+    const float fullPadX = std::max(14.0f, layout.nameplateWidth * .12f + snap.glowRadius * .96f);
+    const float fullPadY = std::max(11.0f, layout.nameplateHeight * .20f + snap.glowRadius * .84f);
+    const float fullAlpha = style.alpha * intensityScale * specialBoost * (gpuGlow ? .32f : .18f);
+
+    DrawMistVeil(dl,
+                 ImVec2(layout.nameplateLeft, layout.nameplateTop),
+                 ImVec2(layout.nameplateRight, layout.nameplateBottom),
+                 mistLeftTint,
+                 mistCenterTint,
+                 mistRightTint,
+                 fullAlpha,
+                 fullPadX,
+                 fullPadY,
+                 gpuGlow);
+
+    if (!layout.titleDisplayStr.empty() && lodTitleFactor > .01f && layout.titleSize.x > .0f)
+    {
+        const float titleOffsetX = (layout.totalWidth - layout.titleSize.x) * .5f;
+        const ImVec2 titleMin(layout.startPos.x - layout.totalWidth * .5f + titleOffsetX,
+                              layout.startPos.y + layout.titleY);
+        const ImVec2 titleMax(titleMin.x + layout.titleSize.x, titleMin.y + layout.titleSize.y);
+        const float titlePadX = std::max(11.0f, layout.titleSize.x * .13f + snap.glowRadius * .66f);
+        const float titlePadY = std::max(8.0f, layout.titleSize.y * .28f + snap.glowRadius * .54f);
+        const float titleAlpha = style.titleAlpha * lodTitleFactor * intensityScale * specialBoost *
+                                 (gpuGlow ? .16f : .10f);
+        DrawMistVeil(dl,
+                     titleMin,
+                     titleMax,
+                     mistLeftTint,
+                     mistCenterTint,
+                     mistRightTint,
+                     titleAlpha,
+                     titlePadX,
+                     titlePadY,
+                     gpuGlow);
+    }
+
+    if (layout.mainLineWidth > .0f && layout.mainLineHeight > .0f)
+    {
+        const ImVec2 mainMin(layout.startPos.x - layout.mainLineWidth * .5f,
+                             layout.startPos.y + layout.mainLineY);
+        const ImVec2 mainMax(mainMin.x + layout.mainLineWidth, mainMin.y + layout.mainLineHeight);
+        const float mainPadX =
+            std::max(12.0f, layout.mainLineWidth * .10f + snap.glowRadius * .74f);
+        const float mainPadY =
+            std::max(9.0f, layout.mainLineHeight * .34f + snap.glowRadius * .60f);
+        const float mainAlpha = std::max(style.alpha, style.levelAlpha) * intensityScale *
+                                specialBoost * (gpuGlow ? .22f : .14f);
+        DrawMistVeil(dl,
+                     mainMin,
+                     mainMax,
+                     mistLeftTint,
+                     mistCenterTint,
+                     mistRightTint,
+                     mainAlpha,
+                     mainPadX,
+                     mainPadY,
+                     gpuGlow);
+    }
+
+    if (!gpuGlow)
+    {
+        ParticleTextures::PopBlendState(dl);
+    }
+}
+
 // Computed particle configuration for a single actor label.
 struct ParticleConfig
 {
@@ -786,8 +943,8 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
 
     const float pSpacingScale =
         snap.proportionalSpacing ? (layout.nameFontSize / layout.fontName->FontSize) : 1.0f;
-    cfg.spreadX = layout.nameplateWidth * .5f + snap.particleSpread * 1.4f * pSpacingScale;
-    cfg.spreadY = layout.nameplateHeight * .5f + snap.particleSpread * 1.1f * pSpacingScale;
+    cfg.spreadX = layout.nameplateWidth * .5f + snap.particleSpread * 1.55f * pSpacingScale;
+    cfg.spreadY = layout.nameplateHeight * .5f + snap.particleSpread * 1.22f * pSpacingScale;
 
     int particleCount = (tier.particleCount > 0) ? tier.particleCount : snap.particleCount;
     float tierBoost = .0f;
@@ -800,11 +957,11 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
     cfg.boostedCount =
         std::clamp(static_cast<int>(std::round(particleCount * particleBoost)), particleCount, 96);
     cfg.boostedSize =
-        snap.particleSize * (1.0f + .2f * tierBoost + .2f * levelBoost) * pSpacingScale;
-    cfg.boostedAlpha =
-        std::clamp(snap.particleAlpha * style.alpha * (.95f + .15f * tierBoost + .15f * levelBoost),
-                   .0f,
-                   1.0f);
+        snap.particleSize * (1.12f + .24f * tierBoost + .24f * levelBoost) * pSpacingScale;
+    cfg.boostedAlpha = std::clamp(
+        snap.particleAlpha * style.alpha * (1.02f + .18f * tierBoost + .18f * levelBoost),
+        .0f,
+        1.0f);
 
     if (tierHasParticles)
     {
@@ -875,20 +1032,28 @@ void DrawParticles(ImDrawList* dl,
     }
     if (cfg.showWisps)
     {
+        const bool soloWisps = cfg.enabledStyles == 1;
+        const float wispSpreadScale = soloWisps ? 1.22f : 1.15f;
+        const float wispAlpha = cfg.boostedAlpha * (soloWisps ? .62f : .74f);
+        const float wispSize = cfg.boostedSize * (soloWisps ? .78f : .86f);
+        const float wispSpeed = snap.particleSpeed * (soloWisps ? .82f : .90f);
+
+        // Keep wisps on the procedural renderer; textured wisp variants still
+        // read as thin sticks/rods in motion.
         TextEffects::DrawParticleAura({dl,
                                        layout.nameplateCenter,
-                                       cfg.spreadX * 1.15f,
-                                       cfg.spreadY * 1.15f,
+                                       cfg.spreadX * wispSpreadScale,
+                                       cfg.spreadY * wispSpreadScale,
                                        cfg.particleColor,
-                                       cfg.boostedAlpha,
+                                       wispAlpha,
                                        Settings::ParticleStyle::Wisps,
                                        cfg.boostedCount,
-                                       cfg.boostedSize,
-                                       snap.particleSpeed,
+                                       wispSize,
+                                       wispSpeed,
                                        time,
                                        slot++,
                                        cfg.enabledStyles,
-                                       useTextures,
+                                       false,
                                        blendMode,
                                        cfg.particleColorSecondary});
     }
@@ -959,7 +1124,7 @@ void DrawParticles(ImDrawList* dl,
                                        cfg.boostedAlpha,
                                        Settings::ParticleStyle::Crystals,
                                        (std::max)(4, cfg.boostedCount / 2),
-                                       cfg.boostedSize * 1.1f,
+                                       cfg.boostedSize * .95f,
                                        snap.particleSpeed * .3f,
                                        time,
                                        slot++,
