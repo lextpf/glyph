@@ -104,4 +104,17 @@ namespace ParticleTextures
                              int style, int particleIndex, ImU32 color,
                              BlendMode blendMode = BlendMode::Alpha,
                              float rotation = 0.0f);
+
+    /**
+     * Push additive blend state onto the draw list via callback.
+     * All subsequent draws will use additive blending until PopBlendState.
+     * @param dl ImGui draw list
+     */
+    void PushAdditiveBlend(ImDrawList* dl);
+
+    /**
+     * Reset blend state to ImGui defaults.
+     * @param dl ImGui draw list
+     */
+    void PopBlendState(ImDrawList* dl);
 }

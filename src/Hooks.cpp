@@ -1,4 +1,5 @@
 #include "Hooks.h"
+#include "AppearanceTemplate.h"
 #include "ParticleTextures.h"
 #include "Renderer.h"
 #include "Settings.h"
@@ -7,6 +8,7 @@
 #include <dxgi.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
+#include <imgui_freetype.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -109,11 +111,11 @@ namespace Hooks
             // Character range: Basic Latin + Latin-1 Supplement
             static const ImWchar ranges[] = { 0x0020, 0x00FF, 0, };
             
-            // Font config: High oversampling for quality when scaling down
-            // Fonts can render at 25%
+            // Font config: FreeType with light hinting for smooth scaled text
             ImFontConfig config;
-            config.OversampleH = 4;     // High horizontal oversampling for scaled text
-            config.OversampleV = 4;     // High vertical oversampling for scaled text
+            config.FontBuilderFlags = ImGuiFreeTypeBuilderFlags_LightHinting;
+            config.OversampleH = 2;     // FreeType + mipmaps make 4x unnecessary
+            config.OversampleV = 2;
             config.PixelSnapH = false;  // Disable pixel snapping for smooth subpixel rendering
 
             // Font Index 0: Name font
@@ -308,8 +310,7 @@ namespace Hooks
             Renderer::TickRT();
 
             // Check if we need to apply appearance template
-            extern void Renderer_CheckAppearanceTemplate();
-            Renderer_CheckAppearanceTemplate();
+            AppearanceTemplate::CheckPendingAppearanceTemplate();
 
             // Check if overlay should be rendered
             bool shouldRender = Renderer::IsOverlayAllowedRT();
