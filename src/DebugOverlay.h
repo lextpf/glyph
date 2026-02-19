@@ -9,7 +9,7 @@
  * @namespace DebugOverlay
  * @brief Debug overlay for performance monitoring and diagnostics.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Rendering
+ * @ingroup DebugOverlay
  *
  * Provides real-time display of frame timing, actor counts, cache statistics,
  * and settings state. Rendered as an ImGui window in the top-left corner.

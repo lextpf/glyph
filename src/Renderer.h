@@ -6,7 +6,7 @@
  * @namespace Renderer
  * @brief Main rendering system for the overlay.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Rendering
+ * @ingroup Renderer
  *
  * Implements a multi-threaded floating nameplate system for Skyrim SE.
  * Handles world-to-screen projection, actor tracking, smooth animations,
@@ -20,7 +20,11 @@
  * - **Render Thread**: Draws nameplates using cached data
  *
  * ```mermaid
- * %%{init: {'theme':'dark', 'look':'handDrawn'}}%%
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
  * flowchart LR
  *     classDef thread fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
  *     classDef data fill:#4a3520,stroke:#f59e0b,color:#e2e8f0
@@ -35,7 +39,11 @@
  * ## :material-pipe: Render Pipeline
  *
  * ```mermaid
- * %%{init: {'theme':'dark', 'look':'handDrawn'}}%%
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
  * flowchart LR
  *     classDef check fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
  *     classDef process fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0

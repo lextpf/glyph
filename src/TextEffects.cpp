@@ -1614,7 +1614,7 @@ namespace TextEffects
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, trailA),
                                                             ParticleTextures::BlendMode::Additive, prevRotation);
-                        // Crisp core sprite — original texture colors
+                        // Crisp core sprite, original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
                                                             ParticleTextures::BlendMode::Additive, rotation);
@@ -1679,7 +1679,7 @@ namespace TextEffects
                     // Use textured sprite if available
                     if (hasTextures)
                     {
-                        // Ember trail ghosts — 2 fading crisp echoes behind movement
+                        // Ember trail ghosts - 2 fading crisp echoes behind movement
                         float trailDx = -std::cos(curveAngle);
                         float trailDy = -std::sin(curveAngle);
                         float trailSpacing = finalSize * 3.6f;
@@ -1693,7 +1693,7 @@ namespace TextEffects
                                                                 texStyleId, i, IM_COL32(255, 255, 255, trailA),
                                                                 ParticleTextures::BlendMode::Additive, curveAngle);
                         }
-                        // Crisp core sprite — original texture colors
+                        // Crisp core sprite - original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
                                                             ParticleTextures::BlendMode::Additive, curveAngle);
@@ -1737,7 +1737,7 @@ namespace TextEffects
                     // Use textured sprite if available
                     if (hasTextures)
                     {
-                        // Trailing echo — faint crisp sprite behind movement
+                        // Trailing echo - faint crisp sprite behind movement
                         float echoDist = finalSize * 5.0f;
                         float ex = x - std::cos(moveAngle) * echoDist;
                         float ey = y - std::sin(moveAngle) * echoDist;
@@ -1745,7 +1745,7 @@ namespace TextEffects
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(ex, ey), finalSize * 5.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, echoA),
                                                             ParticleTextures::BlendMode::Additive, moveAngle);
-                        // Crisp core sprite — original texture colors
+                        // Crisp core sprite - original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
                                                             ParticleTextures::BlendMode::Additive, moveAngle);
@@ -1777,13 +1777,13 @@ namespace TextEffects
                     // Use textured rune sprites when available; fallback to procedural runes.
                     if (hasTextures)
                     {
-                        // Periodic mystical surge — staggered per particle (~3s cycle)
+                        // Periodic mystical surge - staggered per particle (~3s cycle)
                         float surgeCycle = std::sin(timeScaled * 0.35f + golden * 2.5f);
                         float surgeT = std::clamp((surgeCycle - 0.7f) / 0.3f, 0.0f, 1.0f);  // Active top 30%
                         int surgedA = std::clamp(static_cast<int>(a * (1.0f + 0.4f * surgeT)), 0, 255);
                         float surgedSize = finalSize;
 
-                        // Crisp core sprite with surge intensity — original texture colors
+                        // Crisp core sprite with surge intensity - original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), surgedSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, surgedA),
                                                             ParticleTextures::BlendMode::Additive, runeOrbit + wobble);
@@ -1820,7 +1820,7 @@ namespace TextEffects
                     // Use textured sprite if available
                     if (hasTextures)
                     {
-                        // Crisp core sprite — original texture colors
+                        // Crisp core sprite - original texture colors
                         ParticleTextures::DrawSpriteWithIndex(list, ImVec2(x, y), finalSize * 6.0f,
                                                             texStyleId, i, IM_COL32(255, 255, 255, a),
                                                             ParticleTextures::BlendMode::Additive, 0.0f);

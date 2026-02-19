@@ -8,7 +8,7 @@
  * @namespace ParticleTextures
  * @brief Particle texture management for sprite-based effects.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Rendering
+ * @ingroup ParticleTextures
  *
  * Loads PNG textures from subfolders and creates D3D11 shader resource views
  * for use with ImGui textured quads. Each particle type can have multiple
@@ -28,7 +28,11 @@
  * ## :material-image-filter-hdr: Texture Pipeline
  *
  * ```mermaid
- * %%{init: {'theme':'dark', 'look':'handDrawn'}}%%
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
  * flowchart LR
  *     classDef io fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
  *     classDef process fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0

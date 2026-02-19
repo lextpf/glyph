@@ -34,6 +34,14 @@
 #include "Renderer.h"
 #include "Settings.h"
 
+/**
+ * @namespace ConsoleCommands
+ * @brief Console command registration and handlers.
+ * @ingroup Core
+ *
+ * Provides the `whois` console command for toggling nameplate rendering.
+ * Registers by replacing an unused vanilla command slot at plugin load.
+ */
 namespace ConsoleCommands
 {
     /**
