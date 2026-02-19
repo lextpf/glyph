@@ -13,6 +13,7 @@
 #include <cctype>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -957,15 +958,15 @@ namespace Renderer
     }
 
     /// Replace %n, %l, %t placeholders in a format string.
-    static std::string FormatString(const std::string &fmt, const char *nameVal, int levelVal, const char *titleVal = nullptr)
+    static std::string FormatString(const std::string &fmt, const std::string_view nameVal, int levelVal, const char *titleVal = nullptr)
     {
         std::string s = fmt;
 
         size_t pos = 0;
         while ((pos = s.find("%n", pos)) != std::string::npos)
         {
-            s.replace(pos, 2, nameVal);
-            pos += strlen(nameVal);
+            s.replace(pos, 2, nameVal.data(), nameVal.size());
+            pos += nameVal.size();
         }
 
         pos = 0;
