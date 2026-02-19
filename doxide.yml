@@ -18,10 +18,33 @@ groups:
   - name: Rendering
     title: ":material-palette: Rendering"
     description: Nameplate rendering, text effects, and visual systems.
+    groups:
+      - name: Renderer
+        title: Renderer
+        description: Main rendering system for the overlay.
+      - name: TextEffects
+        title: TextEffects
+        description: Collection of text rendering effects for ImGui.
+      - name: Occlusion
+        title: Occlusion
+        description: Actor visibility and occlusion culling.
+      - name: RenderConstants
+        title: RenderConstants
+        description: Compile-time constants for the rendering pipeline.
+      - name: ParticleTextures
+        title: ParticleTextures
+        description: Particle texture management for sprite-based effects.
+      - name: DebugOverlay
+        title: DebugOverlay
+        description: Debug overlay for performance monitoring.
 
   - name: Configuration
     title: ":material-cog: Configuration"
     description: Settings management and INI parsing.
+    groups:
+      - name: Settings
+        title: Settings
+        description: Configuration management and INI parsing.
 
   - name: Hooks
     title: ":material-hook: Engine Hooks"

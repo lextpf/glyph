@@ -7,7 +7,7 @@
  * @namespace Settings
  * @brief Configuration management and INI parsing.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Configuration
+ * @ingroup Settings
  *
  * Contains all user-configurable settings loaded from `whois.ini`,
  * including tier definitions, visual effects, fonts, and behavior parameters.
@@ -217,7 +217,7 @@ namespace Settings
      */
     struct SpecialTitleDefinition {
         std::string keyword;         ///< Keyword to match in name (case-insensitive)
-        std::string displayTitle;    ///< Title to display (e.g., "[ADMIN]", "★ Moderator ★")
+        std::string displayTitle;    ///< Title to display
         float color[3];              ///< RGB color for name/title
         float glowColor[3];          ///< RGB glow color (more saturated)
         bool forceOrnaments;         ///< Always show ornaments

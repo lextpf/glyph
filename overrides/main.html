@@ -167,7 +167,7 @@
         lineColor: '#94a3b8',
         clusterBkg: '#0f172a',
         clusterBorder: '#334155',
-        fontSize: '14px',
+        fontSize: '36px',
         // Node colors
         primaryColor: '#3b82f6',
         primaryTextColor: '#f8fafc',
@@ -228,8 +228,10 @@
         const text = span.textContent.trim();
         const b64 = navIcons[text];
         if (!b64) return;
+        if (span.querySelector('.nav-icon')) return;
 
         const icon = document.createElement('span');
+        icon.className = 'nav-icon';
         const uri = 'url(data:image/svg+xml;base64,' + b64 + ')';
         icon.style.cssText = 'display:inline-block;width:1.1em;height:1.1em;vertical-align:-0.15em;margin-right:0.3em;flex-shrink:0;background-color:currentColor;-webkit-mask-image:' + uri + ';mask-image:' + uri + ';-webkit-mask-size:contain;mask-size:contain;';
         span.prepend(icon);

@@ -6,7 +6,7 @@
  * @namespace RenderConstants
  * @brief Compile-time constants for the rendering pipeline.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Rendering
+ * @ingroup RenderConstants
  *
  * Contains `constexpr` constants for actor processing limits, cache management,
  * and position smoothing.
