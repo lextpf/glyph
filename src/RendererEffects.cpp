@@ -880,6 +880,107 @@ void DrawBackgroundGlow(ImDrawList* dl,
     }
 }
 
+// Forward declaration; defined alongside DrawOrnaments below.
+static std::vector<std::string> CollectDrawableOrnaments(const std::string& raw,
+                                                         ImFont* ornamentFont);
+
+// Geometry of the ornament block on either side of the nameplate.  Computed
+// once per label so DrawOrnaments and the particle-aura sizer agree on the
+// space the ornaments occupy.  All fields are zero / nullptr when the
+// ornaments are not visible for this label.
+struct OrnamentMetrics
+{
+    bool shown = false;
+    std::vector<std::string> leftChars;
+    std::vector<std::string> rightChars;
+    ImFont* ornamentFont = nullptr;
+    float ornamentSize = .0f;
+    float totalSpacing = .0f;
+    float ornamentCharGap = .0f;
+    float leftExtent = .0f;   ///< px occupied left of nameplate (spacing + chars + gaps)
+    float rightExtent = .0f;  ///< px occupied right of nameplate
+};
+
+// Mirror DrawOrnaments' visibility + sizing logic to produce metrics without
+// drawing.  Used by both DrawOrnaments (to skip duplicate work) and the
+// particle-aura sizer (so particles can wrap the ornaments).
+static OrnamentMetrics ComputeOrnamentMetrics(const ActorDrawData& d,
+                                              const LabelStyle& style,
+                                              const LabelLayout& layout,
+                                              float lodEffectsFactor,
+                                              const RenderSettingsSnapshot& snap)
+{
+    OrnamentMetrics m{};
+    const Settings::TierDefinition& tier = *style.tier;
+
+    const std::string& leftOrns = (style.specialTitle && !style.specialTitle->leftOrnaments.empty())
+                                      ? style.specialTitle->leftOrnaments
+                                      : tier.leftOrnaments;
+    const std::string& rightOrns =
+        (style.specialTitle && !style.specialTitle->rightOrnaments.empty())
+            ? style.specialTitle->rightOrnaments
+            : tier.rightOrnaments;
+    const bool hasOrnaments = !leftOrns.empty() || !rightOrns.empty();
+    const bool visible =
+        ((d.isPlayer && snap.enableOrnaments && hasOrnaments && style.tierAllowsOrnaments) ||
+         (style.specialTitle && style.specialTitle->forceOrnaments && hasOrnaments)) &&
+        lodEffectsFactor > .01f;
+
+    ImFont* ornamentFont = (ImGui::GetIO().Fonts->Fonts.Size > RenderConstants::FONT_INDEX_ORNAMENT)
+                               ? ImGui::GetIO().Fonts->Fonts[RenderConstants::FONT_INDEX_ORNAMENT]
+                               : nullptr;
+    if (!visible || snap.ornamentFontPath.empty() || !ornamentFont)
+    {
+        return m;
+    }
+
+    m.leftChars = CollectDrawableOrnaments(leftOrns, ornamentFont);
+    m.rightChars = CollectDrawableOrnaments(rightOrns, ornamentFont);
+    if (m.leftChars.empty() && m.rightChars.empty())
+    {
+        return m;
+    }
+
+    const float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
+    float ornamentScale = .75f;
+    if (snap.tiers.size() > 1)
+    {
+        ornamentScale = .75f + .3f * (static_cast<float>(style.tierIdx) /
+                                      static_cast<float>(snap.tiers.size() - 1));
+    }
+    const float sizeMultiplier =
+        (style.specialTitle != nullptr) ? ornamentScale * 1.3f : ornamentScale;
+    m.ornamentFont = ornamentFont;
+    m.ornamentSize = snap.ornamentFontSize * snap.ornamentScale * sizeMultiplier * textSizeScale;
+
+    const float spacingScale = snap.proportionalSpacing ? textSizeScale : 1.0f;
+    const float extraPadding = m.ornamentSize * .30f;
+    m.totalSpacing = snap.ornamentSpacing * 1.35f * spacingScale + extraPadding;
+    m.ornamentCharGap = std::max(2.0f, m.ornamentSize * .16f);
+
+    auto sideExtent = [&](const std::vector<std::string>& chars) -> float
+    {
+        if (chars.empty())
+        {
+            return .0f;
+        }
+        float w = m.totalSpacing;
+        for (size_t i = 0; i < chars.size(); ++i)
+        {
+            w += ornamentFont->CalcTextSizeA(m.ornamentSize, FLT_MAX, .0f, chars[i].c_str()).x;
+            if (i + 1 < chars.size())
+            {
+                w += m.ornamentCharGap;
+            }
+        }
+        return w;
+    };
+    m.leftExtent = sideExtent(m.leftChars);
+    m.rightExtent = sideExtent(m.rightChars);
+    m.shown = true;
+    return m;
+}
+
 // Computed particle configuration for a single actor label.
 struct ParticleConfig
 {
@@ -943,8 +1044,22 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
 
     const float pSpacingScale =
         snap.proportionalSpacing ? (layout.nameFontSize / layout.fontName->FontSize) : 1.0f;
-    cfg.spreadX = layout.nameplateWidth * .5f + snap.particleSpread * 1.55f * pSpacingScale;
-    cfg.spreadY = layout.nameplateHeight * .5f + snap.particleSpread * 1.22f * pSpacingScale;
+
+    // Wrap the particle aura around ornaments too when they are visible.
+    // Symmetric inflation keeps the cloud centered on the actor's head bone;
+    // shifting the center for asymmetric ornament strings would visibly drift.
+    OrnamentMetrics ornMetrics = ComputeOrnamentMetrics(d, style, layout, lodEffectsFactor, snap);
+    const float ornHalfInflate = std::max(ornMetrics.leftExtent, ornMetrics.rightExtent);
+
+    cfg.spreadX =
+        layout.nameplateWidth * .5f + ornHalfInflate + snap.particleSpread * 1.55f * pSpacingScale;
+
+    // Guarantee the vertical envelope still covers the ornament glyphs even
+    // when particleSpread is dialed low and ornaments are scaled up (e.g. the
+    // 1.3x bump for special titles).
+    const float baseSpreadY = snap.particleSpread * 1.22f * pSpacingScale;
+    const float ornVerticalPad = ornMetrics.shown ? ornMetrics.ornamentSize * .5f + 2.0f : .0f;
+    cfg.spreadY = layout.nameplateHeight * .5f + std::max(baseSpreadY, ornVerticalPad);
 
     int particleCount = (tier.particleCount > 0) ? tier.particleCount : snap.particleCount;
     float tierBoost = .0f;
@@ -1185,50 +1300,19 @@ void DrawOrnaments(ImDrawList* dl,
 {
     const Settings::TierDefinition& tier = *style.tier;
 
-    const std::string& leftOrns = (style.specialTitle && !style.specialTitle->leftOrnaments.empty())
-                                      ? style.specialTitle->leftOrnaments
-                                      : tier.leftOrnaments;
-    const std::string& rightOrns =
-        (style.specialTitle && !style.specialTitle->rightOrnaments.empty())
-            ? style.specialTitle->rightOrnaments
-            : tier.rightOrnaments;
-    bool hasOrnaments = !leftOrns.empty() || !rightOrns.empty();
-    bool showOrnaments =
-        ((d.isPlayer && snap.enableOrnaments && hasOrnaments && style.tierAllowsOrnaments) ||
-         (style.specialTitle && style.specialTitle->forceOrnaments && hasOrnaments)) &&
-        lodEffectsFactor > .01f;
-    auto& ornIo = ImGui::GetIO();
-    ImFont* ornamentFont = (ornIo.Fonts->Fonts.Size > RenderConstants::FONT_INDEX_ORNAMENT)
-                               ? ornIo.Fonts->Fonts[RenderConstants::FONT_INDEX_ORNAMENT]
-                               : nullptr;
-    if (!showOrnaments || snap.ornamentFontPath.empty() || !ornamentFont)
+    const OrnamentMetrics metrics =
+        ComputeOrnamentMetrics(d, style, layout, lodEffectsFactor, snap);
+    if (!metrics.shown)
     {
         return;
     }
-
-    const auto leftChars = CollectDrawableOrnaments(leftOrns, ornamentFont);
-    const auto rightChars = CollectDrawableOrnaments(rightOrns, ornamentFont);
-    if (leftChars.empty() && rightChars.empty())
-    {
-        return;
-    }
-
+    const auto& leftChars = metrics.leftChars;
+    const auto& rightChars = metrics.rightChars;
+    ImFont* const ornamentFont = metrics.ornamentFont;
+    const float ornamentSize = metrics.ornamentSize;
+    const float totalSpacing = metrics.totalSpacing;
+    const float ornamentCharGap = metrics.ornamentCharGap;
     const float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
-
-    float ornamentScale = .75f;
-    if (snap.tiers.size() > 1)
-    {
-        ornamentScale = .75f + .3f * (static_cast<float>(style.tierIdx) /
-                                      static_cast<float>(snap.tiers.size() - 1));
-    }
-    float sizeMultiplier = (style.specialTitle != nullptr) ? ornamentScale * 1.3f : ornamentScale;
-    float ornamentSize =
-        snap.ornamentFontSize * snap.ornamentScale * sizeMultiplier * textSizeScale;
-
-    const float spacingScale = snap.proportionalSpacing ? textSizeScale : 1.0f;
-    float extraPadding = ornamentSize * .30f;
-    float totalSpacing = snap.ornamentSpacing * 1.35f * spacingScale + extraPadding;
-    float ornamentCharGap = std::max(2.0f, ornamentSize * .16f);
 
     // Per-tier ornament color overrides bypass pastelization for punchier ornaments.
     // Special titles keep their dedicated color (already stored in style.Lc/Rc).
