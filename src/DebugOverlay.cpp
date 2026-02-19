@@ -1,4 +1,4 @@
-#include "DebugOverlay.h"
+#include "DebugOverlay.hpp"
 
 #include <imgui.h>
 #include <algorithm>

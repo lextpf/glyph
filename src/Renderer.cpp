@@ -1,11 +1,11 @@
-#include "Renderer.h"
+#include "Renderer.hpp"
 
-#include "RendererInternal.h"
+#include "RendererInternal.hpp"
 
-#include "AppearanceTemplate.h"
-#include "GameState.h"
-#include "ParticleTextures.h"
-#include "TextPostProcess.h"
+#include "AppearanceTemplate.hpp"
+#include "GameState.hpp"
+#include "ParticleTextures.hpp"
+#include "TextPostProcess.hpp"
 
 #include <SKSE/SKSE.h>
 

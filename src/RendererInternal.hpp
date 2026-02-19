@@ -1,12 +1,12 @@
 #pragma once
 
-#include "PCH.h"
+#include "PCH.hpp"
 
-#include "DebugOverlay.h"
-#include "RenderConstants.h"
-#include "Settings.h"
-#include "TextEffects.h"
-#include "Utf8Utils.h"
+#include "DebugOverlay.hpp"
+#include "RenderConstants.hpp"
+#include "Settings.hpp"
+#include "TextEffects.hpp"
+#include "Utf8Utils.hpp"
 
 #include <imgui.h>
 

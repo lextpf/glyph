@@ -1,7 +1,7 @@
-#include "RendererInternal.h"
+#include "RendererInternal.hpp"
 
-#include "ParticleTextures.h"
-#include "TextPostProcess.h"
+#include "ParticleTextures.hpp"
+#include "TextPostProcess.hpp"
 
 namespace Renderer
 {

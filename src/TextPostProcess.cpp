@@ -1,6 +1,6 @@
 #include <SKSE/SKSE.h>
 
-#include "TextPostProcess.h"
+#include "TextPostProcess.hpp"
 
 #include <d3d11.h>
 #include <d3dcompiler.h>

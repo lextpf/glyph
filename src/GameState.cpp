@@ -1,6 +1,6 @@
-#include "GameState.h"
+#include "GameState.hpp"
 
-#include "PCH.h"
+#include "PCH.hpp"
 
 namespace GameState
 {

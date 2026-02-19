@@ -1,6 +1,6 @@
-#include "OutfitCopy.h"
+#include "OutfitCopy.hpp"
 
-#include "PCH.h"
+#include "PCH.hpp"
 
 #include <SKSE/SKSE.h>
 

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "AppearanceTemplate.h"
-#include "PCH.h"
-#include "Settings.h"
+#include "AppearanceTemplate.hpp"
+#include "PCH.hpp"
+#include "Settings.hpp"
 
 #include <SKSE/SKSE.h>
 
