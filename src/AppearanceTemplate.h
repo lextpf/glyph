@@ -8,7 +8,7 @@
  * @namespace AppearanceTemplate
  * @brief NPC appearance template system for copying appearance to player.
  * @author Alex (https://github.com/lextpf)
- * @ingroup Core
+ * @ingroup AppearanceTemplate
  *
  * Provides functionality to copy an NPC's appearance (head parts, tint layers,
  * hair color, weight, face morphs, FaceGen data) to the player character based

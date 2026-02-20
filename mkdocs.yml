@@ -28,7 +28,7 @@ theme:
     - content.code.annotate
     - navigation.tabs
     - navigation.sections
-    - navigation.expand
+
     - navigation.top
     - navigation.indexes
     - search.highlight
@@ -109,4 +109,5 @@ nav:
       - Hooks/index.md
       - Hooks/PostDisplay.md
 
-    - Utilities: Utilities/index.md
+    - Utilities:
+      - Utilities/index.md
