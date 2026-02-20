@@ -283,11 +283,35 @@ namespace Hooks
         return g_originalPresent(swapChain, syncInterval, flags);
     }
 
-    // Hook for HUD post-display, collects data and renders overlay.
-    // Rendering happens after the original PostDisplay, so HUD is complete
-    // which ensures overlay is in backbuffer for screenshots
+    /**
+     * @brief VTable hook for `HUDMenu::PostDisplay` (vtable index 6).
+     *
+     * Intercepts the game's HUD post-display call each frame to inject
+     * overlay rendering. The hook executes on the render thread and
+     * performs the following sequence:
+     *
+     * 1. Resets per-frame render flags
+     * 2. Validates ImGui initialization and menu state
+     * 3. Updates render-thread state via Renderer::TickRT()
+     * 4. Checks for pending appearance template changes
+     * 5. Calls the original `PostDisplay` so the game HUD renders first
+     * 6. Renders the overlay on top (if allowed)
+     *
+     * Rendering after the original function ensures the overlay appears
+     * above the HUD and is captured in screenshots.
+     *
+     * @note Executes on the render thread every frame.
+     * @note Installed via `stl::write_vfunc<RE::HUDMenu, PostDisplay>()`.
+     *
+     * @see Renderer::TickRT, Renderer::IsOverlayAllowedRT, Renderer::Draw
+     * @see PresentHook for the fallback path when upscalers skip PostDisplay
+     */
     struct PostDisplay
     {
+        /**
+         * @brief Hook thunk called in place of the original `HUDMenu::PostDisplay`.
+         * @param a_menu Pointer to the HUD menu instance.
+         */
         static void thunk(RE::IMenu* a_menu)
         {
             // Reset render flags at start of frame
