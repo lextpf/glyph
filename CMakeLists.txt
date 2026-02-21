@@ -14,6 +14,10 @@ else()
 endif()
 add_link_options(/NODEFAULTLIB:MSVCRT)
 
+# clang-tidy is run out-of-band by build.bat against the `compile-db`
+# Ninja sidecar preset's compile_commands.json - it intentionally does
+# NOT wrap the main MSVC build via CMAKE_CXX_CLANG_TIDY.
+
 # Disable building tests for CommonLibSSE-NG
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
@@ -31,6 +35,15 @@ FetchContent_Declare(
     FIND_PACKAGE_ARGS NAMES CommonLibSSE
 )
 FetchContent_MakeAvailable(CommonLibSSE-NG)
+
+# Clamp cl.exe to one source file at a time when compiling CommonLibSSE-NG.
+# Its templates are heavy enough that the default /MP parallel compile can
+# spawn workers that collectively exhaust RAM and trigger MSVC crashes
+# (STATUS_ACCESS_VIOLATION / 0xC0000005 during "Generating Code..."). Costs
+# a minute or two on a clean build; only this target is affected.
+if(TARGET CommonLibSSE)
+    target_compile_options(CommonLibSSE PRIVATE /MP1)
+endif()
 
 find_package(imgui CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -91,45 +104,46 @@ endif()
 
 add_library(glyph SHARED
     src/main.cpp
-    src/PCH.h
+    src/PCH.hpp
     src/Settings.cpp
-    src/Settings.h
+    src/Settings.hpp
+    src/SettingsBinding.hpp
     src/Renderer.cpp
-    src/Renderer.h
-    src/RendererInternal.h
+    src/Renderer.hpp
+    src/RendererInternal.hpp
     src/RendererSnapshot.cpp
     src/RendererLayout.cpp
     src/RendererEffects.cpp
-    src/GameState.h
+    src/GameState.hpp
     src/GameState.cpp
     src/Hooks.cpp
-    src/Hooks.h
-    src/TextEffects.h
-    src/TextEffectsInternal.h
+    src/Hooks.hpp
+    src/TextEffects.hpp
+    src/TextEffectsInternal.hpp
     src/TextEffectsCore.cpp
     src/TextEffectsGradient.cpp
     src/TextEffectsAnimated.cpp
     src/TextEffectsComplex.cpp
     src/TextEffectsParticle.cpp
-    src/Occlusion.h
+    src/Occlusion.hpp
     src/Occlusion.cpp
-    src/DebugOverlay.h
+    src/DebugOverlay.hpp
     src/DebugOverlay.cpp
-    src/RenderConstants.h
-    src/AppearanceTemplate.h
-    src/AppearanceTemplateInternal.h
+    src/RenderConstants.hpp
+    src/AppearanceTemplate.hpp
+    src/AppearanceTemplateInternal.hpp
     src/AppearanceTemplate.cpp
     src/AppearanceCopy.cpp
     src/AppearanceFaceGen.cpp
     src/AppearanceFormID.cpp
-    src/OutfitCopy.h
+    src/OutfitCopy.hpp
     src/OutfitCopy.cpp
-    src/ParticleTextures.h
+    src/ParticleTextures.hpp
     src/ParticleTextures.cpp
-    src/TextPostProcess.h
+    src/TextPostProcess.hpp
     src/TextPostProcess.cpp
-    src/Utf8Utils.h
-    src/Version.h
+    src/Utf8Utils.hpp
+    src/Version.hpp
 )
 
 target_include_directories(glyph PRIVATE
