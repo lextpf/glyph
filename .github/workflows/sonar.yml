@@ -24,7 +24,7 @@ jobs:
           vcpkgGitCommitId: edffab1bcd2cb5b8c17d6ba34d5651ea0bf82979
 
       - name: Configure CMake
-        run: cmake --preset vs2022-windows
+        run: cmake --preset default
 
       - name: Install Build Wrapper
         shell: powershell
