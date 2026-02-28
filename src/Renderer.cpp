@@ -838,10 +838,6 @@ namespace Renderer
         }
     }
 
-    // =========================================================================
-    // Data structures for DrawLabel sub-functions
-    // =========================================================================
-
     /// Describes one formatted text segment on the main nameplate line.
     struct RenderSeg
     {
@@ -941,10 +937,6 @@ namespace Renderer
         float nameplateWidth;
         float nameplateHeight;
     };
-
-    // =========================================================================
-    // DrawLabel helper functions
-    // =========================================================================
 
     /// Desaturate a color toward white.
     static ImVec4 WashColor(ImVec4 base)
@@ -1629,12 +1621,8 @@ namespace Renderer
         }
     }
 
-    // =========================================================================
-    // DrawLabel - orchestrator
-    // =========================================================================
     static void DrawLabel(const ActorDrawData &d, ImDrawList *drawList, ImDrawListSplitter *splitter)
     {
-        // ----- Cache management -----
         auto it = s_state.cache.find(d.formID);
         if (it == s_state.cache.end())
         {
@@ -1666,7 +1654,6 @@ namespace Renderer
 
         entry.lastSeenFrame = s_state.frame;
 
-        // ----- Distance / alpha / scale computation -----
         RE::NiPoint3 cameraPos{};
         bool hasCameraPos = false;
         if (auto pc = RE::PlayerCamera::GetSingleton(); pc && pc->cameraRoot)
@@ -1717,7 +1704,6 @@ namespace Renderer
             textScaleTarget = std::max(textScaleTarget, minScale);
         }
 
-        // ----- World projection & smoothing -----
         RE::NiPoint3 screenPos;
         if (!WorldToScreen(d.worldPos, screenPos))
             return;
@@ -1783,7 +1769,6 @@ namespace Renderer
 
         entry.wasOccluded = d.isOccluded;
 
-        // ----- Early returns -----
         const float alpha = entry.alphaSmooth * entry.occlusionSmooth;
         if (alpha <= 0.02f)
             return;
@@ -1798,7 +1783,6 @@ namespace Renderer
 
         const float time = (float)ImGui::GetTime();
 
-        // ----- Compute style and layout -----
         LabelStyle style = ComputeLabelStyle(d, alpha, time);
 
         // Compute per-font outline widths
@@ -1809,7 +1793,6 @@ namespace Renderer
 
         LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale);
 
-        // ----- Draw layers (back to front) -----
         DrawParticles(drawList, d, style, layout, lodEffectsFactor, time, splitter);
         DrawOrnaments(drawList, d, style, layout, lodEffectsFactor, time, splitter);
         DrawTitleText(drawList, d, style, layout, lodTitleFactor, splitter);

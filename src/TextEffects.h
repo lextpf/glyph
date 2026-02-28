@@ -31,8 +31,6 @@
  */
 namespace TextEffects
 {
-    // ========== Utility Functions ==========
-
     /**
      * Clamp value to [0, 1] range.
      *
@@ -74,8 +72,6 @@ namespace TextEffects
      */
     ImU32 LerpColorU32(ImU32 a, ImU32 b, float t);
 
-    // ========== Basic Effects ==========
-
     /**
      * Draw text with outline.
      *
@@ -98,8 +94,6 @@ namespace TextEffects
      */
     void AddTextOutline4(ImDrawList* list, ImFont* font, float size,
         const ImVec2& pos, const char* text, ImU32 col, ImU32 outline, float w);
-
-    // ========== Gradient Effects ==========
 
     /**
      * Draw text with horizontal gradient (no outline).
@@ -286,8 +280,6 @@ namespace TextEffects
         const ImVec2& pos, const char* text, ImU32 colCenter, ImU32 colEdge, ImU32 outline, float w,
         float gamma = 1.0f);
 
-    // ========== Animated Effects ==========
-
     /**
      * Draw text with pulsing brightness.
      *
@@ -469,8 +461,6 @@ namespace TextEffects
         float phase01, float bandWidth01, float strength01,
         float splitPx, float ghostAlphaMul);
 
-    // ========== Rainbow Effects ==========
-
     /**
      * Draw text with animated rainbow wave (no outline).
      *
@@ -585,8 +575,6 @@ namespace TextEffects
         const ImVec2& pos, const char* text,
         float baseHue, float speed, float saturation, float value, float alpha,
         ImU32 outline, float w, bool useWhiteBase = false);
-
-    // ========== Complex Effects ==========
 
     /**
      * Draw text with animated aurora/northern lights effect.
@@ -812,8 +800,6 @@ namespace TextEffects
         ImU32 baseL, ImU32 baseR, ImU32 scanColor, ImU32 outline, float w,
         float speed, float width, float intensity);
 
-    // ========== Glow Effect ==========
-
     /**
      * Draw soft glow/bloom effect behind text.
      *
@@ -841,8 +827,6 @@ namespace TextEffects
     void AddTextGlow(ImDrawList* list, ImFont* font, float size,
         const ImVec2& pos, const char* text, ImU32 glowColor,
         float radius, float intensity, int samples);
-
-    // ========== Side Ornaments ==========
 
     /**
      * Draw decorative ornaments on sides of a text region.
@@ -880,8 +864,6 @@ namespace TextEffects
         float outlineWidth, bool enableGlow, float glowRadius, float glowIntensity, int glowSamples,
         const std::string& leftOrnaments, const std::string& rightOrnaments,
         float ornamentScale = 1.0f, bool isSpecialTitle = false);
-
-    // ========== Particle Aura ==========
 
     /**
      * Draw floating particle aura around a text region.
