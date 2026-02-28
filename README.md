@@ -32,7 +32,7 @@ An SKSE plugin that renders **floating nameplates** above NPCs and creatures, di
 </div>
 
 > [!IMPORTANT]
-> **Skyrim SE 1.5.97 Only** - AE support is not yet available.
+> **Skyrim SE 1.5.97** - AE support is available but untested.
 >
 > - Built and tested against **Nolvus Awakening 6.0.20**. The deploy script assumes `D:\Nolvus\Instance\MODS\overwrite`, edit `DEPLOY_PATH` in `deploy.bat` to match your setup.
 > - If you experience frame drops, type `whois` in the console to toggle the overlay off.
@@ -347,6 +347,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Claude](https://claude.ai/) - AI coding assistant by Anthropic
 - [Codex](https://openai.com/index/openai-codex/) - AI coding assistant by OpenAI
 - [Sora](https://openai.com/sora/) - Graphics generation
+
 
 
 
