@@ -276,6 +276,8 @@ static bool CanDrawOverlay()
 		return false;
 	}
 
+    // Unconditionally hide during combat - floating names above enemies would
+    // reveal hidden NPCs and clutter the screen during action sequences.
     if (player->IsInCombat()) {
         return false;
     }

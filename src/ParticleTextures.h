@@ -24,6 +24,8 @@
  * | `stars/`  | 0           | Star sparkle sprites |
  * | `sparks/` | 1           | Spark effect sprites |
  * | `wisps/`  | 2           | Wisp glow sprites    |
+ * | `runes/`  | 3           | Magical rune symbols |
+ * | `orbs/`   | 4           | Soft glowing orbs    |
  *
  * ## :material-image-filter-hdr: Texture Pipeline
  *
@@ -46,10 +48,11 @@
  *
  * ## :material-dice-multiple-outline: Texture Selection
  *
- * Each particle is assigned a texture deterministically using its index
- * to avoid random flickering across frames:
+ * Each particle is assigned a texture deterministically using a hash of its
+ * index and style to avoid random flickering across frames. The hash uses
+ * prime multipliers for good distribution:
  *
- * $$\text{texture} = \text{particleIndex} \bmod \text{textureCount}$$
+ * $$\text{texture} = \text{hash}(\text{particleIndex},\; \text{style}) \bmod \text{textureCount}$$
  */
 namespace ParticleTextures
 {

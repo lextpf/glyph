@@ -57,10 +57,15 @@
  *
  * ## :material-hook: Hooked Functions
  *
- * |                                      Function |   Method   |    Address/Index     | Purpose                     |
- * |-----------------------------------------------|------------|----------------------|-----------------------------|
- * | `BSGraphics::Renderer::CreateD3DAndSwapChain` | Thunk call | REL_ID(75595, 77226) | D3D11 device/swapchain init |
- * |                        `HUDMenu::PostDisplay` |   VTable   |      vtable[6]       | Per-frame overlay rendering |
+ * |                                      Function |   Method   |    Address/Index     | Purpose                            |
+ * |-----------------------------------------------|------------|----------------------|------------------------------------|
+ * | `BSGraphics::Renderer::CreateD3DAndSwapChain` | Thunk call | REL_ID(75595, 77226) | D3D11 device/swapchain init        |
+ * |                        `HUDMenu::PostDisplay` |   VTable   |      vtable[6]       | Per-frame overlay rendering        |
+ * |               `IDXGISwapChain::Present`       | COM VTable |      vtable[8]       | Fallback render for upscaler compat|
+ *
+ * The Present hook acts as a safety net: if upscalers (DLSS, FSR) restructure
+ * the pipeline and PostDisplay is skipped, the overlay renders in PresentHook
+ * just before the backbuffer flip.
  *
  * ## :material-hook: Hook Flow
  *
@@ -100,7 +105,7 @@
  * |   Edition | Version | Support |
  * |-----------|---------|---------|
  * | Skyrim SE | 1.5.97  | Full    |
- * | Skyrim AE | 1.6.x   | None    |
+ * | Skyrim AE | 1.6.x   | Full    |
  * | Skyrim VR | 1.4.15  | None    |
  *
  * ## :material-lock-outline: Thread Safety
