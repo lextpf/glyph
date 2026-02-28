@@ -9,7 +9,8 @@
  * @ingroup Occlusion
  *
  * Provides occlusion culling for nameplates using the game's built-in line-of-sight
- * system combined with camera frustum checks.
+ * system combined with a behind-camera dot-product test. On LOS failure, actors
+ * default to visible to avoid false occlusion.
  *
  * ## :material-eye-off-outline: Occlusion Pipeline
  *
@@ -86,7 +87,7 @@
  * |-----------------------------|--------|-------------------------------------------------------------------|
  * |   `kCloseDistanceThreshold` | 100.0  | Always visible when $\\|p_{actor} - p_{cam}\\| < 100$ units       |
  * | `kBehindCameraDotThreshold` | -0.2   | Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$) |
- * |     `kHeadHeightMultiplier` | 0.9    | Head position: $y_{head} = y_{base} + 0.9h$                       |
+ * |     `kHeadHeightMultiplier` | 0.9    | Reserved, currently unused                                        |
  */
 namespace Occlusion
 {
@@ -97,7 +98,7 @@ namespace Occlusion
     {
         constexpr float kCloseDistanceThreshold = 100.0f;    ///< Visible when $\|p_{actor} - p_{cam}\| < 100$ game units
         constexpr float kBehindCameraDotThreshold = -0.2f;   ///< Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$)
-        constexpr float kHeadHeightMultiplier = 0.9f;        ///< Head position: $y_{head} = y_{base} + 0.9h$
+        constexpr float kHeadHeightMultiplier = 0.9f;        ///< Reserved, currently unused
     }
 
     /**

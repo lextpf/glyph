@@ -109,7 +109,7 @@ namespace AppearanceTemplate
         return resolvedFormID & 0x00FFFFFF;
     }
 
-    bool ApplyFaceGen(RE::TESNPC* templateNPC, const std::string& fallbackPluginName, RE::FormID fallbackFormID)
+    bool ApplyFaceGen(RE::TESNPC* templateNPC)
     {
         if (!templateNPC) {
             SKSE::log::error("AppearanceTemplate: ApplyFaceGen called with null template");
@@ -719,7 +719,7 @@ namespace AppearanceTemplate
         if (Settings::TemplateCopyFaceGen) {
             if (racesCompatible || Settings::TemplateIncludeRace) {
                 // ApplyFaceGen will auto-detect the winning file for FaceGen paths
-                bool faceGenApplied = ApplyFaceGen(templateNPC, Settings::TemplatePlugin, resolvedID);
+                bool faceGenApplied = ApplyFaceGen(templateNPC);
                 if (!faceGenApplied) {
                     SKSE::log::warn("AppearanceTemplate: FaceGen not applied - falling back to record data only");
                     // This is not a failure - we still have the record-based appearance

@@ -25,7 +25,7 @@
  * |        TemplatePlugin | string | -       | Plugin file containing the NPC (e.g., Inigo.esp) |
  * | UseTemplateAppearance | bool   | false   | Enable/disable the feature                       |
  * |   TemplateIncludeRace | bool   | false   | Copy the NPC's race (REQUIRED)                   |
- * |   TemplateIncludeBody | bool   | false   | Also copy height/body morphs                     |
+ * |   TemplateIncludeBody | bool   | false   | Also copy height                                 |
  *
  * ### :material-cogs: FaceGen Options
  * |                 Setting | Type   | Default | Description                                     |
@@ -43,7 +43,7 @@
  * - Hair color
  * - Tint layers (skin tone, makeup, war paint, dirt)
  * - Face morphs and sculpt data
- * - Weight/body morph
+ * - Height (TemplateIncludeBody)
  * - FaceGen mesh and tint texture (TemplateCopyFaceGen)
  * - Skin textures (TemplateCopySkin)
  * - Equipped outfit (TemplateCopyOutfit)
@@ -101,12 +101,10 @@ namespace AppearanceTemplate
      * Loads the template's FaceGen NIF and tint texture and applies them
      * to the player character.
      *
-     * @param templateNPC The template NPC
-     * @param pluginName Plugin containing the template
-     * @param formID Original FormID used for FaceGen paths
+     * @param templateNPC The template NPC (plugin and FormID are resolved internally)
      * @return true if FaceGen was applied, false if files not found or error
      */
-    bool ApplyFaceGen(RE::TESNPC* templateNPC, const std::string& pluginName, RE::FormID formID);
+    bool ApplyFaceGen(RE::TESNPC* templateNPC);
     
     /**
      * @brief Apply template appearance to player if configured in settings.
@@ -148,12 +146,12 @@ namespace AppearanceTemplate
      * - Head parts (eyes, hair, brows, scars, etc.)
      * - Tint layers (skin tone, war paint, dirt, etc.)
      * - Hair color
-     * - Weight/body morph
+     * - Height
      * - Face morph presets and sculpt data
      *
      * @param templateNPC The NPC to copy appearance from
      * @param includeRace Whether to copy the template's race
-     * @param includeBody Whether to also copy height/body morphs
+     * @param includeBody Whether to also copy height
      * @return true if copy succeeded, false otherwise
      */
     bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool includeBody);

@@ -152,7 +152,7 @@ namespace Renderer
      * - Game is loading or resetting
      * - Player is in menus (inventory, map, journal, etc.)
      * - Player cell is not attached
-     * - Player is in combat (if configured)
+     * - Player is in combat
      * - Manually disabled via ToggleEnabled()
      *
      * @see Draw, TickRT

@@ -44,6 +44,7 @@ namespace DebugOverlay
         }
     }
 
+    // Called from the render thread within an active ImGui frame.
     void Render(const Context& ctx)
     {
         // Early out if disabled or no stats available
