@@ -54,7 +54,12 @@ if %ERRORLEVEL% neq 0 (
         echo ERROR: Doxide failed
         exit /b %ERRORLEVEL%
     )
-    python scripts/clean_docs.py
+    python scripts/_promote_subgroups.py
+    if %ERRORLEVEL% neq 0 (
+        echo ERROR: _promote_subgroups.py failed
+        exit /b %ERRORLEVEL%
+    )
+    python scripts/_clean_docs.py
 )
 echo.
 
