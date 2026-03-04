@@ -1,11 +1,11 @@
-#include "Hooks.h"
+#include "Hooks.hpp"
 
-#include "AppearanceTemplate.h"
-#include "GameState.h"
-#include "ParticleTextures.h"
-#include "Renderer.h"
-#include "Settings.h"
-#include "TextPostProcess.h"
+#include "AppearanceTemplate.hpp"
+#include "GameState.hpp"
+#include "ParticleTextures.hpp"
+#include "Renderer.hpp"
+#include "Settings.hpp"
+#include "TextPostProcess.hpp"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -22,9 +22,7 @@
 
 namespace Hooks
 {
-// ============================================================================
-// Initialization and per-frame state machine
-//
+
 // State is organized into three flag structs accessed via static functions:
 //
 //   Init()  -- Initialization lifecycle flags
@@ -44,7 +42,6 @@ namespace Hooks
 //     renderExceptionCount     -- throttled error logging
 //     missingPresentLogged     -- one-shot warning for missing Present
 //     deviceChangeLogged       -- one-shot warning for device change
-// ============================================================================
 
 struct InitFlags
 {
@@ -392,9 +389,30 @@ static bool InitializeImGui()
     return true;
 }
 
+// @author Codex (https://github.com/codex)
 // Late bootstrap path for sessions where the D3D creation hook fires before
-// glyph is loaded or when renderer startup ordering changes.  HUD/Present can
-// call this safely; the CAS ensures only one thread attempts initialization.
+// glyph is loaded, or when renderer startup ordering changes.
+//
+// Three independent guards must all be coordinated to make this safe under
+// concurrent calls from PostDisplay and PresentHook on the render thread:
+//
+//   1. `initialized`       - fast acquire-load early-out. Once true, this
+//                            function is a no-op forever (cheap path).
+//   2. `nextInitRetryAtMs` - throttle. A previous attempt that returned
+//                            false from `InitializeImGui` is normal (swap
+//                            chain not yet created, fonts not on disk, ...).
+//                            Spinning every frame burns CPU and floods logs,
+//                            so we back off for INIT_RETRY_INTERVAL_MS (5s).
+//   3. `initializing`      - re-entry guard. `InitializeImGui` touches global
+//                            D3D state and the ImGui context; two threads
+//                            inside it simultaneously would race on those
+//                            singletons. The CAS makes the second caller
+//                            return early without blocking the render thread.
+//
+// The CAS + RAII pair is deliberate: a `std::lock_guard` on a mutex would
+// serialize render-thread frames against any thread that happens to be
+// running InitializeImGui. The CAS lets the non-winners give up
+// immediately, which is the correct behavior here.
 static void EnsureOverlayInitialized()
 {
     static constexpr std::uint64_t INIT_RETRY_INTERVAL_MS = 5000;
