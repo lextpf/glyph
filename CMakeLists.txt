@@ -105,6 +105,8 @@ endif()
 add_library(glyph SHARED
     src/main.cpp
     src/PCH.hpp
+    src/ConsoleCommands.hpp
+    src/ConsoleCommands.cpp
     src/Settings.cpp
     src/Settings.hpp
     src/SettingsBinding.hpp
@@ -205,9 +207,18 @@ if(BUILD_GLYPH_TESTS)
         target_compile_options(glyph_test_settings PRIVATE /W4)
     endif()
 
+    # Test executable for contextual label/token classification and FormatString
+    add_executable(glyph_test_label_format tests/test_label_format.cpp)
+    target_compile_features(glyph_test_label_format PRIVATE cxx_std_17)
+    target_link_libraries(glyph_test_label_format PRIVATE GTest::gtest GTest::gtest_main)
+    if(MSVC)
+        target_compile_options(glyph_test_label_format PRIVATE /W4)
+    endif()
+
     # Enable CTest integration with Google Test
     include(GoogleTest)
     enable_testing()
     gtest_discover_tests(glyph_test_utils)
     gtest_discover_tests(glyph_test_settings)
+    gtest_discover_tests(glyph_test_label_format)
 endif()
