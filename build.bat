@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM build.bat - Complete build pipeline for whois
+REM build.bat - Complete build pipeline for glyph
 REM ============================================================================
 REM This script:
 REM   1. Configures the project using CMake with the vs2022-windows preset
@@ -12,7 +12,7 @@ REM ============================================================================
 setlocal enabledelayedexpansion
 
 echo ============================================================================
-echo                             WHOIS BUILD PIPELINE
+echo                             GLYPH BUILD PIPELINE
 echo ============================================================================
 echo.
 
@@ -88,7 +88,7 @@ echo                           BUILD PIPELINE COMPLETE
 echo ============================================================================
 echo.
 echo Build Output:
-echo   - DLL: build\Release\whois.dll
+echo   - DLL: build\Release\glyph.dll
 echo.
 echo Documentation:
 echo   - API:  docs\api\  (if doxide available)

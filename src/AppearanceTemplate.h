@@ -16,7 +16,7 @@
  *
  * ## :material-cogs: Settings
  *
- * Configure in whois.ini under `[AppearanceTemplate]`:
+ * Configure in glyph.ini under `[AppearanceTemplate]`:
  *
  * ### :material-cogs: Core Settings
  * |               Setting | Type   | Default | Description                                      |

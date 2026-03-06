@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM deploy.bat - Deploy whois plugin as an MO2 mod
+REM deploy.bat - Deploy glyph plugin as an MO2 mod
 REM ============================================================================
 REM This script:
 REM   1. Verifies the build and MO2 paths exist
@@ -12,27 +12,27 @@ REM ============================================================================
 setlocal enabledelayedexpansion
 
 echo ============================================================================
-echo                            WHOIS DEPLOY SCRIPT
+echo                            GLYPH DEPLOY SCRIPT
 echo ============================================================================
 echo.
 
 :: Deprecation warning for old env var
-if defined WHOIS_DEPLOY_PATH (
-    echo WARNING: WHOIS_DEPLOY_PATH is deprecated. Use WHOIS_MO2_MODS and
-    echo          WHOIS_MO2_PROFILE instead.
+if defined GLYPH_DEPLOY_PATH (
+    echo WARNING: GLYPH_DEPLOY_PATH is deprecated. Use GLYPH_MO2_MODS and
+    echo          GLYPH_MO2_PROFILE instead.
     echo.
 )
 
 :: MO2 mods directory
-if defined WHOIS_MO2_MODS (
-    set "MO2_MODS=%WHOIS_MO2_MODS%"
+if defined GLYPH_MO2_MODS (
+    set "MO2_MODS=%GLYPH_MO2_MODS%"
 ) else (
     set "MO2_MODS=D:\Nolvus\Instance\MODS"
 )
 
 :: MO2 active profile directory
-if defined WHOIS_MO2_PROFILE (
-    set "MO2_PROFILE=%WHOIS_MO2_PROFILE%"
+if defined GLYPH_MO2_PROFILE (
+    set "MO2_PROFILE=%GLYPH_MO2_PROFILE%"
 ) else (
     set "MO2_PROFILE=D:\Nolvus\Instance\profiles\Default"
 )
@@ -46,7 +46,7 @@ if not defined VERSION (
     exit /b 1
 )
 
-set "MOD_NAME=whois-dev-%VERSION%"
+set "MOD_NAME=glyph-dev-%VERSION%"
 
 REM ============================================================================
 REM STEP 1: Verify Prerequisites
@@ -54,23 +54,23 @@ REM ============================================================================
 echo [1/4] Verifying prerequisites...
 echo ----------------------------------------------------------------------------
 
-if not exist "build\Release\whois.dll" (
-    echo ERROR: build\Release\whois.dll not found
+if not exist "build\Release\glyph.dll" (
+    echo ERROR: build\Release\glyph.dll not found
     echo Run build.bat first
     exit /b 1
 )
-echo   Found: build\Release\whois.dll
+echo   Found: build\Release\glyph.dll
 
 if not exist "%MO2_MODS%" (
     echo ERROR: MO2 mods directory not found: %MO2_MODS%
-    echo Set WHOIS_MO2_MODS to your MO2 mods directory
+    echo Set GLYPH_MO2_MODS to your MO2 mods directory
     exit /b 1
 )
 echo   Found: %MO2_MODS%
 
 if not exist "%MO2_PROFILE%\modlist.txt" (
     echo ERROR: modlist.txt not found: %MO2_PROFILE%\modlist.txt
-    echo Set WHOIS_MO2_PROFILE to your active MO2 profile directory
+    echo Set GLYPH_MO2_PROFILE to your active MO2 profile directory
     exit /b 1
 )
 echo   Found: %MO2_PROFILE%\modlist.txt
@@ -84,21 +84,21 @@ echo ---------------------------------------------------------------------------
 
 :: Clean previous staging
 if exist "build\staging" rmdir /S /Q "build\staging"
-mkdir "build\staging\SKSE\Plugins\whois"
+mkdir "build\staging\SKSE\Plugins\glyph"
 
 :: Stage files
-copy /Y "build\Release\whois.dll" "build\staging\SKSE\Plugins\whois.dll" >nul
-copy /Y "skse\plugins\whois.ini" "build\staging\SKSE\Plugins\whois.ini" >nul
-xcopy /E /I /Y "skse\plugins\whois" "build\staging\SKSE\Plugins\whois" >nul
+copy /Y "build\Release\glyph.dll" "build\staging\SKSE\Plugins\glyph.dll" >nul
+copy /Y "skse\plugins\glyph.ini" "build\staging\SKSE\Plugins\glyph.ini" >nul
+xcopy /E /I /Y "skse\plugins\glyph" "build\staging\SKSE\Plugins\glyph" >nul
 
 :: Create zip (remove old one first)
-if exist "build\whois-dev.zip" del /Q "build\whois-dev.zip"
-powershell -NoProfile -Command "Compress-Archive -Path 'build\staging\*' -DestinationPath 'build\whois-dev.zip'"
+if exist "build\glyph-dev.zip" del /Q "build\glyph-dev.zip"
+powershell -NoProfile -Command "Compress-Archive -Path 'build\staging\*' -DestinationPath 'build\glyph-dev.zip'"
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to create archive
     exit /b %ERRORLEVEL%
 )
-echo   Created: build\whois-dev.zip
+echo   Created: build\glyph-dev.zip
 
 :: Clean staging
 rmdir /S /Q "build\staging"
@@ -117,7 +117,7 @@ if exist "%MO2_MODS%\!MOD_NAME!" (
 )
 
 :: Extract archive
-powershell -NoProfile -Command "Expand-Archive -Path 'build\whois-dev.zip' -DestinationPath '%MO2_MODS%\!MOD_NAME!'"
+powershell -NoProfile -Command "Expand-Archive -Path 'build\glyph-dev.zip' -DestinationPath '%MO2_MODS%\!MOD_NAME!'"
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to extract archive
     exit /b %ERRORLEVEL%
@@ -166,14 +166,14 @@ echo ===========================================================================
 echo                            DEPLOY COMPLETE
 echo ============================================================================
 echo.
-echo Archive: build\whois-dev.zip
+echo Archive: build\glyph-dev.zip
 echo Mod:     %MO2_MODS%\!MOD_NAME!
 echo Profile: %MO2_PROFILE%\modlist.txt
 echo.
 echo Installed Files:
-echo   - SKSE\Plugins\whois.dll
-echo   - SKSE\Plugins\whois.ini
-echo   - SKSE\Plugins\whois\  (assets)
+echo   - SKSE\Plugins\glyph.dll
+echo   - SKSE\Plugins\glyph.ini
+echo   - SKSE\Plugins\glyph\  (assets)
 echo.
 echo  *** Launch Skyrim through MO2 to test the plugin ***
 echo.

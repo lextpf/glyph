@@ -9,12 +9,12 @@
  * @author Alex (https://github.com/lextpf)
  * @ingroup Settings
  *
- * Contains all user-configurable settings loaded from `whois.ini`,
+ * Contains all user-configurable settings loaded from `glyph.ini`,
  * including tier definitions, visual effects, fonts, and behavior parameters.
  *
  * ## :material-file-cog-outline: Configuration File
  *
- * Settings are loaded from `Data/SKSE/Plugins/whois.ini` using a simple
+ * Settings are loaded from `Data/SKSE/Plugins/glyph.ini` using a simple
  * key-value format with section headers for tier definitions.
  *
  * | Section            | Purpose                                  |
@@ -27,7 +27,7 @@
  *
  * @note Documented defaults on extern variables refer to the values shipped in
  * the default INI file. Variables without explicit C++ initializers default to
- * zero/empty until Load() populates them from `whois.ini`. Variables with
+ * zero/empty until Load() populates them from `glyph.ini`. Variables with
  * explicit C++ initializers (e.g., `EnableGlow`, `GlowRadius`) use those
  * values as fallbacks when the INI key is absent.
  *
@@ -66,8 +66,8 @@
  *
  * | Resource       | Path / API                                                |
  * |----------------|-----------------------------------------------------------|
- * | Settings file  | `Data/SKSE/Plugins/whois.ini`                             |
- * | Log file       | `Documents/My Games/Skyrim Special Edition/SKSE/whois.log`|
+ * | Settings file  | `Data/SKSE/Plugins/glyph.ini`                             |
+ * | Log file       | `Documents/My Games/Skyrim Special Edition/SKSE/glyph.log`|
  * | Actor data     | `RE::TESDataHandler`                                      |
  */
 namespace Settings
@@ -304,7 +304,7 @@ namespace Settings
     // Particle Aura
     extern bool  EnableParticleAura;     ///< Master enable for particle aura (default: true)
     extern bool  UseParticleTextures;    ///< Use texture sprites instead of shapes (default: true)
-    // Textures are now loaded from subfolders: Data/SKSE/Plugins/whois/particles/<type>/
+    // Textures are now loaded from subfolders: Data/SKSE/Plugins/glyph/particles/<type>/
 
     extern bool  EnableStars;            ///< Enable twinkling stars (default: true)
     extern bool  EnableSparks;           ///< Enable fire-like sparks (default: false)
@@ -399,12 +399,12 @@ namespace Settings
     extern std::string TemplateFaceGenPlugin;  ///< Optional override for FaceGen plugin path (empty = auto-detect)
 
     /**
-     * Load all settings from whois.ini.
+     * Load all settings from glyph.ini.
      *
      * Parses the configuration file and populates all settings variables.
      * Called once during plugin initialization and on hot reload.
      *
-     * File Location: Data/SKSE/Plugins/whois.ini
+     * File Location: Data/SKSE/Plugins/glyph.ini
      *
      * Missing file or invalid values use defaults. No errors are thrown.
      *

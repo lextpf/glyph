@@ -69,10 +69,10 @@ namespace DebugOverlay
                                  ImGuiWindowFlags_NoNav |
                                  ImGuiWindowFlags_NoMove;
 
-        if (ImGui::Begin("whois Debug", nullptr, flags))
+        if (ImGui::Begin("glyph Debug", nullptr, flags))
         {
             // Cyan header for visual distinction
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "whois Debug");
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "glyph Debug");
 
             // Flash green "[Reloaded!]" text after hot reload
             // Fades out over kReloadNotificationDuration seconds

@@ -17,7 +17,7 @@
  *
  * ## :material-folder-image: Folder Structure
  *
- * Textures are loaded from `Data/SKSE/Plugins/whois/particles/<type>/`:
+ * Textures are loaded from `Data/SKSE/Plugins/glyph/particles/<type>/`:
  *
  * | Subfolder | Style Index | Description          |
  * |-----------|:-----------:|----------------------|

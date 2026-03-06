@@ -25,7 +25,7 @@ jobs:
         run: cmake --preset vs2022-windows
 
       - name: Build tests
-        run: cmake --build build --config Release --target whois_test_utils whois_test_settings -- /m
+        run: cmake --build build --config Release --target glyph_test_utils glyph_test_settings -- /m
 
       - name: Run tests
         run: ctest --test-dir build --build-config Release --output-on-failure

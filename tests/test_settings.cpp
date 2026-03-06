@@ -1,5 +1,5 @@
 /**
- * Unit tests for whois settings parsing using Google Test.
+ * Unit tests for glyph settings parsing using Google Test.
  *
  * Tests INI parsing logic including tier definitions, color parsing,
  * effect type parsing, and format string handling.

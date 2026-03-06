@@ -280,7 +280,7 @@ namespace ParticleTextures
         }
 
         // Base path for particle textures
-        const std::string basePath = "Data/SKSE/Plugins/whois/particles/";
+        const std::string basePath = "Data/SKSE/Plugins/glyph/particles/";
 
         // Map particle styles to folder names
         struct FolderMapping {
