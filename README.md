@@ -12,9 +12,9 @@
 ![CMake](https://img.shields.io/badge/CMake-3.10%2B-c0392b?style=flat&logo=cmake&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-475569.svg?logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB3aWR0aD0iMTY0cHgiIGhlaWdodD0iMTY0cHgiIHZpZXdCb3g9IjAgMCA1MTIuMDAgNTEyLjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIwLjAwNTEyIj48ZyBpZD0iU1ZHUmVwb19iZ0NhcnJpZXIiIHN0cm9rZS13aWR0aD0iMCI+PC9nPjxnIGlkPSJTVkdSZXBvX3RyYWNlckNhcnJpZXIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgc3Ryb2tlPSIjQ0NDQ0NDIiBzdHJva2Utd2lkdGg9IjMuMDcyIj48L2c+PGcgaWQ9IlNWR1JlcG9faWNvbkNhcnJpZXIiPjxwYXRoIGQ9Ik0yNTYgOEMxMTkuMDMzIDggOCAxMTkuMDMzIDggMjU2czExMS4wMzMgMjQ4IDI0OCAyNDggMjQ4LTExMS4wMzMgMjQ4LTI0OFMzOTIuOTY3IDggMjU2IDh6bTExNy4xMzQgMzQ2Ljc1M2MtMS41OTIgMS44NjctMzkuNzc2IDQ1LjczMS0xMDkuODUxIDQ1LjczMS04NC42OTIgMC0xNDQuNDg0LTYzLjI2LTE0NC40ODQtMTQ1LjU2NyAwLTgxLjMwMyA2Mi4wMDQtMTQzLjQwMSAxNDMuNzYyLTE0My40MDEgNjYuOTU3IDAgMTAxLjk2NSAzNy4zMTUgMTAzLjQyMiAzOC45MDRhMTIgMTIgMCAwIDEgMS4yMzggMTQuNjIzbC0yMi4zOCAzNC42NTVjLTQuMDQ5IDYuMjY3LTEyLjc3NCA3LjM1MS0xOC4yMzQgMi4yOTUtLjIzMy0uMjE0LTI2LjUyOS0yMy44OC02MS44OC0yMy44OC00Ni4xMTYgMC03My45MTYgMzMuNTc1LTczLjkxNiA3Ni4wODIgMCAzOS42MDIgMjUuNTE0IDc5LjY5MiA3NC4yNzcgNzkuNjkyIDM4LjY5NyAwIDY1LjI4LTI4LjMzOCA2NS41NDQtMjguNjI1IDUuMTMyLTUuNTY1IDE0LjA1OS01LjAzMyAxOC41MDggMS4wNTNsMjQuNTQ3IDMzLjU3MmExMi4wMDEgMTIuMDAxIDAgMCAxLS41NTMgMTQuODY2eiI+PC9wYXRoPjwvZz48L3N2Zz4=)
 <br/>
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lextpf_glyph&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lextpf_glyph)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_glyph&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_glyph)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_glyph&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_glyph)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
 <br/>
 [![build](https://github.com/lextpf/glyph/actions/workflows/build.yml/badge.svg)](https://github.com/lextpf/glyph/actions/workflows/build.yml)
 [![tests](https://github.com/lextpf/glyph/actions/workflows/test.yml/badge.svg)](https://github.com/lextpf/glyph/actions/workflows/test.yml)
@@ -347,6 +347,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Claude](https://claude.ai/) - AI coding assistant by Anthropic
 - [Codex](https://openai.com/index/openai-codex/) - AI coding assistant by OpenAI
 - [Sora](https://openai.com/sora/) - Graphics generation
+
 
 
 
