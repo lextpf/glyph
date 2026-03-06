@@ -1,7 +1,7 @@
-# Doxide Configuration for whois
+# Doxide Configuration for glyph
 # https://doxide.org
 
-title: whois
+title: glyph
 description: SKSE overlay for actor info and appearance templates
 
 output: docs

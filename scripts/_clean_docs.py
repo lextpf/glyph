@@ -287,7 +287,7 @@ def parse_version(repo_root: Path) -> str:
     content = version_h.read_text(encoding="utf-8")
     parts = {}
     for key in ("MAJOR", "MINOR", "PATCH"):
-        m = re.search(rf"#define\s+WHOIS_VERSION_{key}\s+(\d+)", content)
+        m = re.search(rf"#define\s+GLYPH_VERSION_{key}\s+(\d+)", content)
         if m:
             parts[key] = m.group(1)
     if len(parts) == 3:
@@ -300,7 +300,7 @@ def inject_version(text: str, version: str) -> str:
     if not version or f"**v{version}**" in text:
         return text
     return re.sub(
-        r"^(# whois)\n\n(.+)$",
+        r"^(# glyph)\n\n(.+)$",
         rf"\1\n\n**v{version}** | \2",
         text,
         count=1,

@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM test.bat - Run whois plugin unit tests using Google Test
+REM test.bat - Run glyph plugin unit tests using Google Test
 REM ============================================================================
 REM This script:
 REM   1. Configures CMake if needed
@@ -11,7 +11,7 @@ REM ============================================================================
 setlocal
 
 echo ============================================================================
-echo                            WHOIS TEST RUNNER
+echo                            GLYPH TEST RUNNER
 echo ============================================================================
 echo.
 
@@ -38,7 +38,7 @@ REM STEP 2: Build Tests
 REM ============================================================================
 echo [2/3] Building test executables...
 echo ----------------------------------------------------------------------------
-cmake --build build --config Release --target whois_test_utils whois_test_settings
+cmake --build build --config Release --target glyph_test_utils glyph_test_settings
 if errorlevel 1 (
     echo ERROR: Build failed!
     pause
@@ -56,29 +56,29 @@ echo.
 set ALL_PASSED=1
 
 REM Run utils tests
-echo === whois_test_utils ===
-if exist "build\Release\whois_test_utils.exe" (
-    build\Release\whois_test_utils.exe --gtest_color=yes
+echo === glyph_test_utils ===
+if exist "build\Release\glyph_test_utils.exe" (
+    build\Release\glyph_test_utils.exe --gtest_color=yes
     if errorlevel 1 set ALL_PASSED=0
-) else if exist "build\whois_test_utils.exe" (
-    build\whois_test_utils.exe --gtest_color=yes
+) else if exist "build\glyph_test_utils.exe" (
+    build\glyph_test_utils.exe --gtest_color=yes
     if errorlevel 1 set ALL_PASSED=0
 ) else (
-    echo ERROR: whois_test_utils.exe not found!
+    echo ERROR: glyph_test_utils.exe not found!
     set ALL_PASSED=0
 )
 echo.
 
 REM Run settings tests
-echo === whois_test_settings ===
-if exist "build\Release\whois_test_settings.exe" (
-    build\Release\whois_test_settings.exe --gtest_color=yes
+echo === glyph_test_settings ===
+if exist "build\Release\glyph_test_settings.exe" (
+    build\Release\glyph_test_settings.exe --gtest_color=yes
     if errorlevel 1 set ALL_PASSED=0
-) else if exist "build\whois_test_settings.exe" (
-    build\whois_test_settings.exe --gtest_color=yes
+) else if exist "build\glyph_test_settings.exe" (
+    build\glyph_test_settings.exe --gtest_color=yes
     if errorlevel 1 set ALL_PASSED=0
 ) else (
-    echo ERROR: whois_test_settings.exe not found!
+    echo ERROR: glyph_test_settings.exe not found!
     set ALL_PASSED=0
 )
 echo.

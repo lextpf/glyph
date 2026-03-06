@@ -1974,7 +1974,7 @@ namespace Renderer
 
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2((float)viewSize.width, (float)viewSize.height));
-        ImGui::Begin("whoisOverlay", nullptr,
+        ImGui::Begin("glyphOverlay", nullptr,
                      ImGuiWindowFlags_NoBackground |
                          ImGuiWindowFlags_NoDecoration |
                          ImGuiWindowFlags_NoInputs |

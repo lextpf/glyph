@@ -785,7 +785,7 @@ namespace AppearanceTemplate
         auto sourceInv = sourceActor->GetInventory();
         int copiedCount = 0;
 
-        SKSE::log::info("whois: Copying outfit from source actor...");
+        SKSE::log::info("glyph: Copying outfit from source actor...");
 
         // Iterate through source's inventory to find equipped armor
         for (const auto& [form, data] : sourceInv) {
@@ -811,14 +811,14 @@ namespace AppearanceTemplate
                 player->AddObjectToContainer(armor, nullptr, 1, nullptr);
                 RE::ActorEquipManager::GetSingleton()->EquipObject(player, armor);
                 copiedCount++;
-                SKSE::log::debug("whois: Added and equipped {}", armor->GetName());
+                SKSE::log::debug("glyph: Added and equipped {}", armor->GetName());
             }
         }
 
         if (copiedCount > 0) {
-            SKSE::log::info("whois: Copied {} armor items from source", copiedCount);
+            SKSE::log::info("glyph: Copied {} armor items from source", copiedCount);
         } else {
-            SKSE::log::info("whois: No new armor items to copy (player already has them or source has none)");
+            SKSE::log::info("glyph: No new armor items to copy (player already has them or source has none)");
         }
 
         return copiedCount > 0;
