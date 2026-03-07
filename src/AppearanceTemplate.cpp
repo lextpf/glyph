@@ -125,7 +125,7 @@ namespace AppearanceTemplate
 
     std::string BuildFaceGenMeshPath(const std::string& pluginName, RE::FormID formID)
     {
-        // FormID is stored as 8-digit lowercase hex
+        // FormID is stored as 8-digit uppercase hex
         std::ostringstream ss;
         ss << "meshes\\actors\\character\\facegendata\\facegeom\\"
            << pluginName << "\\"
@@ -554,7 +554,7 @@ namespace AppearanceTemplate
         if (templateNPC->headRelatedData) {
             if (!playerBase->headRelatedData) {
                 try {
-                    playerBase->headRelatedData = std::make_unique<RE::TESNPC::HeadRelatedData>().release();
+                    playerBase->headRelatedData = new RE::TESNPC::HeadRelatedData();
                 } catch (const std::exception& e) {
                     SKSE::log::error("AppearanceTemplate: Failed to allocate headRelatedData: {}", e.what());
                     return false;
@@ -628,7 +628,7 @@ namespace AppearanceTemplate
 
             if (!playerBase->tintLayers) {
                 try {
-                    playerBase->tintLayers = std::make_unique<RE::BSTArray<RE::TESNPC::Layer*>>().release();
+                    playerBase->tintLayers = new RE::BSTArray<RE::TESNPC::Layer*>();
                 } catch (const std::exception& e) {
                     for (auto* layer : stagedTintLayers) {
                         if (layer) {
@@ -710,7 +710,7 @@ namespace AppearanceTemplate
         } else if (templateNPC->faceData && !playerBase->faceData) {
             // Allocate face data for player if needed
             try {
-                playerBase->faceData = std::make_unique<RE::TESNPC::FaceData>().release();
+                playerBase->faceData = new RE::TESNPC::FaceData();
             } catch (const std::exception& e) {
                 SKSE::log::error("AppearanceTemplate: Failed to allocate faceData: {}", e.what());
                 return false;

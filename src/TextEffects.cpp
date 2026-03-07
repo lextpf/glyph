@@ -8,9 +8,9 @@
 #include <vector>
 #include <utility>
 
-#define TWO_PI  6.28318530718f
-#define PI      3.14159265359f
-#define INV_TWO_PI (1.0f / TWO_PI)
+static constexpr float TWO_PI     = 6.28318530718f;
+static constexpr float PI         = 3.14159265359f;
+static constexpr float INV_TWO_PI = 1.0f / TWO_PI;
 
 namespace TextEffects
 {

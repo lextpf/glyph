@@ -195,12 +195,15 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
  */
 extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
+    using namespace std::literals;
+
     SKSE::Init(a_skse);
     SKSE::AllocTrampoline(1 << 8);
 
     // Setup logging
     auto path = logger::log_directory();
-    if (!path) {
+    if (!path)
+    {
         return false;
     }
 
