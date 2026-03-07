@@ -89,6 +89,16 @@ else()
     message(WARNING "ClibUtil not found. You may need to set CommonLibSSEPath environment variable or add extern/commonlibsse submodule.")
 endif()
 
+find_program(CLANG_FORMAT_EXE NAMES clang-format)
+if(CLANG_FORMAT_EXE)
+    file(GLOB_RECURSE ALL_SOURCE_FILES src/*.cpp src/*.h)
+    add_custom_target(clang-format
+        COMMAND ${CLANG_FORMAT_EXE} -i ${ALL_SOURCE_FILES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang-format on src/"
+    )
+endif()
+
 add_library(glyph SHARED
     src/main.cpp
     src/PCH.h
@@ -96,6 +106,8 @@ add_library(glyph SHARED
     src/Settings.h
     src/Renderer.cpp
     src/Renderer.h
+    src/GameState.h
+    src/GameState.cpp
     src/Hooks.cpp
     src/Hooks.h
     src/TextEffects.h

@@ -1,5 +1,7 @@
 #include "Hooks.h"
+
 #include "AppearanceTemplate.h"
+#include "GameState.h"
 #include "ParticleTextures.h"
 #include "Renderer.h"
 #include "Settings.h"
