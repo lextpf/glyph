@@ -70,6 +70,12 @@ std::vector<Segment>& DisplayFormat()
     return v;
 }
 
+std::vector<Segment>& InfoFormat()
+{
+    static std::vector<Segment> v;
+    return v;
+}
+
 std::vector<TierDefinition>& Tiers()
 {
     static std::vector<TierDefinition> v;
@@ -167,6 +173,18 @@ VisualSettings& Visual()
     return vs;
 }
 
+LabelSettings& Labels()
+{
+    static LabelSettings s;
+    return s;
+}
+
+FocusSettings& Focus()
+{
+    static FocusSettings s;
+    return s;
+}
+
 // Default font paths (shared between table and ResetToDefaults)
 static constexpr auto kDefaultNameFontPath =
     "Data/SKSE/Plugins/glyph/fonts/bd1aab18-7649-4946-9f7b-6ddd6a81311d.ttf";
@@ -200,13 +218,9 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"TitleShadowOffsetY",     "", &ShadowOutline().TitleShadowOffsetY,    2.0f,     NoClamping{}},
     {"MainShadowOffsetX",      "", &ShadowOutline().MainShadowOffsetX,     4.0f,     NoClamping{}},
     {"MainShadowOffsetY",      "", &ShadowOutline().MainShadowOffsetY,     4.0f,     NoClamping{}},
-    {"SegmentPadding",         "", &ShadowOutline().SegmentPadding,        4.0f,     NoClamping{}},
     {"OutlineWidthMin",        "", &ShadowOutline().OutlineWidthMin,       2.0f,     MinFloat{.0f}},
     {"OutlineWidthMax",        "", &ShadowOutline().OutlineWidthMax,       2.5f,     MinFloat{.0f}},
     {"FastOutlines",           "", &ShadowOutline().FastOutlines,          false,    NoClamping{}},
-    {"TitleMainGap",           "", &ShadowOutline().TitleMainGap,          .0f,      MinFloat{.0f}},
-    {"OutlineMinScale",        "", &ShadowOutline().OutlineMinScale,       .65f,     ClampFloat{.0f, 1.0f}},
-    {"ProportionalSpacing",    "", &ShadowOutline().ProportionalSpacing,   false,    NoClamping{}},
 
     // Outline Glow
     {"EnableOutlineGlow",      "", &ShadowOutline().OutlineGlowEnabled,    false,    NoClamping{}},
@@ -266,12 +280,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     // Particle Aura
     {"EnableParticleAura",     "", &Particle().Enabled,               true,     NoClamping{}},
     {"UseParticleTextures",    "", &Particle().UseParticleTextures,   true,     NoClamping{}},
-    {"EnableStars",            "", &Particle().EnableStars,           true,     NoClamping{}},
-    {"EnableSparks",           "", &Particle().EnableSparks,          false,    NoClamping{}},
-    {"EnableWisps",            "", &Particle().EnableWisps,           false,    NoClamping{}},
-    {"EnableRunes",            "", &Particle().EnableRunes,           false,    NoClamping{}},
-    {"EnableOrbs",             "", &Particle().EnableOrbs,            false,    NoClamping{}},
-    {"EnableCrystals",         "", &Particle().EnableCrystals,        false,    NoClamping{}},
     {"ParticleCount",          "", &Particle().Count,                 8,        MinInt{0}},
     {"ParticleSize",           "", &Particle().Size,                  3.0f,     MinFloat{.0f}},
     {"ParticleSpeed",          "", &Particle().Speed,                 1.0f,     MinFloat{.0f}},
@@ -286,16 +294,8 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"ReloadKey",              "", &Display().ReloadKey,              0,        NoClamping{}},
 
     // Animation Speed
-    {"AnimSpeedLowTier",       "", &AnimColor().AnimSpeedLowTier,    .35f,     NoClamping{}},
-    {"AnimSpeedMidTier",       "", &AnimColor().AnimSpeedMidTier,    .20f,     NoClamping{}},
-    {"AnimSpeedHighTier",      "", &AnimColor().AnimSpeedHighTier,   .10f,     NoClamping{}},
-
     // Color & Effects
     {"NameColorMix",           "", &AnimColor().NameColorMix,         .65f,     ClampFloat{.0f, 1.0f}},
-    {"EffectAlphaMin",         "", &AnimColor().EffectAlphaMin,       .20f,     ClampFloat{.0f, 1.0f}},
-    {"EffectAlphaMax",         "", &AnimColor().EffectAlphaMax,       .60f,     ClampFloat{.0f, 1.0f}},
-    {"StrengthMin",            "", &AnimColor().StrengthMin,          .15f,     MinFloat{.0f}},
-    {"StrengthMax",            "", &AnimColor().StrengthMax,          .60f,     MinFloat{.0f}},
 
     // Smoothing
     {"AlphaSettleTime",        "", &AnimColor().AlphaSettleTime,      .46f,     MinFloat{.01f}},
@@ -365,6 +365,36 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"TemplateCopyOutfit",     "", &Appearance().TemplateCopyOutfit,    false,    NoClamping{}},
     {"TemplateReapplyOnReload","", &Appearance().TemplateReapplyOnReload, false,  NoClamping{}},
     {"TemplateFaceGenPlugin",  "", &Appearance().TemplateFaceGenPlugin, std::string(),  NoClamping{}},
+
+    // Contextual Label Tokens -- %r relationship, %d level delta, %c creature kind.
+    // Empty defaults render as nothing; pair with a trailing "?" in Format/InfoFormat
+    // to drop the surrounding segment when the token expands to whitespace.
+    {"RelationshipFollower",   "", &Labels().RelationshipFollower,  std::string("Follower"), NoClamping{}},
+    {"RelationshipAlly",       "", &Labels().RelationshipAlly,      std::string("Ally"),     NoClamping{}},
+    {"RelationshipNeutral",    "", &Labels().RelationshipNeutral,   std::string(),           NoClamping{}},
+    {"RelationshipHostile",    "", &Labels().RelationshipHostile,   std::string("Hostile"),  NoClamping{}},
+    {"LevelDeltaWeak",         "", &Labels().LevelDeltaWeak,        std::string("Weak"),     NoClamping{}},
+    {"LevelDeltaEven",         "", &Labels().LevelDeltaEven,        std::string(),           NoClamping{}},
+    {"LevelDeltaStrong",       "", &Labels().LevelDeltaStrong,      std::string("Strong"),   NoClamping{}},
+    {"LevelDeltaDeadly",       "", &Labels().LevelDeltaDeadly,      std::string("Deadly"),   NoClamping{}},
+    {"CreatureTypeNPC",        "", &Labels().CreatureTypeNPC,       std::string(),           NoClamping{}},
+    {"CreatureTypeBeast",      "", &Labels().CreatureTypeBeast,     std::string("Beast"),    NoClamping{}},
+    {"CreatureTypeUndead",     "", &Labels().CreatureTypeUndead,    std::string("Undead"),   NoClamping{}},
+    {"CreatureTypeDaedra",     "", &Labels().CreatureTypeDaedra,    std::string("Daedra"),   NoClamping{}},
+    {"CreatureTypeDragon",     "", &Labels().CreatureTypeDragon,    std::string("Dragon"),   NoClamping{}},
+
+    // Level-delta classification thresholds (actor level minus player level).
+    {"WeakAtOrBelow",          "", &Labels().WeakAtOrBelow,         -5,                      NoClamping{}},
+    {"StrongAtOrAbove",        "", &Labels().StrongAtOrAbove,        5,                      NoClamping{}},
+    {"DeadlyAtOrAbove",        "", &Labels().DeadlyAtOrAbove,       10,                      NoClamping{}},
+
+    // Focus-target expanded nameplate
+    {"FocusEnabled",           "", &Focus().Enabled,                 false,                  NoClamping{}},
+    {"FocusConeAngleDegrees",  "", &Focus().ConeAngleDegrees,        8.0f,                   ClampFloat{.5f, 45.0f}},
+    {"FocusMaxDistance",       "", &Focus().MaxDistance,             .0f,                    MinFloat{.0f}},
+    {"FocusAmbientDimFactor",  "", &Focus().AmbientDimFactor,        .55f,                   ClampFloat{.05f, 1.0f}},
+    {"FocusSettleTime",        "", &Focus().SettleTime,              .25f,                   ClampFloat{.0f, 2.0f}},
+    {"FocusIgnoreOccluded",    "", &Focus().IgnoreOccluded,          true,                   NoClamping{}},
 });
 
 // clang-format on
@@ -520,7 +550,11 @@ static std::string CanonicalizeStructKey(const std::string& rawKey)
 static void ResetToDefaults()
 {
     TitleFormat() = "%t";
-    DisplayFormat() = {{"%n", false}, {" Lv.%l", true}};
+    DisplayFormat() = {{"%n", false, false}, {" Lv.%l", true, false}};
+    // Default info row showcases the 3 MVP tokens with droppable segments.
+    // Bullet glyph (U+2022) embedded as UTF-8 bytes to avoid source-encoding issues.
+    InfoFormat() = {
+        {"%r", true, true}, {"  \xe2\x80\xa2  %d", true, true}, {"  \xe2\x80\xa2  %c", true, true}};
 
     Tiers().clear();
     Tiers().push_back(MakeDefaultTier());
@@ -542,14 +576,20 @@ static void ClampAndValidate()
     ShadowOutline().OutlineWidthMax =
         std::max(ShadowOutline().OutlineWidthMin, ShadowOutline().OutlineWidthMax);
 
-    auto& ac = AnimColor();
-    if (ac.EffectAlphaMin > ac.EffectAlphaMax)
+    // Level-delta thresholds must be strictly ordered: Weak < Strong < Deadly.
+    // If the user inverts them, fall back to defaults rather than producing nonsense buckets.
+    auto& lb = Labels();
+    if (lb.WeakAtOrBelow >= lb.StrongAtOrAbove || lb.StrongAtOrAbove >= lb.DeadlyAtOrAbove)
     {
-        std::swap(ac.EffectAlphaMin, ac.EffectAlphaMax);
-    }
-    if (ac.StrengthMin > ac.StrengthMax)
-    {
-        std::swap(ac.StrengthMin, ac.StrengthMax);
+        SKSE::log::warn(
+            "Settings: LevelDelta thresholds out of order (Weak={}, Strong={}, Deadly={}); "
+            "resetting to defaults",
+            lb.WeakAtOrBelow,
+            lb.StrongAtOrAbove,
+            lb.DeadlyAtOrAbove);
+        lb.WeakAtOrBelow = -5;
+        lb.StrongAtOrAbove = 5;
+        lb.DeadlyAtOrAbove = 10;
     }
 
     if (Tiers().empty())
@@ -913,18 +953,30 @@ static bool ParseSpecialTitleField(SpecialTitleDefinition& st,
     return true;
 }
 
-// Parse the Format key: quoted segments forming title and display format.
-static void ParseDisplayFormat(const std::string& val)
+// Parse quoted segments with optional trailing `?` droppable marker.
+// `outTitle` (when non-null) absorbs segments containing `%t`; remaining
+// segments flow into `out`.  `forceLevelFont` overrides the per-segment
+// auto-detection (`%l` presence) -- used by the InfoFormat row, which
+// renders entirely in the level font.
+static void ParseQuotedSegments(const std::string& val,
+                                std::vector<Segment>& out,
+                                std::string* outTitle,
+                                bool forceLevelFont)
 {
-    std::vector<Segment> newDisplayFormat;
-    std::string newTitleFormat;
-    bool titleFound = false;
+    out.clear();
+    if (outTitle != nullptr)
+    {
+        outTitle->clear();
+    }
 
     bool inQuote = false;
+    bool justClosed = false;  // True only for the character immediately after a closing `"`.
     std::string current;
+    Segment* lastPushed = nullptr;
+
     for (size_t i = 0; i < val.size(); ++i)
     {
-        char c = val[i];
+        const char c = val[i];
 
         if (c == '\\' && i + 1 < val.size())
         {
@@ -932,6 +984,7 @@ static void ParseDisplayFormat(const std::string& val)
             {
                 current += val[++i];
             }
+            justClosed = false;
             continue;
         }
 
@@ -939,31 +992,56 @@ static void ParseDisplayFormat(const std::string& val)
         {
             if (inQuote)
             {
-                if (current.find("%t") != std::string::npos)
+                if (outTitle != nullptr && current.find("%t") != std::string::npos)
                 {
-                    newTitleFormat = current;
-                    titleFound = true;
+                    *outTitle = current;
+                    lastPushed = nullptr;
                 }
                 else
                 {
-                    bool isLevel = current.find("%l") != std::string::npos;
-                    newDisplayFormat.push_back({current, isLevel});
+                    const bool isLevel = forceLevelFont || current.find("%l") != std::string::npos;
+                    out.push_back({current, isLevel, false});
+                    lastPushed = &out.back();
                 }
                 current.clear();
                 inQuote = false;
+                justClosed = true;  // Allow trailing `?` on the very next character.
             }
             else
             {
                 inQuote = true;
+                justClosed = false;
             }
+            continue;
         }
-        else if (inQuote)
+
+        if (inQuote)
         {
             current += c;
+            justClosed = false;
+            continue;
         }
-    }
 
-    if (titleFound)
+        // Outside quotes: `?` immediately after a closing `"` marks the previous segment optional.
+        if (justClosed && c == '?')
+        {
+            if (lastPushed != nullptr)
+            {
+                lastPushed->dropIfBlank = true;
+            }
+        }
+        justClosed = false;
+    }
+}
+
+// Parse the `Format` INI key: quoted segments forming the title line and main row.
+static void ParseDisplayFormat(const std::string& val)
+{
+    std::vector<Segment> newDisplayFormat;
+    std::string newTitleFormat;
+    ParseQuotedSegments(val, newDisplayFormat, &newTitleFormat, /*forceLevelFont*/ false);
+
+    if (!newTitleFormat.empty())
     {
         TitleFormat() = newTitleFormat;
     }
@@ -971,6 +1049,15 @@ static void ParseDisplayFormat(const std::string& val)
     {
         DisplayFormat() = newDisplayFormat;
     }
+}
+
+// Parse the `InfoFormat` INI key: quoted segments for the third row.
+// Always assigns -- an empty `InfoFormat = ` disables the info row.
+static void ParseInfoFormat(const std::string& val)
+{
+    std::vector<Segment> newInfoFormat;
+    ParseQuotedSegments(val, newInfoFormat, /*outTitle*/ nullptr, /*forceLevelFont*/ true);
+    InfoFormat() = newInfoFormat;
 }
 
 void Load()
@@ -1149,6 +1236,10 @@ void Load()
             if (key == "Format")
             {
                 ParseDisplayFormat(val);
+            }
+            else if (keyRaw == "InfoFormat" || ToLowerAscii(keyRaw) == "infoformat")
+            {
+                ParseInfoFormat(val);
             }
             // Table-driven lookup for all scalar settings.
             else if (auto it = GetKeyMap().find(ToLowerAscii(keyRaw)); it != GetKeyMap().end())
