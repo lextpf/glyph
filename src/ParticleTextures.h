@@ -79,6 +79,12 @@ namespace ParticleTextures
     bool IsInitialized();
 
     /**
+     * Release all particle texture resources.
+     * Safe to call multiple times.
+     */
+    void Shutdown();
+
+    /**
      * Get the number of loaded textures for a particle type.
      * @param style Particle style index
      * @return Number of textures available (0 if none)
