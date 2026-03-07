@@ -5,10 +5,15 @@
 
 #include <wincodec.h>
 #include <wrl/client.h>
+#include <algorithm>
 #include <array>
-#include <vector>
+#include <atomic>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <limits>
+#include <mutex>
+#include <vector>
 
 #pragma comment(lib, "windowscodecs.lib")
 
@@ -16,8 +21,7 @@ using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 
 // Lifecycle: Initialize() loads textures once after D3D11 device creation.
-// Textures are owned by the module for the lifetime of the process (no
-// explicit shutdown/release - resources are freed on process exit).
+// Shutdown() releases resources and allows safe re-initialization.
 namespace ParticleTextures
 {
     // Number of particle texture types
@@ -32,7 +36,8 @@ namespace ParticleTextures
 
     // Multiple textures per particle type
     static std::array<std::vector<TextureInfo>, NUM_TYPES> g_textures;
-    static bool g_initialized = false;
+    static std::atomic<bool> g_initialized{false};
+    static std::mutex g_initMutex;
 
     // Point sampler for small sprites
     static ID3D11SamplerState* g_pointSampler = nullptr;
@@ -42,6 +47,28 @@ namespace ParticleTextures
     static ID3D11BlendState* g_screenBlend = nullptr;
     static ID3D11Device* g_device = nullptr;
     static ID3D11DeviceContext* g_context = nullptr;
+
+    static void ReleaseResources_NoLock()
+    {
+        for (auto& typeTextures : g_textures) {
+            for (auto& tex : typeTextures) {
+                if (tex.srv) {
+                    tex.srv->Release();
+                    tex.srv = nullptr;
+                }
+            }
+            typeTextures.clear();
+        }
+
+        if (g_pointSampler) { g_pointSampler->Release(); g_pointSampler = nullptr; }
+        if (g_linearSampler) { g_linearSampler->Release(); g_linearSampler = nullptr; }
+        if (g_additiveBlend) { g_additiveBlend->Release(); g_additiveBlend = nullptr; }
+        if (g_screenBlend) { g_screenBlend->Release(); g_screenBlend = nullptr; }
+        if (g_context) { g_context->Release(); g_context = nullptr; }
+
+        g_device = nullptr;  // non-owning pointer
+        g_initialized = false;
+    }
 
     /**
      * Load a PNG file using WIC and create a D3D11 texture.
@@ -59,13 +86,10 @@ namespace ParticleTextures
         std::wstring widePath(wideLen, L'\0');
         MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &widePath[0], wideLen);
 
-        // Initialize COM
-        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-
         // Create WIC factory
         ComPtr<IWICImagingFactory> wicFactory;
-        hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&wicFactory));
+        HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&wicFactory));
         if (FAILED(hr)) {
             SKSE::log::warn("ParticleTextures: Failed to create WIC factory for {}", path);
             return info;
@@ -101,9 +125,18 @@ namespace ParticleTextures
         if (FAILED(hr)) return info;
 
         // Read pixels
-        UINT stride = width * 4;
-        UINT bufferSize = stride * height;
-        std::vector<BYTE> pixels(bufferSize);
+        if (width == 0 || height == 0 || width > ((std::numeric_limits<UINT>::max)() / 4)) {
+            SKSE::log::warn("ParticleTextures: Invalid texture dimensions {}x{} for {}", width, height, path);
+            return info;
+        }
+        const UINT stride = width * 4;
+        const uint64_t bufferSize64 = static_cast<uint64_t>(stride) * static_cast<uint64_t>(height);
+        if (bufferSize64 > static_cast<uint64_t>((std::numeric_limits<UINT>::max)())) {
+            SKSE::log::warn("ParticleTextures: Texture too large to load ({}x{}) {}", width, height, path);
+            return info;
+        }
+        const UINT bufferSize = static_cast<UINT>(bufferSize64);
+        std::vector<BYTE> pixels(static_cast<size_t>(bufferSize));
         hr = converter->CopyPixels(nullptr, stride, bufferSize, pixels.data());
         if (FAILED(hr)) return info;
 
@@ -185,14 +218,25 @@ namespace ParticleTextures
                 return 0;
             }
 
+            std::vector<fs::path> pngFiles;
             for (const auto& entry : fs::directory_iterator(folder)) {
                 if (!entry.is_regular_file()) continue;
 
                 auto ext = entry.path().extension().string();
-                // Case-insensitive PNG check
-                if (ext != ".png" && ext != ".PNG") continue;
+                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+                if (ext == ".png") {
+                    pngFiles.push_back(entry.path());
+                }
+            }
 
-                auto info = LoadTextureFromFile(device, entry.path().string());
+            std::sort(pngFiles.begin(), pngFiles.end(), [](const fs::path& a, const fs::path& b) {
+                return a.generic_u8string() < b.generic_u8string();
+            });
+
+            for (const auto& texturePath : pngFiles) {
+                auto info = LoadTextureFromFile(device, texturePath.string());
                 if (info.srv) {
                     g_textures[styleIndex].push_back(info);
                     loadedCount++;
@@ -211,13 +255,30 @@ namespace ParticleTextures
 
     bool Initialize(ID3D11Device* device)
     {
-        if (g_initialized || !device) return g_initialized;
+        std::lock_guard<std::mutex> lock(g_initMutex);
+        if (!device) return false;
+        if (g_initialized.load(std::memory_order_acquire)) return true;
+
+        // Reset stale partial state from previous failed initialization attempts.
+        ReleaseResources_NoLock();
 
         SKSE::log::info("ParticleTextures: Initializing particle textures...");
+
+        // Initialize COM once for the full load pass.
+        const HRESULT comHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        const bool comUsable = SUCCEEDED(comHr) || comHr == RPC_E_CHANGED_MODE;
+        const bool needsCoUninitialize = SUCCEEDED(comHr);
+        if (!comUsable) {
+            SKSE::log::warn("ParticleTextures: COM initialization failed (hr=0x{:08X})", static_cast<unsigned int>(comHr));
+            return false;
+        }
 
         // Store device and get context
         g_device = device;
         device->GetImmediateContext(&g_context);
+        if (!g_context) {
+            SKSE::log::warn("ParticleTextures: Failed to get immediate device context");
+        }
 
         // Create point sampler for small sprites
         D3D11_SAMPLER_DESC pointDesc = {};
@@ -308,12 +369,17 @@ namespace ParticleTextures
             totalLoaded += count;
         }
 
-        g_initialized = (totalLoaded > 0);
-        SKSE::log::info("ParticleTextures: === TOTAL: {} particle textures loaded ===", totalLoaded);
-        if (!g_initialized) {
-            SKSE::log::error("ParticleTextures: NO TEXTURES LOADED - falling back to shape rendering");
+        if (needsCoUninitialize) {
+            CoUninitialize();
         }
-        return g_initialized;
+
+        g_initialized.store(totalLoaded > 0, std::memory_order_release);
+        SKSE::log::info("ParticleTextures: === TOTAL: {} particle textures loaded ===", totalLoaded);
+        if (!g_initialized.load(std::memory_order_acquire)) {
+            SKSE::log::error("ParticleTextures: NO TEXTURES LOADED - falling back to shape rendering");
+            ReleaseResources_NoLock();
+        }
+        return g_initialized.load(std::memory_order_acquire);
     }
 
     // Callback to set a specific sampler before drawing a sprite.
@@ -336,7 +402,13 @@ namespace ParticleTextures
 
     bool IsInitialized()
     {
-        return g_initialized;
+        return g_initialized.load(std::memory_order_acquire);
+    }
+
+    void Shutdown()
+    {
+        std::lock_guard<std::mutex> lock(g_initMutex);
+        ReleaseResources_NoLock();
     }
 
     int GetTextureCount(int style)

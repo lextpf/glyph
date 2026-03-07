@@ -14,20 +14,58 @@
 
 namespace TextEffects
 {
+    static inline bool IsUtf8Continuation(unsigned char c)
+    {
+        return (c & 0xC0) == 0x80;
+    }
+
     // Get byte length of UTF-8 character at position
     static size_t Utf8CharLen(const char *s)
     {
         if (!s || !*s)
             return 0;
-        unsigned char c = (unsigned char)*s;
-        if (c < 0x80)
+        const unsigned char c0 = static_cast<unsigned char>(s[0]);
+        if (c0 < 0x80)
             return 1;
-        if (c < 0xE0)
-            return 2;
-        if (c < 0xF0)
+
+        // Invalid lead byte (continuation/overlong starter), consume one byte.
+        if (c0 < 0xC2)
+            return 1;
+
+        if (c0 < 0xE0) {
+            if (!s[1])
+                return 1;
+            const unsigned char c1 = static_cast<unsigned char>(s[1]);
+            return IsUtf8Continuation(c1) ? 2 : 1;
+        }
+
+        if (c0 < 0xF0) {
+            if (!s[1] || !s[2])
+                return 1;
+            const unsigned char c1 = static_cast<unsigned char>(s[1]);
+            const unsigned char c2 = static_cast<unsigned char>(s[2]);
+            if (!IsUtf8Continuation(c1) || !IsUtf8Continuation(c2))
+                return 1;
+            // Reject overlong + surrogate encodings.
+            if ((c0 == 0xE0 && c1 < 0xA0) || (c0 == 0xED && c1 >= 0xA0))
+                return 1;
             return 3;
-        if (c < 0xF8)
+        }
+
+        if (c0 < 0xF5) {
+            if (!s[1] || !s[2] || !s[3])
+                return 1;
+            const unsigned char c1 = static_cast<unsigned char>(s[1]);
+            const unsigned char c2 = static_cast<unsigned char>(s[2]);
+            const unsigned char c3 = static_cast<unsigned char>(s[3]);
+            if (!IsUtf8Continuation(c1) || !IsUtf8Continuation(c2) || !IsUtf8Continuation(c3))
+                return 1;
+            // Reject overlong + values above U+10FFFF.
+            if ((c0 == 0xF0 && c1 < 0x90) || (c0 == 0xF4 && c1 >= 0x90))
+                return 1;
             return 4;
+        }
+
         return 1;
     }
 
@@ -131,6 +169,9 @@ namespace TextEffects
     void AddTextOutline4(ImDrawList *list, ImFont *font, float size,
                          const ImVec2 &pos, const char *text, ImU32 col, ImU32 outline, float w)
     {
+        if (!list || !font || !text || !text[0])
+            return;
+
         // Draw 8-directional outline for smoother edges
         DrawOutlineInternal(list, font, size, pos, text, outline, w);
 
@@ -1541,34 +1582,33 @@ namespace TextEffects
             // Per-particle alpha variation (0.6 to 1.0 range)
             float alphaVariation = 0.6f + 0.4f * (0.5f + 0.5f * std::sin(golden * 1.7f + timeScaled * 0.3f));
 
-            // Per-particle color variation - more vibrant hue shift and boosted saturation
-            float hueShift = std::sin(golden * 2.3f + timeScaled * 0.25f) * 0.4f;  // +/- 40% hue shift for rainbow variety
-            float satMod = 1.1f + 0.2f * std::sin(golden * 1.5f);                  // 110-130% saturation boost
-
-            // Apply color variation
             int r = baseR, g = baseG, b = baseB;
+            if (!hasTextures)
+            {
+                // Per-particle hue/saturation variation is only used by procedural fallback rendering.
+                float hueShift = std::sin(golden * 2.3f + timeScaled * 0.25f) * 0.4f;
+                float satMod = 1.1f + 0.2f * std::sin(golden * 1.5f);
 
-            // Shift hue by rotating RGB values
-            float hueAngle = hueShift * TWO_PI;
-            float cosH = std::cos(hueAngle);
-            float sinH = std::sin(hueAngle);
+                float hueAngle = hueShift * TWO_PI;
+                float cosH = std::cos(hueAngle);
+                float sinH = std::sin(hueAngle);
 
-            // Simplified hue rotation matrix
-            float newR = baseR * (0.213f + 0.787f * cosH - 0.213f * sinH) +
-                         baseG * (0.213f - 0.213f * cosH + 0.143f * sinH) +
-                         baseB * (0.213f - 0.213f * cosH - 0.928f * sinH);
-            float newG = baseR * (0.715f - 0.715f * cosH - 0.715f * sinH) +
-                         baseG * (0.715f + 0.285f * cosH + 0.140f * sinH) +
-                         baseB * (0.715f - 0.715f * cosH + 0.283f * sinH);
-            float newB = baseR * (0.072f - 0.072f * cosH + 0.928f * sinH) +
-                         baseG * (0.072f - 0.072f * cosH - 0.283f * sinH) +
-                         baseB * (0.072f + 0.928f * cosH + 0.072f * sinH);
+                // Simplified hue rotation matrix
+                float newR = baseR * (0.213f + 0.787f * cosH - 0.213f * sinH) +
+                             baseG * (0.213f - 0.213f * cosH + 0.143f * sinH) +
+                             baseB * (0.213f - 0.213f * cosH - 0.928f * sinH);
+                float newG = baseR * (0.715f - 0.715f * cosH - 0.715f * sinH) +
+                             baseG * (0.715f + 0.285f * cosH + 0.140f * sinH) +
+                             baseB * (0.715f - 0.715f * cosH + 0.283f * sinH);
+                float newB = baseR * (0.072f - 0.072f * cosH + 0.928f * sinH) +
+                             baseG * (0.072f - 0.072f * cosH - 0.283f * sinH) +
+                             baseB * (0.072f + 0.928f * cosH + 0.072f * sinH);
 
-            // Apply saturation modification
-            float gray = 0.299f * newR + 0.587f * newG + 0.114f * newB;
-            r = std::clamp((int)(gray + (newR - gray) * satMod), 0, 255);
-            g = std::clamp((int)(gray + (newG - gray) * satMod), 0, 255);
-            b = std::clamp((int)(gray + (newB - gray) * satMod), 0, 255);
+                float gray = 0.299f * newR + 0.587f * newG + 0.114f * newB;
+                r = std::clamp((int)(gray + (newR - gray) * satMod), 0, 255);
+                g = std::clamp((int)(gray + (newG - gray) * satMod), 0, 255);
+                b = std::clamp((int)(gray + (newB - gray) * satMod), 0, 255);
+            }
 
             float x, y, finalAlpha, finalSize;
 

@@ -6,6 +6,8 @@
 
 #include <d3d11.h>
 #include <dxgi.h>
+#include <exception>
+#include <mutex>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <imgui_freetype.h>
@@ -17,6 +19,7 @@ namespace Hooks
 {
     /// Atomic flag indicating whether ImGui has been initialized
     std::atomic<bool> initialized = false;
+    std::atomic<bool> initializing = false;
 
     /// Flag indicating whether mipmapped font atlas has been created
     std::atomic<bool> mipmapsGenerated = false;
@@ -29,6 +32,13 @@ namespace Hooks
 
     /// Flag indicating overlay has been rendered this frame
     std::atomic<bool> overlayRenderedThisFrame = false;
+
+    /// Render exception metrics (logged with throttling).
+    std::atomic<uint32_t> renderExceptionCount = 0;
+    std::atomic<bool> missingPresentLogged = false;
+    std::atomic<bool> deviceChangeLogged = false;
+    std::atomic<bool> backendReinitRequested = false;
+    std::mutex g_stateMutex;
 
     /// Stored D3D11 device for mipmap generation
     ID3D11Device* g_device = nullptr;
@@ -49,6 +59,42 @@ namespace Hooks
     // Forward declaration of overlay render function (used by screenshot hook)
     void RenderOverlayNow();
 
+    // Installs the Present hook on a specific swapchain and stores original Present.
+    bool TryInstallPresentHook(IDXGISwapChain* swapChain);
+
+    bool TryInstallPresentHook(IDXGISwapChain* swapChain)
+    {
+        if (!swapChain) {
+            return false;
+        }
+
+        void** vtable = *reinterpret_cast<void***>(swapChain);
+        if (!vtable || !vtable[8]) {
+            return false;
+        }
+
+        const auto currentPresent = reinterpret_cast<PresentFn>(vtable[8]);
+        const auto ourPresent = reinterpret_cast<PresentFn>(&PresentHook);
+        {
+            const std::lock_guard<std::mutex> lock(g_stateMutex);
+            if (currentPresent == ourPresent) {
+                return g_originalPresent != nullptr;
+            }
+            g_originalPresent = currentPresent;
+        }
+
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(&vtable[8], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            logger::error("Hooks: VirtualProtect failed while patching Present vtable slot");
+            return false;
+        }
+        vtable[8] = reinterpret_cast<void*>(&PresentHook);
+        if (!VirtualProtect(&vtable[8], sizeof(void*), oldProtect, &oldProtect)) {
+            logger::warn("Hooks: Failed to restore Present vtable memory protection");
+        }
+        return true;
+    }
+
     // Hook for D3D11 device/swap chain creation
     struct CreateD3DAndSwapChain
     {
@@ -56,11 +102,49 @@ namespace Hooks
         {
             func();
 
-            // Ensure initialize once using atomic compare-and-swap
-            bool expected = false;
-            if (!initialized.compare_exchange_strong(expected, true)) {
-                return;  // Already initialized, bail out
+            if (initialized.load(std::memory_order_acquire)) {
+                // Detect runtime swap-chain/device changes and refresh cached pointers.
+                auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+                if (renderer && renderer->data.renderWindows) {
+                    auto& data = renderer->data;
+                    auto swapChain = reinterpret_cast<IDXGISwapChain*>(data.renderWindows[0].swapChain);
+                    auto device = reinterpret_cast<ID3D11Device*>(data.forwarder);
+                    auto context = reinterpret_cast<ID3D11DeviceContext*>(data.context);
+                    bool changed = false;
+                    if (swapChain && device && context) {
+                        const std::lock_guard<std::mutex> lock(g_stateMutex);
+                        changed = (swapChain != g_swapChain || device != g_device || context != g_context);
+                        if (changed) {
+                            g_swapChain = swapChain;
+                            g_device = device;
+                            g_context = context;
+                        }
+                    }
+                    if (changed) {
+                        ParticleTextures::Shutdown();
+                        mipmapsGenerated.store(false, std::memory_order_release);
+                        particleTexturesLoaded.store(false, std::memory_order_release);
+                        backendReinitRequested.store(true, std::memory_order_release);
+                        if (!TryInstallPresentHook(swapChain)) {
+                            logger::error("Hooks: Failed to (re)install Present hook on updated swapchain");
+                        }
+                        if (!deviceChangeLogged.exchange(true, std::memory_order_acq_rel)) {
+                            logger::warn("Hooks: Detected renderer device/swapchain change, scheduling backend refresh");
+                        }
+                    }
+                }
+                return;
             }
+
+            // Ensure only one thread attempts initialization at a time.
+            bool expected = false;
+            if (!initializing.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                return;
+            }
+            struct InitScope
+            {
+                ~InitScope() { initializing.store(false, std::memory_order_release); }
+            } _;
 
             // Get Skyrim's renderer singleton
             auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -95,11 +179,41 @@ namespace Hooks
             }
 
             // Store for later mipmap generation
-            g_device = device;
-            g_context = context;
+            {
+                const std::lock_guard<std::mutex> lock(g_stateMutex);
+                g_device = device;
+                g_context = context;
+            }
+
+            bool contextCreated = false;
+            bool win32Initialized = false;
+            bool dx11Initialized = false;
+            auto cleanupFailedInit = [&]() {
+                if (dx11Initialized) {
+                    ImGui_ImplDX11_Shutdown();
+                    dx11Initialized = false;
+                }
+                if (win32Initialized) {
+                    ImGui_ImplWin32_Shutdown();
+                    win32Initialized = false;
+                }
+                if (contextCreated) {
+                    ImGui::DestroyContext();
+                    contextCreated = false;
+                }
+                {
+                    const std::lock_guard<std::mutex> lock(g_stateMutex);
+                    g_device = nullptr;
+                    g_context = nullptr;
+                    g_swapChain = nullptr;
+                    g_originalPresent = nullptr;
+                }
+                ParticleTextures::Shutdown();
+            };
 
             // Create ImGui context for our overlay
             ImGui::CreateContext();
+            contextCreated = true;
 
             // Configure ImGui I/O settings
             auto& io = ImGui::GetIO();
@@ -110,6 +224,7 @@ namespace Hooks
             // Load custom fonts for different text elements
             // Character range: Basic Latin + Latin-1 Supplement
             static const ImWchar ranges[] = { 0x0020, 0x00FF, 0, };
+            const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
             
             // Font config: FreeType with light hinting for smooth scaled text
             ImFontConfig config;
@@ -150,29 +265,32 @@ namespace Hooks
 
             // Initialize ImGui backends for Win32 and DirectX 11
             if (!ImGui_ImplWin32_Init(desc.OutputWindow)) {
+                logger::error("Hooks: ImGui Win32 backend initialization failed");
+                cleanupFailedInit();
                 return;
             }
+            win32Initialized = true;
             if (!ImGui_ImplDX11_Init(device, context)) {
+                logger::error("Hooks: ImGui DX11 backend initialization failed");
+                cleanupFailedInit();
                 return;
             }
+            dx11Initialized = true;
 
             // Store swap chain and hook Present for post-upscaler rendering
-            g_swapChain = swapChain;
+            {
+                const std::lock_guard<std::mutex> lock(g_stateMutex);
+                g_swapChain = swapChain;
+            }
 
-            // Hook IDXGISwapChain::Present via COM vtable patching.
-            void** vtable = *reinterpret_cast<void***>(swapChain);
-            g_originalPresent = reinterpret_cast<PresentFn>(vtable[8]);
-
-            // The vtable lives in read-only memory. Temporarily mark the single
-            // slot as writable, swap in our hook, then restore the original
-            // protection flags to leave memory in its expected state.
-            DWORD oldProtect;
-            VirtualProtect(&vtable[8], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect);
-            vtable[8] = reinterpret_cast<void*>(&PresentHook);
-            VirtualProtect(&vtable[8], sizeof(void*), oldProtect, &oldProtect);
+            if (!TryInstallPresentHook(swapChain)) {
+                logger::error("Hooks: Failed to install Present hook");
+                cleanupFailedInit();
+                return;
+            }
 
             // Mark initialization as complete
-            initialized.store(true);
+            initialized.store(true, std::memory_order_release);
         }
         static inline REL::Relocation<decltype(thunk)> func;
     };
@@ -181,19 +299,45 @@ namespace Hooks
     void RenderOverlayNow()
     {
         if (!initialized.load(std::memory_order_acquire)) return;
+        if (!ImGui::GetCurrentContext()) return;
 
         try {
+            ID3D11Device* device = nullptr;
+            ID3D11DeviceContext* context = nullptr;
+            {
+                const std::lock_guard<std::mutex> lock(g_stateMutex);
+                device = g_device;
+                context = g_context;
+            }
+
+            if (backendReinitRequested.exchange(false, std::memory_order_acq_rel)) {
+                if (!device || !context) {
+                    logger::error("Hooks: Backend refresh requested without valid D3D device/context");
+                    return;
+                }
+                ImGui_ImplDX11_Shutdown();
+                if (!ImGui_ImplDX11_Init(device, context)) {
+                    logger::error("Hooks: Failed to reinitialize ImGui DX11 backend after device change");
+                    initialized.store(false, std::memory_order_release);
+                    return;
+                }
+                mipmapsGenerated.store(false, std::memory_order_release);
+                particleTexturesLoaded.store(false, std::memory_order_release);
+                logger::info("Hooks: Reinitialized ImGui DX11 backend after device change");
+            }
+
             // Start new ImGui frame
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
 
             // Generate mipmapped font atlas on first frame
-            if (!mipmapsGenerated.exchange(true) && g_device && g_context) {
+            if (!mipmapsGenerated.load(std::memory_order_acquire) && device && context) {
                 auto& io = ImGui::GetIO();
                 unsigned char* pixels = nullptr;
                 int width = 0, height = 0;
                 io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
+                bool mipmapsReady = false;
                 if (pixels && width > 0 && height > 0) {
                     int mipLevels = 1;
                     int maxDim = (width > height) ? width : height;
@@ -211,8 +355,8 @@ namespace Hooks
                     texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
                     ID3D11Texture2D* fontTexture = nullptr;
-                    if (SUCCEEDED(g_device->CreateTexture2D(&texDesc, nullptr, &fontTexture))) {
-                        g_context->UpdateSubresource(fontTexture, 0, nullptr, pixels, width * 4, 0);
+                    if (SUCCEEDED(device->CreateTexture2D(&texDesc, nullptr, &fontTexture))) {
+                        context->UpdateSubresource(fontTexture, 0, nullptr, pixels, width * 4, 0);
 
                         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
                         srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -220,26 +364,40 @@ namespace Hooks
                         srvDesc.Texture2D.MipLevels = mipLevels;
 
                         ID3D11ShaderResourceView* fontSRV = nullptr;
-                        if (SUCCEEDED(g_device->CreateShaderResourceView(fontTexture, &srvDesc, &fontSRV))) {
-                            g_context->GenerateMips(fontSRV);
+                        if (SUCCEEDED(device->CreateShaderResourceView(fontTexture, &srvDesc, &fontSRV))) {
+                            context->GenerateMips(fontSRV);
                             if (io.Fonts->TexID) {
                                 ((ID3D11ShaderResourceView*)io.Fonts->TexID)->Release();
                             }
                             io.Fonts->SetTexID((ImTextureID)fontSRV);
+                            mipmapsReady = true;
                         }
                         fontTexture->Release();
                     }
                 }
+                if (mipmapsReady) {
+                    mipmapsGenerated.store(true, std::memory_order_release);
+                }
+            }
+
+            bool useParticleTextures = false;
+            {
+                const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+                useParticleTextures = Settings::UseParticleTextures;
             }
 
             // Load particle textures on first frame
-            if (!particleTexturesLoaded.exchange(true) && g_device && Settings::UseParticleTextures) {
-                ParticleTextures::Initialize(g_device);
+            if (useParticleTextures &&
+                !particleTexturesLoaded.load(std::memory_order_acquire) &&
+                device) {
+                if (ParticleTextures::Initialize(device)) {
+                    particleTexturesLoaded.store(true, std::memory_order_release);
+                }
             }
 
             // Set display size to actual screen resolution
             {
-                static const auto screenSize = RE::BSGraphics::Renderer::GetScreenSize();
+                const auto screenSize = RE::BSGraphics::Renderer::GetScreenSize();
                 auto& io = ImGui::GetIO();
                 io.DisplaySize.x = static_cast<float>(screenSize.width);
                 io.DisplaySize.y = static_cast<float>(screenSize.height);
@@ -262,8 +420,16 @@ namespace Hooks
 
             // Mark that overlay was rendered this frame
             overlayRenderedThisFrame.store(true, std::memory_order_release);
+        } catch (const std::exception& e) {
+            const uint32_t count = renderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (count <= 5 || (count % 120) == 0) {
+                logger::error("Hooks: Exception in RenderOverlayNow (#{}): {}", count, e.what());
+            }
         } catch (...) {
-            // Silently handle errors to maintain game stability
+            const uint32_t count = renderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (count <= 5 || (count % 120) == 0) {
+                logger::error("Hooks: Unknown exception in RenderOverlayNow (#{}).", count);
+            }
         }
     }
 
@@ -279,8 +445,40 @@ namespace Hooks
             RenderOverlayNow();
         }
 
+        PresentFn originalPresent = nullptr;
+        {
+            const std::lock_guard<std::mutex> lock(g_stateMutex);
+            originalPresent = g_originalPresent;
+        }
+
+        if (!originalPresent) {
+            // Attempt on-the-fly recovery from the swapchain vtable.
+            if (swapChain) {
+                void** vtable = *reinterpret_cast<void***>(swapChain);
+                if (vtable && vtable[8]) {
+                    auto candidate = reinterpret_cast<PresentFn>(vtable[8]);
+                    if (candidate && candidate != reinterpret_cast<PresentFn>(&PresentHook)) {
+                        const std::lock_guard<std::mutex> lock(g_stateMutex);
+                        if (!g_originalPresent) {
+                            g_originalPresent = candidate;
+                        }
+                        originalPresent = g_originalPresent;
+                    }
+                }
+            }
+
+            if (originalPresent) {
+                return originalPresent(swapChain, syncInterval, flags);
+            }
+
+            if (!missingPresentLogged.exchange(true, std::memory_order_acq_rel)) {
+                logger::error("Hooks: Missing original IDXGISwapChain::Present pointer, returning success to avoid frame hard-fail");
+            }
+            return S_OK;
+        }
+
         // Forward to the real IDXGISwapChain::Present we saved during init.
-        return g_originalPresent(swapChain, syncInterval, flags);
+        return originalPresent(swapChain, syncInterval, flags);
     }
 
     /**
@@ -343,7 +541,7 @@ namespace Hooks
             // Call the original PostDisplay function first
             func(a_menu);
 
-            if (shouldRender && !overlayRenderedThisFrame.exchange(true)) {
+            if (shouldRender && !overlayRenderedThisFrame.load(std::memory_order_acquire)) {
                 RenderOverlayNow();
             }
         }
@@ -356,13 +554,36 @@ namespace Hooks
 
     void Install()
     {
-        // Hook D3D11 device creation for ImGui initialization
-        REL::Relocation<std::uintptr_t> target{ RELOCATION_ID(75595, 77226), OFFSET(0x9, 0x275) };
-        stl::write_thunk_call<CreateD3DAndSwapChain>(target.address());
+        bool d3dHookInstalled = false;
+        bool hudHookInstalled = false;
 
-        // Hook HUD post-display, renders overlay after game HUD is complete
-        stl::write_vfunc<RE::HUDMenu, PostDisplay>();
+        try {
+            // Hook D3D11 device creation for ImGui initialization
+            REL::Relocation<std::uintptr_t> target{ RELOCATION_ID(75595, 77226), OFFSET(0x9, 0x275) };
+            stl::write_thunk_call<CreateD3DAndSwapChain>(target.address());
+            d3dHookInstalled = true;
+        } catch (const std::exception& e) {
+            SKSE::log::error("Hooks: Failed to install CreateD3DAndSwapChain hook: {}", e.what());
+        } catch (...) {
+            SKSE::log::error("Hooks: Failed to install CreateD3DAndSwapChain hook (unknown error)");
+        }
 
-        SKSE::log::info("Hooks: Installed");
+        try {
+            // Hook HUD post-display, renders overlay after game HUD is complete
+            stl::write_vfunc<RE::HUDMenu, PostDisplay>();
+            hudHookInstalled = true;
+        } catch (const std::exception& e) {
+            SKSE::log::error("Hooks: Failed to install HUDMenu::PostDisplay hook: {}", e.what());
+        } catch (...) {
+            SKSE::log::error("Hooks: Failed to install HUDMenu::PostDisplay hook (unknown error)");
+        }
+
+        if (d3dHookInstalled && hudHookInstalled) {
+            SKSE::log::info("Hooks: Installed");
+        } else {
+            SKSE::log::warn(
+                "Hooks: Partial install (CreateD3DAndSwapChain={}, HUDPostDisplay={})",
+                d3dHookInstalled, hudHookInstalled);
+        }
     }
 }

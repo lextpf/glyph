@@ -11,14 +11,19 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Renderer
 {
+    // Forward declaration for validated UTF-8 iteration.
+    static const char *Utf8Next(const char *s, unsigned int &out);
+
     // Count UTF-8 characters in string
     static size_t Utf8CharCount(const char *s)
     {
@@ -28,23 +33,14 @@ namespace Renderer
 
         while (*s)
         {
-            unsigned char c = (unsigned char)*s;
-            if (c < 0x80)
+            unsigned int cp = 0;
+            const char *next = Utf8Next(s, cp);
+            if (!next || next <= s)
             {
-                s++;
-            }  // 1-byte (ASCII)
-            else if (c < 0xE0)
-            {
-                s += 2;
-            }  // 2-byte
-            else if (c < 0xF0)
-            {
-                s += 3;
-            }  // 3-byte
-            else
-            {
-                s += 4;
-            }  // 4-byte
+                ++s;
+                continue;
+            }
+            s = next;
             count++;
         }
         return count;
@@ -61,23 +57,14 @@ namespace Renderer
 
         while (*s && count < maxChars)
         {
-            unsigned char c = (unsigned char)*s;
-            if (c < 0x80)
+            unsigned int cp = 0;
+            const char *next = Utf8Next(s, cp);
+            if (!next || next <= s)
             {
-                s++;
-            }  // 1-byte (ASCII)
-            else if (c < 0xE0)
-            {
-                s += 2;
-            }  // 2-byte
-            else if (c < 0xF0)
-            {
-                s += 3;
-            }  // 3-byte
-            else
-            {
-                s += 4;
-            }  // 4-byte
+                ++s;
+                continue;
+            }
+            s = next;
             count++;
         }
 
@@ -299,6 +286,12 @@ namespace Renderer
         bool isOccluded{false};                   ///< Whether actor is occluded from view
     };
 
+    struct OcclusionCacheEntry
+    {
+        uint32_t lastCheckFrame{0};
+        bool cachedOccluded{false};
+    };
+
     /// Encapsulates all mutable renderer state into a single struct.
     struct RendererState
     {
@@ -310,6 +303,9 @@ namespace Renderer
         std::vector<ActorDrawData> snapshot;
         std::mutex snapshotLock;
         std::atomic<bool> updateQueued{false};
+        std::atomic<bool> pauseSnapshotUpdates{false};
+        std::atomic<bool> snapshotUpdateRunning{false};
+        std::atomic<bool> clearOcclusionCacheRequested{false};
 
         // Frame State
         bool wasInInvalidState = true;
@@ -324,6 +320,7 @@ namespace Renderer
         // Hot Reload
         bool reloadKeyWasDown = false;
         float lastReloadTime = -10.0f;
+        std::atomic<bool> reloadRequested{false};
 
         // Overlay Flags
         std::atomic<bool> allowOverlay{false};
@@ -331,6 +328,8 @@ namespace Renderer
     };
 
     static RendererState s_state;
+    static std::unordered_map<uint32_t, OcclusionCacheEntry> s_occlusionCache;
+    static uint32_t s_snapshotFrame = 0;
 
     static constexpr float kReloadNotificationDuration = RenderConstants::kReloadNotificationDuration;
 
@@ -349,6 +348,20 @@ namespace Renderer
         bool newState = !s_state.manualEnabled.load(std::memory_order_acquire);
         s_state.manualEnabled.store(newState, std::memory_order_release);
         return newState;
+    }
+
+    static ImFont* GetFontAt(int index)
+    {
+        auto& io = ImGui::GetIO();
+        if (!io.Fonts || io.Fonts->Fonts.Size <= 0) {
+            return nullptr;
+        }
+        if (index >= 0 && index < io.Fonts->Fonts.Size) {
+            if (auto* font = io.Fonts->Fonts[index]) {
+                return font;
+            }
+        }
+        return io.Fonts->Fonts[0];
     }
 
     // Get player character
@@ -504,37 +517,56 @@ namespace Renderer
         return true;
     }
 
-    /// Check occlusion for an actor, using cached results when available.
-    static void UpdateOcclusionForActor(ActorDrawData& d, RE::Actor* a, RE::Actor* player)
+    /// Check occlusion for an actor, using game-thread-local cached results.
+    static void UpdateOcclusionForActor(
+        ActorDrawData& d,
+        RE::Actor* a,
+        RE::Actor* player,
+        uint32_t snapshotFrame,
+        uint32_t checkInterval)
     {
-        auto cacheIt = s_state.cache.find(d.formID);
-
-        // Use cached result if fresh enough
-        if (cacheIt != s_state.cache.end() && cacheIt->second.initialized) {
-            uint32_t framesSince = s_state.frame - cacheIt->second.lastOcclusionCheckFrame;
-            if (framesSince < static_cast<uint32_t>(Settings::OcclusionCheckInterval)) {
-                d.isOccluded = cacheIt->second.cachedOccluded;
+        auto& entry = s_occlusionCache[d.formID];
+        if (entry.lastCheckFrame != 0) {
+            const uint32_t framesSince = snapshotFrame - entry.lastCheckFrame;
+            if (framesSince < checkInterval) {
+                d.isOccluded = entry.cachedOccluded;
                 return;
             }
         }
 
         // Perform fresh occlusion check using nameplate world position
         d.isOccluded = Occlusion::IsActorOccluded(a, player, d.worldPos);
-
-        // Update cache with the fresh result
-        if (cacheIt != s_state.cache.end()) {
-            cacheIt->second.lastOcclusionCheckFrame = s_state.frame;
-            cacheIt->second.cachedOccluded = d.isOccluded;
-        }
+        entry.lastCheckFrame = snapshotFrame;
+        entry.cachedOccluded = d.isOccluded;
     }
 
     static void UpdateSnapshot_GameThread()
     {
-        // RAII struct to ensure the update flag is cleared when function exits
-        struct ClearFlag
+        // RAII guard to ensure flags are cleared when this task exits.
+        struct UpdateScope
         {
-            ~ClearFlag() { s_state.updateQueued.store(false); }
+            UpdateScope()
+            {
+                s_state.snapshotUpdateRunning.store(true, std::memory_order_release);
+            }
+
+            ~UpdateScope()
+            {
+                s_state.snapshotUpdateRunning.store(false, std::memory_order_release);
+                s_state.updateQueued.store(false, std::memory_order_release);
+            }
         } _;
+
+        if (s_state.pauseSnapshotUpdates.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(s_state.snapshotLock);
+            s_state.snapshot.clear();
+            return;
+        }
+
+        if (s_state.clearOcclusionCacheRequested.exchange(false, std::memory_order_acq_rel)) {
+            s_occlusionCache.clear();
+            s_snapshotFrame = 0;
+        }
 
         // Check if we're allowed to draw the overlay (not in menus, loading, etc.)
         const bool allow = CanDrawOverlay();
@@ -556,13 +588,24 @@ namespace Renderer
             return;
         }
 
+        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
         constexpr int kMaxActors = RenderConstants::kMaxActors;
         constexpr int kMaxScan = RenderConstants::kMaxScan;
         const float kMaxDistSq = Settings::MaxScanDistance * Settings::MaxScanDistance;
+        const uint32_t checkInterval = static_cast<uint32_t>(std::max(1, Settings::OcclusionCheckInterval));
+        const uint32_t snapshotFrame = ++s_snapshotFrame;
 
-        static std::vector<ActorDrawData> tempBuf;
-        tempBuf.clear();
+        std::vector<ActorDrawData> tempBuf;
         tempBuf.reserve(kMaxActors);
+        std::unordered_set<uint32_t> seenFormIDs;
+        seenFormIDs.reserve(kMaxActors);
+        struct ScanCandidate
+        {
+            RE::Actor* actor{ nullptr };
+            ActorDrawData data{};
+        };
+        std::vector<ScanCandidate> candidates;
+        candidates.reserve(kMaxScan);
 
         const auto playerPos = player->GetPosition();
 
@@ -579,14 +622,15 @@ namespace Renderer
             d.distToPlayer = 0.0f;
             d.isPlayer = true;
             tempBuf.push_back(std::move(d));
+            seenFormIDs.insert(player->GetFormID());
         }
 
-        int added = 1;
+        int added = static_cast<int>(tempBuf.size());
         int scanned = 0;
 
         for (auto &h : pl->highActorHandles)
         {
-            if (added >= kMaxActors || scanned >= kMaxScan)
+            if (scanned >= kMaxScan)
                 break;
             ++scanned;
 
@@ -600,10 +644,16 @@ namespace Renderer
             if (Settings::HideCreatures)
             {
                 static RE::BGSKeyword *npcKeyword = nullptr;
-                if (!npcKeyword)
-                {
+                static bool npcKeywordLookupAttempted = false;
+                static bool npcKeywordMissingLogged = false;
+                if (!npcKeywordLookupAttempted) {
+                    npcKeywordLookupAttempted = true;
                     if (auto* dataHandler = RE::TESDataHandler::GetSingleton(); dataHandler) {
                         npcKeyword = dataHandler->LookupForm<RE::BGSKeyword>(0x13794, "Skyrim.esm");
+                    }
+                    if (!npcKeyword && !npcKeywordMissingLogged) {
+                        npcKeywordMissingLogged = true;
+                        logger::warn("Renderer: ActorTypeNPC keyword lookup failed, using creature filter fallback heuristic");
                     }
                 }
 
@@ -620,9 +670,12 @@ namespace Renderer
                             }
                         }
                     }
+                } else {
+                    // Conservative fallback if ActorTypeNPC keyword is unavailable.
+                    isHumanoidNPC = a->IsPlayerTeammate() || a->CanTalkToPlayer();
                 }
 
-                if (npcKeyword && !isHumanoidNPC)
+                if (!isHumanoidNPC)
                     continue;
             }
 
@@ -630,7 +683,9 @@ namespace Renderer
             if (distSq > kMaxDistSq)
                 continue;
 
-            ActorDrawData d;
+            ScanCandidate candidate;
+            candidate.actor = a;
+            ActorDrawData& d = candidate.data;
             d.formID = a->GetFormID();
             d.level = a->GetLevel();
             const char *rawName = a->GetDisplayFullName();
@@ -641,11 +696,34 @@ namespace Renderer
             d.dispo = GetDisposition(a, player);
             d.isPlayer = false;
 
-            if (Settings::EnableOcclusionCulling)
-                UpdateOcclusionForActor(d, a, player);
+            candidates.push_back(std::move(candidate));
+        }
 
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const ScanCandidate& lhs, const ScanCandidate& rhs) {
+                      return lhs.data.distToPlayer < rhs.data.distToPlayer;
+                  });
+
+        const int remainingSlots = std::max(0, kMaxActors - added);
+        if (static_cast<int>(candidates.size()) > remainingSlots) {
+            candidates.resize(static_cast<size_t>(remainingSlots));
+        }
+
+        for (auto& candidate : candidates) {
+            auto& d = candidate.data;
+            if (Settings::EnableOcclusionCulling) {
+                UpdateOcclusionForActor(d, candidate.actor, player, snapshotFrame, checkInterval);
+            }
+            seenFormIDs.insert(d.formID);
             tempBuf.push_back(std::move(d));
-            ++added;
+        }
+
+        for (auto it = s_occlusionCache.begin(); it != s_occlusionCache.end();) {
+            if (seenFormIDs.find(it->first) == seenFormIDs.end()) {
+                it = s_occlusionCache.erase(it);
+            } else {
+                ++it;
+            }
         }
 
         {
@@ -656,6 +734,10 @@ namespace Renderer
 
     static void QueueSnapshotUpdate_RenderThread()
     {
+        if (s_state.pauseSnapshotUpdates.load(std::memory_order_acquire)) {
+            return;
+        }
+
         // Check if an update is already queued
         // If exchange returns true, an update is already pending, so skip
         if (s_state.updateQueued.exchange(true))
@@ -681,18 +763,17 @@ namespace Renderer
     {
         // Grace period prevents jitter when actors briefly leave the snapshot
         constexpr uint32_t kCacheGraceFrames = RenderConstants::kCacheGraceFrames;
+        std::unordered_set<uint32_t> visibleFormIDs;
+        visibleFormIDs.reserve(snap.size());
+        for (const auto& d : snap) {
+            visibleFormIDs.insert(d.formID);
+        }
 
         for (auto it = s_state.cache.begin(); it != s_state.cache.end();)
         {
-            bool inSnapshot = false;
-            for (auto &d : snap)
-            {
-                if (d.formID == it->first)
-                {
-                    inSnapshot = true;
-                    it->second.lastSeenFrame = s_state.frame;  // Update last seen
-                    break;
-                }
+            const bool inSnapshot = visibleFormIDs.find(it->first) != visibleFormIDs.end();
+            if (inSnapshot) {
+                it->second.lastSeenFrame = s_state.frame;  // Update last seen
             }
 
             if (!inSnapshot)
@@ -981,6 +1062,49 @@ namespace Renderer
         return s;
     }
 
+    static const Settings::TierDefinition& GetFallbackTier()
+    {
+        static const Settings::TierDefinition fallback = [] {
+            Settings::TierDefinition t{};
+            t.minLevel = 1;
+            t.maxLevel = 250;
+            t.title = "Unknown";
+            t.leftColor[0] = t.leftColor[1] = t.leftColor[2] = 1.0f;
+            t.rightColor[0] = t.rightColor[1] = t.rightColor[2] = 1.0f;
+            t.highlightColor[0] = t.highlightColor[1] = t.highlightColor[2] = 1.0f;
+            t.titleEffect.type = Settings::EffectType::Gradient;
+            t.nameEffect.type = Settings::EffectType::Gradient;
+            t.levelEffect.type = Settings::EffectType::Gradient;
+            t.particleCount = 0;
+            return t;
+        }();
+        return fallback;
+    }
+
+    static const std::vector<const Settings::SpecialTitleDefinition*>& GetSortedSpecialTitlesForFrame()
+    {
+        static std::vector<const Settings::SpecialTitleDefinition*> sortedSpecials;
+        static uint32_t lastFrame = std::numeric_limits<uint32_t>::max();
+
+        if (lastFrame == s_state.frame) {
+            return sortedSpecials;
+        }
+
+        sortedSpecials.clear();
+        sortedSpecials.reserve(Settings::SpecialTitles.size());
+        for (const auto& st : Settings::SpecialTitles) {
+            if (!st.keywordLower.empty()) {
+                sortedSpecials.push_back(&st);
+            }
+        }
+
+        std::sort(sortedSpecials.begin(), sortedSpecials.end(),
+                  [](const auto* a, const auto* b) { return a->priority > b->priority; });
+
+        lastFrame = s_state.frame;
+        return sortedSpecials;
+    }
+
     /// Compute all color, tier, and effect data for a label.
     static LabelStyle ComputeLabelStyle(const ActorDrawData &d, float alpha, float time)
     {
@@ -997,19 +1121,50 @@ namespace Renderer
 
         const uint16_t lv = (uint16_t)std::min<int>(d.level, 9999);
 
-        // Find matching tier
-        style.tierIdx = 0;
-        for (size_t i = 0; i < Settings::Tiers.size(); ++i)
-        {
-            if (lv >= Settings::Tiers[i].minLevel && lv <= Settings::Tiers[i].maxLevel)
+        const Settings::TierDefinition* tierPtr = nullptr;
+        if (Settings::Tiers.empty()) {
+            style.tierIdx = 0;
+            tierPtr = &GetFallbackTier();
+        } else {
+            // Find matching tier, or nearest range when no direct match exists.
+            int matchedTier = -1;
+            for (size_t i = 0; i < Settings::Tiers.size(); ++i)
             {
-                style.tierIdx = static_cast<int>(i);
-                break;
+                if (lv >= Settings::Tiers[i].minLevel && lv <= Settings::Tiers[i].maxLevel)
+                {
+                    matchedTier = static_cast<int>(i);
+                    break;
+                }
             }
+
+            if (matchedTier >= 0) {
+                style.tierIdx = matchedTier;
+            } else {
+                int bestIdx = 0;
+                int bestDistance = std::numeric_limits<int>::max();
+                for (size_t i = 0; i < Settings::Tiers.size(); ++i) {
+                    const int minLevel = static_cast<int>(Settings::Tiers[i].minLevel);
+                    const int maxLevel = static_cast<int>(Settings::Tiers[i].maxLevel);
+                    int distance = 0;
+                    if (static_cast<int>(lv) < minLevel) {
+                        distance = minLevel - static_cast<int>(lv);
+                    } else if (static_cast<int>(lv) > maxLevel) {
+                        distance = static_cast<int>(lv) - maxLevel;
+                    }
+
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        bestIdx = static_cast<int>(i);
+                    }
+                }
+                style.tierIdx = bestIdx;
+            }
+
+            style.tierIdx = std::clamp(style.tierIdx, 0, static_cast<int>(Settings::Tiers.size()) - 1);
+            tierPtr = &Settings::Tiers[style.tierIdx];
         }
-        style.tierIdx = std::clamp(style.tierIdx, 0, static_cast<int>(Settings::Tiers.size()) - 1);
-        style.tier = &Settings::Tiers[style.tierIdx];
-        const Settings::TierDefinition &tier = *style.tier;
+        style.tier = tierPtr;
+        const Settings::TierDefinition &tier = *tierPtr;
 
         // Tier effect gating
         style.tierAllowsGlow = !Settings::Visual().EnableTierEffectGating || style.tierIdx >= Settings::Visual().GlowMinTier;
@@ -1019,26 +1174,20 @@ namespace Renderer
         // Special title matching
         style.specialTitle = nullptr;
         {
-            std::string nameLower = d.name;
-            std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
-                           [](unsigned char c) { return std::tolower(c); });
+            const auto& sortedSpecials = GetSortedSpecialTitlesForFrame();
+            if (!sortedSpecials.empty()) {
+                std::string nameLower = d.name;
+                std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-            std::vector<const Settings::SpecialTitleDefinition*> sortedSpecials;
-            for (const auto& st : Settings::SpecialTitles) {
-                if (!st.keyword.empty()) {
-                    sortedSpecials.push_back(&st);
-                }
-            }
-            std::sort(sortedSpecials.begin(), sortedSpecials.end(),
-                      [](const auto* a, const auto* b) { return a->priority > b->priority; });
-
-            for (const auto* st : sortedSpecials) {
-                std::string keywordLower = st->keyword;
-                std::transform(keywordLower.begin(), keywordLower.end(), keywordLower.begin(),
-                               [](unsigned char c) { return std::tolower(c); });
-                if (nameLower.find(keywordLower) != std::string::npos) {
-                    style.specialTitle = st;
-                    break;
+                for (const auto* st : sortedSpecials) {
+                    if (st->keywordLower.empty()) {
+                        continue;
+                    }
+                    if (nameLower.find(st->keywordLower) != std::string::npos) {
+                        style.specialTitle = st;
+                        break;
+                    }
                 }
             }
         }
@@ -1136,7 +1285,7 @@ namespace Renderer
         auto frac = [](float x) { return x - std::floor(x); };
 
         float tierAnimSpeed = Settings::AnimSpeedLowTier;
-        if (!Settings::Tiers.empty())
+        if (Settings::Tiers.size() > 1)
         {
             float tierRatio = static_cast<float>(style.tierIdx) / static_cast<float>(Settings::Tiers.size() - 1);
             if (tierRatio >= 0.9f)
@@ -1172,9 +1321,12 @@ namespace Renderer
         }
 
         // Fonts
-        layout.fontName = ImGui::GetIO().Fonts->Fonts[0];
-        layout.fontLevel = ImGui::GetIO().Fonts->Fonts[1];
-        layout.fontTitle = ImGui::GetIO().Fonts->Fonts[2];
+        layout.fontName = GetFontAt(0);
+        layout.fontLevel = GetFontAt(1);
+        layout.fontTitle = GetFontAt(2);
+        if (!layout.fontName || !layout.fontLevel || !layout.fontTitle) {
+            return layout;
+        }
 
         layout.nameFontSize = layout.fontName->FontSize * textSizeScale;
         layout.levelFontSize = layout.fontLevel->FontSize * textSizeScale;
@@ -1631,7 +1783,7 @@ namespace Renderer
             it = s_state.cache.emplace(d.formID, newEntry).first;
         }
         auto &entry = it->second;
-        entry.lastSeenFrame = s_state.frame;
+        const uint32_t prevLastSeenFrame = entry.lastSeenFrame;
 
         if (entry.cachedName != d.name)
         {
@@ -1643,7 +1795,7 @@ namespace Renderer
         constexpr uint32_t kReentryThreshold = 30;
         if (entry.initialized && entry.typewriterComplete)
         {
-            uint32_t framesSinceLastSeen = s_state.frame - entry.lastSeenFrame;
+            uint32_t framesSinceLastSeen = s_state.frame - prevLastSeenFrame;
             bool becameVisible = entry.wasOccluded && !d.isOccluded;
             if (framesSinceLastSeen >= kReentryThreshold || becameVisible)
             {
@@ -1665,7 +1817,8 @@ namespace Renderer
         const float dist = d.distToPlayer;
         const float dt = ImGui::GetIO().DeltaTime;
 
-        float fadeT = TextEffects::SmoothStep((dist - Settings::FadeStartDistance) / (Settings::FadeEndDistance - Settings::FadeStartDistance));
+        const float fadeRange = std::max(1.0f, Settings::FadeEndDistance - Settings::FadeStartDistance);
+        float fadeT = TextEffects::SmoothStep((dist - Settings::FadeStartDistance) / fadeRange);
         float alphaTarget = 1.0f - fadeT;
         alphaTarget = alphaTarget * alphaTarget;
 
@@ -1682,18 +1835,19 @@ namespace Renderer
             lodEffectsFactor = 1.0f - TextEffects::SmoothStep(effectsFadeT);
         }
 
-        float scaleT = TextEffects::Saturate((dist - Settings::ScaleStartDistance) / (Settings::ScaleEndDistance - Settings::ScaleStartDistance));
+        const float scaleRange = std::max(1.0f, Settings::ScaleEndDistance - Settings::ScaleStartDistance);
+        float scaleT = TextEffects::Saturate((dist - Settings::ScaleStartDistance) / scaleRange);
         constexpr float kScaleGamma = 0.5f;
         scaleT = std::pow(scaleT, kScaleGamma);
         float textScaleTarget = 1.0f + (Settings::MinimumScale - 1.0f) * scaleT;
 
         if (hasCameraPos)
         {
-            float camDist = std::sqrt(
-                std::pow(d.worldPos.x - cameraPos.x, 2.0f) +
-                std::pow(d.worldPos.y - cameraPos.y, 2.0f) +
-                std::pow(d.worldPos.z - cameraPos.z, 2.0f));
-            float camScaleT = TextEffects::Saturate((camDist - Settings::ScaleStartDistance) / (Settings::ScaleEndDistance - Settings::ScaleStartDistance));
+            const float dx = d.worldPos.x - cameraPos.x;
+            const float dy = d.worldPos.y - cameraPos.y;
+            const float dz = d.worldPos.z - cameraPos.z;
+            float camDist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            float camScaleT = TextEffects::Saturate((camDist - Settings::ScaleStartDistance) / scaleRange);
             camScaleT = std::pow(camScaleT, kScaleGamma);
             float camTextScale = 1.0f + (Settings::MinimumScale - 1.0f) * camScaleT;
             textScaleTarget = std::min(textScaleTarget, camTextScale);
@@ -1722,7 +1876,7 @@ namespace Renderer
                 entry.posHistory[i] = initPos;
             entry.historyIndex = 0;
             entry.historyFilled = true;
-            entry.occlusionSmooth = 1.0f;
+            entry.occlusionSmooth = occlusionTarget;
             entry.typewriterTime = 0.0f;
             entry.typewriterComplete = false;
         }
@@ -1775,7 +1929,10 @@ namespace Renderer
 
         const float textSizeScale = entry.textSizeScale;
 
-        const auto viewSize = RE::BSGraphics::Renderer::GetSingleton()->GetScreenSize();
+        auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
+        if (!renderer)
+            return;
+        const auto viewSize = renderer->GetScreenSize();
         if (screenPos.z < 0 || screenPos.z > 1.0f ||
             screenPos.x < -100.0f || screenPos.x > viewSize.width + 100.0f ||
             screenPos.y < -100.0f || screenPos.y > viewSize.height + 100.0f)
@@ -1786,9 +1943,15 @@ namespace Renderer
         LabelStyle style = ComputeLabelStyle(d, alpha, time);
 
         // Compute per-font outline widths
-        style.nameOutlineWidth  = style.CalcOutlineWidth(ImGui::GetIO().Fonts->Fonts[0]->FontSize * textSizeScale);
-        style.levelOutlineWidth = style.CalcOutlineWidth(ImGui::GetIO().Fonts->Fonts[1]->FontSize * textSizeScale);
-        style.titleOutlineWidth = style.CalcOutlineWidth(ImGui::GetIO().Fonts->Fonts[2]->FontSize * textSizeScale);
+        ImFont* nameFont = GetFontAt(0);
+        ImFont* levelFont = GetFontAt(1);
+        ImFont* titleFont = GetFontAt(2);
+        if (!nameFont || !levelFont || !titleFont) {
+            return;
+        }
+        style.nameOutlineWidth  = style.CalcOutlineWidth(nameFont->FontSize * textSizeScale);
+        style.levelOutlineWidth = style.CalcOutlineWidth(levelFont->FontSize * textSizeScale);
+        style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale);
         style.outlineWidth      = style.nameOutlineWidth;
 
         LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale);
@@ -1839,18 +2002,48 @@ namespace Renderer
 
         if (keyDown && !s_state.reloadKeyWasDown)
         {
-            Settings::Load();
-            s_state.lastReloadTime = static_cast<float>(ImGui::GetTime());
-            s_state.cache.clear();
+            s_state.reloadRequested.store(true, std::memory_order_release);
+        }
 
-            if (Settings::TemplateReapplyOnReload && Settings::UseTemplateAppearance)
-            {
-                AppearanceTemplate::ResetAppliedFlag();
-                SKSE::GetTaskInterface()->AddTask([]() {
+        if (!s_state.reloadRequested.load(std::memory_order_acquire)) {
+            s_state.reloadKeyWasDown = keyDown;
+            return;
+        }
+
+        // Defer reload until in-flight snapshot updates are done; no render-thread busy wait.
+        const bool queued = s_state.updateQueued.load(std::memory_order_acquire);
+        const bool running = s_state.snapshotUpdateRunning.load(std::memory_order_acquire);
+        if (queued || running) {
+            s_state.reloadKeyWasDown = keyDown;
+            return;
+        }
+
+        s_state.pauseSnapshotUpdates.store(true, std::memory_order_release);
+        const bool queuedAfterPause = s_state.updateQueued.load(std::memory_order_acquire);
+        const bool runningAfterPause = s_state.snapshotUpdateRunning.load(std::memory_order_acquire);
+        if (queuedAfterPause || runningAfterPause) {
+            s_state.pauseSnapshotUpdates.store(false, std::memory_order_release);
+            s_state.reloadKeyWasDown = keyDown;
+            return;
+        }
+
+        Settings::Load();
+        s_state.lastReloadTime = static_cast<float>(ImGui::GetTime());
+        s_state.cache.clear();
+        s_state.clearOcclusionCacheRequested.store(true, std::memory_order_release);
+
+        if (Settings::TemplateReapplyOnReload && Settings::UseTemplateAppearance)
+        {
+            AppearanceTemplate::ResetAppliedFlag();
+            if (auto* task = SKSE::GetTaskInterface()) {
+                task->AddTask([]() {
                     AppearanceTemplate::ApplyIfConfigured();
                 });
             }
         }
+
+        s_state.pauseSnapshotUpdates.store(false, std::memory_order_release);
+        s_state.reloadRequested.store(false, std::memory_order_release);
         s_state.reloadKeyWasDown = keyDown;
     }
 
@@ -1935,6 +2128,7 @@ namespace Renderer
     void Draw()
     {
         HandleHotReload();
+        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
 
         if (!CanDrawOverlay())
         {
