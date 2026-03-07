@@ -141,8 +141,10 @@ struct Color3
  */
 struct Segment
 {
-    std::string format;  ///< Format string with placeholders (%n, %l, %t)
-    bool useLevelFont;   ///< If true, uses level font; otherwise uses name font
+    std::string format;         ///< Format string with placeholders (%n, %l, %t, %r, %d, %c)
+    bool useLevelFont = false;  ///< If true, uses level font; otherwise uses name font
+    bool dropIfBlank = false;   ///< Set by trailing `?` in Format / InfoFormat -- segment is
+                                ///< omitted when its expansion trims to empty.
 };
 
 /**
@@ -306,7 +308,8 @@ struct SpecialTitleDefinition
 
 // Collection accessors (function-local statics for safe destruction order)
 std::string& TitleFormat();             ///< Format string for title line (e.g., "%t")
-std::vector<Segment>& DisplayFormat();  ///< Segments for main nameplate line
+std::vector<Segment>& DisplayFormat();  ///< Segments for main nameplate line (row 2)
+std::vector<Segment>& InfoFormat();     ///< Segments for contextual info row (row 3, below main)
 std::vector<TierDefinition>& Tiers();   ///< All tier definitions (indexed by tier number)
 std::vector<SpecialTitleDefinition>& SpecialTitles();  ///< Special title overrides
 
@@ -334,17 +337,13 @@ OcclusionSettings& Occlusion();
 /// Shadow offsets, segment padding, and outline settings.
 struct ShadowOutlineSettings
 {
-    float TitleShadowOffsetX = 2.0f;   ///< Title shadow X offset in pixels
-    float TitleShadowOffsetY = 2.0f;   ///< Title shadow Y offset in pixels
-    float MainShadowOffsetX = 4.0f;    ///< Main text shadow X offset
-    float MainShadowOffsetY = 4.0f;    ///< Main text shadow Y offset
-    float SegmentPadding = 4.0f;       ///< Horizontal padding between segments
-    float OutlineWidthMin = 2.0f;      ///< Base outline width
-    float OutlineWidthMax = 2.5f;      ///< Additional width for high tiers
-    bool FastOutlines = false;         ///< Use 4-dir outlines instead of 8-dir
-    float TitleMainGap = .0f;          ///< Vertical gap between title and main line (pixels)
-    float OutlineMinScale = .65f;      ///< Minimum outline width ratio for smaller text
-    bool ProportionalSpacing = false;  ///< Scale pixel spacings with text size
+    float TitleShadowOffsetX = 2.0f;  ///< Title shadow X offset in pixels
+    float TitleShadowOffsetY = 2.0f;  ///< Title shadow Y offset in pixels
+    float MainShadowOffsetX = 4.0f;   ///< Main text shadow X offset
+    float MainShadowOffsetY = 4.0f;   ///< Main text shadow Y offset
+    float OutlineWidthMin = 2.0f;     ///< Base outline width
+    float OutlineWidthMax = 2.5f;     ///< Additional width for high tiers
+    bool FastOutlines = false;        ///< Use 4-dir outlines instead of 8-dir
 
     // Outline Glow (white halo behind outline)
     bool OutlineGlowEnabled = false;   ///< Enable white glow behind text outline
@@ -430,16 +429,15 @@ enum class ParticleStyle
 };
 
 /// Particle aura settings.
+///
+/// Which particle styles actually render is determined per tier via
+/// `TierDefinition::particleTypes` (e.g. `ParticleTypes = Stars,Wisps`).
+/// `Enabled` is the master toggle; a tier with `ParticleTypes = None` (or
+/// empty) renders no particles regardless of this setting.
 struct ParticleSettings
 {
     bool Enabled = true;              ///< Master enable for particle aura
     bool UseParticleTextures = true;  ///< Use texture sprites instead of shapes
-    bool EnableStars = true;          ///< Enable twinkling stars
-    bool EnableSparks = false;        ///< Enable fire-like sparks
-    bool EnableWisps = false;         ///< Enable ethereal wisps
-    bool EnableRunes = false;         ///< Enable magical runes
-    bool EnableOrbs = false;          ///< Enable glowing orbs
-    bool EnableCrystals = false;      ///< Enable crystalline shapes
     int Count = 8;                    ///< Particles per type
     float Size = 3.0f;                ///< Particle size in pixels
     float Speed = 1.0f;               ///< Animation speed multiplier
@@ -463,14 +461,7 @@ DisplaySettings& Display();
 /// Animation speed and color/effect intensity settings.
 struct AnimColorSettings
 {
-    float AnimSpeedLowTier = .35f;    ///< Speed for tiers 0-7
-    float AnimSpeedMidTier = .20f;    ///< Speed for tier 8
-    float AnimSpeedHighTier = .10f;   ///< Speed for tier 9+
     float NameColorMix = .65f;        ///< Base color strength 0-1
-    float EffectAlphaMin = .20f;      ///< Minimum effect alpha
-    float EffectAlphaMax = .60f;      ///< Maximum effect alpha
-    float StrengthMin = .15f;         ///< Minimum effect strength
-    float StrengthMax = .60f;         ///< Maximum effect strength
     float AlphaSettleTime = .46f;     ///< Alpha settle time in seconds
     float ScaleSettleTime = .46f;     ///< Font scale settle time in seconds
     float PositionSettleTime = .38f;  ///< Position settle time for NPCs in seconds
@@ -569,6 +560,78 @@ struct VisualSettings
     int OrnamentMinTier = 10;             ///< Minimum tier for ornament display
 };
 VisualSettings& Visual();
+
+/**
+ * Configurable label strings and thresholds for the contextual nameplate tokens
+ * (`%r` relationship, `%d` level delta, `%c` creature type).
+ *
+ * Empty strings render as nothing -- pair with a trailing `?` segment marker in
+ * `Format` / `InfoFormat` to drop the segment entirely when its tokens expand
+ * to whitespace.
+ *
+ * @see Segment::dropIfBlank, RelationshipKind, LevelDelta, CreatureKind
+ */
+struct LabelSettings
+{
+    /// @name Relationship labels (`%r`)
+    /// @{
+    std::string RelationshipFollower = "Follower";  ///< Player teammate
+    std::string RelationshipAlly = "Ally";          ///< Friendly NPC that can talk
+    std::string RelationshipNeutral;                ///< Default: empty
+    std::string RelationshipHostile = "Hostile";    ///< Actively hostile to player
+    /// @}
+
+    /// @name Level delta labels (`%d`, actor level vs. player level)
+    /// @{
+    std::string LevelDeltaWeak = "Weak";      ///< Far below player
+    std::string LevelDeltaEven;               ///< Default: empty (similar level)
+    std::string LevelDeltaStrong = "Strong";  ///< Notably above player
+    std::string LevelDeltaDeadly = "Deadly";  ///< Far above player
+    /// @}
+
+    /// @name Creature type labels (`%c`)
+    /// @{
+    std::string CreatureTypeNPC;                ///< Default: empty
+    std::string CreatureTypeBeast = "Beast";    ///< ActorTypeCreature / ActorTypeAnimal
+    std::string CreatureTypeUndead = "Undead";  ///< ActorTypeUndead
+    std::string CreatureTypeDaedra = "Daedra";  ///< ActorTypeDaedra
+    std::string CreatureTypeDragon = "Dragon";  ///< ActorTypeDragon
+    /// @}
+
+    /// @name Level delta classification thresholds (actor level minus player level)
+    /// @{
+    int WeakAtOrBelow = -5;    ///< delta <= this -> Weak
+    int StrongAtOrAbove = 5;   ///< delta >= this -> Strong
+    int DeadlyAtOrAbove = 10;  ///< delta >= this -> Deadly (overrides Strong)
+    /// @}
+};
+LabelSettings& Labels();
+
+/**
+ * Focus-target expanded-nameplate settings.
+ *
+ * When `Enabled`, the render thread picks at most one actor per frame --
+ * the one whose direction from the camera lies inside a cone around
+ * camera-forward with the smallest angular offset.  That actor renders
+ * the full title + main + info row stack; every other actor renders
+ * only the main line at a reduced alpha (`AmbientDimFactor`).
+ *
+ * The player is never picked as the focus target and is never dimmed.
+ * Transitions between ambient and focused are smoothed via a per-actor
+ * value driven by `Renderer::ExpApproachAlpha` with `SettleTime`.
+ *
+ * @see Renderer::SelectFocusedActor, RendererInternal::ActorCache::focusSmooth
+ */
+struct FocusSettings
+{
+    bool Enabled = false;           ///< Master toggle (off = legacy behavior)
+    float ConeAngleDegrees = 8.0f;  ///< Cone half-angle for selection [0.5, 45]
+    float MaxDistance = .0f;        ///< Max world distance; 0 = reuse Distance().MaxScanDistance
+    float AmbientDimFactor = .55f;  ///< Alpha multiplier for non-focused actors [0.05, 1]
+    float SettleTime = .25f;        ///< Seconds for focusSmooth crossfade [0, 2]
+    bool IgnoreOccluded = true;     ///< Skip occluded actors when picking focus
+};
+FocusSettings& Focus();
 
 /**
  * Shared settings mutex.
