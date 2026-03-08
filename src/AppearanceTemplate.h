@@ -71,140 +71,140 @@
  */
 namespace AppearanceTemplate
 {
-    /**
-     * @brief Build the FaceGen mesh path for an NPC.
-     *
-     * FaceGen meshes are stored at:
-     * meshes/actors/character/facegendata/facegeom/<PluginName>/<FormID>.nif
-     *
-     * @param pluginName Plugin filename (e.g., "MyFollower.esp")
-     * @param formID The NPC's FormID
-     * @return Full path to FaceGen mesh
-     */
-    std::string BuildFaceGenMeshPath(const std::string& pluginName, RE::FormID formID);
+/**
+ * @brief Build the FaceGen mesh path for an NPC.
+ *
+ * FaceGen meshes are stored at:
+ * meshes/actors/character/facegendata/facegeom/<PluginName>/<FormID>.nif
+ *
+ * @param pluginName Plugin filename (e.g., "MyFollower.esp")
+ * @param formID The NPC's FormID
+ * @return Full path to FaceGen mesh
+ */
+std::string BuildFaceGenMeshPath(const std::string& pluginName, RE::FormID formID);
 
-    /**
-     * @brief Build the FaceGen tint texture path for an NPC.
-     *
-     * FaceGen tints are stored at:
-     * textures/actors/character/facegendata/facetint/<PluginName>/<FormID>.dds
-     *
-     * @param pluginName Plugin filename (e.g., "MyFollower.esp")
-     * @param formID The NPC's FormID
-     * @return Full path to FaceGen tint texture
-     */
-    std::string BuildFaceGenTintPath(const std::string& pluginName, RE::FormID formID);
+/**
+ * @brief Build the FaceGen tint texture path for an NPC.
+ *
+ * FaceGen tints are stored at:
+ * textures/actors/character/facegendata/facetint/<PluginName>/<FormID>.dds
+ *
+ * @param pluginName Plugin filename (e.g., "MyFollower.esp")
+ * @param formID The NPC's FormID
+ * @return Full path to FaceGen tint texture
+ */
+std::string BuildFaceGenTintPath(const std::string& pluginName, RE::FormID formID);
 
-    /**
-     * @brief Apply FaceGen data from template NPC to player.
-     *
-     * Loads the template's FaceGen NIF and tint texture and applies them
-     * to the player character.
-     *
-     * @param templateNPC The template NPC (plugin and FormID are resolved internally)
-     * @return true if FaceGen was applied, false if files not found or error
-     */
-    bool ApplyFaceGen(RE::TESNPC* templateNPC);
-    
-    /**
-     * @brief Apply template appearance to player if configured in settings.
-     *
-     * Checks if UseTemplateAppearance is enabled and a valid template is specified.
-     * If so, resolves the FormID and applies the appearance.
-     *
-     * Safe to call multiple times; will only apply once per game session unless
-     * ResetAppliedFlag() is called or settings are reloaded.
-     *
-     * @return true if appearance was applied successfully, false otherwise
-     */
-    bool ApplyIfConfigured();
+/**
+ * @brief Apply FaceGen data from template NPC to player.
+ *
+ * Loads the template's FaceGen NIF and tint texture and applies them
+ * to the player character.
+ *
+ * @param templateNPC The template NPC (plugin and FormID are resolved internally)
+ * @return true if FaceGen was applied, false if files not found or error
+ */
+bool ApplyFaceGen(RE::TESNPC* templateNPC);
 
-    /**
-     * @brief Reset the applied flag to allow re-applying appearance.
-     *
-     * Call this before ApplyIfConfigured() to force re-application,
-     * for example during hot reload.
-     */
-    void ResetAppliedFlag();
+/**
+ * @brief Apply template appearance to player if configured in settings.
+ *
+ * Checks if UseTemplateAppearance is enabled and a valid template is specified.
+ * If so, resolves the FormID and applies the appearance.
+ *
+ * Safe to call multiple times; will only apply once per game session unless
+ * ResetAppliedFlag() is called or settings are reloaded.
+ *
+ * @return true if appearance was applied successfully, false otherwise
+ */
+bool ApplyIfConfigured();
 
-    /**
-     * @brief Resolve a FormID from a plugin file.
-     *
-     * Handles load order by looking up the plugin's actual index via TESDataHandler.
-     *
-     * @param formIdStr Hex FormID string (e.g., "0x12345" or "12345")
-     * @param pluginName Plugin filename (e.g., "MyFollower.esp")
-     * @return Resolved FormID, or 0 if plugin not found
-     */
-    RE::FormID ResolveFormID(const std::string& formIdStr, const std::string& pluginName);
+/**
+ * @brief Reset the applied flag to allow re-applying appearance.
+ *
+ * Call this before ApplyIfConfigured() to force re-application,
+ * for example during hot reload.
+ */
+void ResetAppliedFlag();
 
-    /**
-     * @brief Copy appearance from template NPC to player.
-     *
-     * Copies the following attributes:
-     * - Race (required for cross-race templates)
-     * - Head parts (eyes, hair, brows, scars, etc.)
-     * - Tint layers (skin tone, war paint, dirt, etc.)
-     * - Hair color
-     * - Height
-     * - Face morph presets and sculpt data
-     *
-     * @param templateNPC The NPC to copy appearance from
-     * @param includeRace Whether to copy the template's race
-     * @param includeBody Whether to also copy height
-     * @return true if copy succeeded, false otherwise
-     */
-    bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool includeBody);
+/**
+ * @brief Resolve a FormID from a plugin file.
+ *
+ * Handles load order by looking up the plugin's actual index via TESDataHandler.
+ *
+ * @param formIdStr Hex FormID string (e.g., "0x12345" or "12345")
+ * @param pluginName Plugin filename (e.g., "MyFollower.esp")
+ * @return Resolved FormID, or 0 if plugin not found
+ */
+RE::FormID ResolveFormID(const std::string& formIdStr, const std::string& pluginName);
 
-    /**
-     * @brief Force player appearance update after changes.
-     *
-     * Marks the player's face as dirty and queues NiNode update.
-     * Call after modifying appearance data.
-     */
-    void UpdatePlayerAppearance();
+/**
+ * @brief Copy appearance from template NPC to player.
+ *
+ * Copies the following attributes:
+ * - Race (required for cross-race templates)
+ * - Head parts (eyes, hair, brows, scars, etc.)
+ * - Tint layers (skin tone, war paint, dirt, etc.)
+ * - Hair color
+ * - Height
+ * - Face morph presets and sculpt data
+ *
+ * @param templateNPC The NPC to copy appearance from
+ * @param includeRace Whether to copy the template's race
+ * @param includeBody Whether to also copy height
+ * @return true if copy succeeded, false otherwise
+ */
+bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool includeBody);
 
-    /**
-     * @brief Check if a template NPC is compatible with the player's race.
-     *
-     * @param templateNPC The template NPC to check
-     * @return true if races are compatible, false otherwise
-     */
-    bool IsRaceCompatible(RE::TESNPC* templateNPC);
+/**
+ * @brief Force player appearance update after changes.
+ *
+ * Marks the player's face as dirty and queues NiNode update.
+ * Call after modifying appearance data.
+ */
+void UpdatePlayerAppearance();
 
-    /**
-     * @brief Poll for player readiness and apply pending appearance template.
-     *
-     * Called each frame from the render hook. If a pending apply was requested
-     * (via SetPendingAppearanceApply), waits until the player is fully loaded
-     * and then applies the template.
-     */
-    void CheckPendingAppearanceTemplate();
+/**
+ * @brief Check if a template NPC is compatible with the player's race.
+ *
+ * @param templateNPC The template NPC to check
+ * @return true if races are compatible, false otherwise
+ */
+bool IsRaceCompatible(RE::TESNPC* templateNPC);
 
-    /**
-     * @brief Request that the appearance template be applied when the player is ready.
-     *
-     * Sets the pending flag so that CheckPendingAppearanceTemplate() will apply
-     * the template once the player character is fully initialized.
-     */
-    void SetPendingAppearanceApply();
+/**
+ * @brief Poll for player readiness and apply pending appearance template.
+ *
+ * Called each frame from the render hook. If a pending apply was requested
+ * (via SetPendingAppearanceApply), waits until the player is fully loaded
+ * and then applies the template.
+ */
+void CheckPendingAppearanceTemplate();
 
-    /**
-     * @brief Initialize overlay system (no-op, kept for compatibility).
-     */
-    void QueryNiOverrideInterface();
+/**
+ * @brief Request that the appearance template be applied when the player is ready.
+ *
+ * Sets the pending flag so that CheckPendingAppearanceTemplate() will apply
+ * the template once the player character is fully initialized.
+ */
+void SetPendingAppearanceApply();
 
-    /**
-     * @brief Retry overlay initialization (no-op, kept for compatibility).
-     */
-    void RetryNiOverrideInterface();
+/**
+ * @brief Initialize overlay system (no-op, kept for compatibility).
+ */
+void QueryNiOverrideInterface();
 
-    /**
-     * @brief Test manual overlay extraction on player.
-     *
-     * Scans player's 3D nodes for overlay geometry and logs results.
-     * Used for debugging overlay integration. (not implemented)
-     */
-    void TestOverlayOnPlayer();
+/**
+ * @brief Retry overlay initialization (no-op, kept for compatibility).
+ */
+void RetryNiOverrideInterface();
 
-}
+/**
+ * @brief Test manual overlay extraction on player.
+ *
+ * Scans player's 3D nodes for overlay geometry and logs results.
+ * Used for debugging overlay integration. (not implemented)
+ */
+void TestOverlayOnPlayer();
+
+}  // namespace AppearanceTemplate

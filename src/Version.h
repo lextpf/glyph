@@ -20,13 +20,9 @@
  * @see GLYPH_VERSION
  */
 #define GLYPH_VERSION_STRINGIFY(major, minor, patch, release) \
-	#major "." #minor "." #patch "." #release
+    #major "." #minor "." #patch "." #release
 
 /// Complete version string (e.g., "0.1.0.0").
-#define GLYPH_VERSION \
-	GLYPH_VERSION_STRINGIFY( \
-		GLYPH_VERSION_MAJOR, \
-		GLYPH_VERSION_MINOR, \
-		GLYPH_VERSION_PATCH, \
-		GLYPH_VERSION_RELEASE)
-
+#define GLYPH_VERSION        \
+    GLYPH_VERSION_STRINGIFY( \
+        GLYPH_VERSION_MAJOR, GLYPH_VERSION_MINOR, GLYPH_VERSION_PATCH, GLYPH_VERSION_RELEASE)

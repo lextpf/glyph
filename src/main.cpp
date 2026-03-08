@@ -13,9 +13,9 @@
  *                                                                ⠀⠀⠀⠀⠘⣿⠃⢰⣿⣿⣿⡇⠀⠀⠀⠈⢻⡇⠀⠀
  *                                                                ⠀⠀⠀⠀⠀⠈⠀⠈⢿⣿⣿⣿⣶⡶⠂⠀⠀⠁⠀⠀
  *                                << S K Y R I M   P L U G I N >>         ⠀⠀⠈⠻⣿⡿⠋⠀⠀⠀⠀⠀⠀⠀
- *                                                                                                  
+ *
  *  ============================================================================================  *
- * 
+ *
  *      An SKSE plugin for Skyrim SE/AE that renders an ImGui overlay
  *      displaying actor information and allows copying NPC appearance
  *      templates onto the player character via the game's D3D11 pipeline.
@@ -44,78 +44,96 @@
  */
 namespace ConsoleCommands
 {
-    /**
-     * glyph console command.
-     * Usage: Type 'glyph' in console to toggle nameplate rendering on/off.
-     */
-    bool GlyphExecute(const RE::SCRIPT_PARAMETER*, RE::SCRIPT_FUNCTION::ScriptData*,
-                      RE::TESObjectREFR*, RE::TESObjectREFR*, RE::Script*, RE::ScriptLocals*,
-                      double&, std::uint32_t&)
+/**
+ * glyph console command.
+ * Usage: Type 'glyph' in console to toggle nameplate rendering on/off.
+ */
+bool GlyphExecute(const RE::SCRIPT_PARAMETER*,
+                  RE::SCRIPT_FUNCTION::ScriptData*,
+                  RE::TESObjectREFR*,
+                  RE::TESObjectREFR*,
+                  RE::Script*,
+                  RE::ScriptLocals*,
+                  double&,
+                  std::uint32_t&)
+{
+    auto console = RE::ConsoleLog::GetSingleton();
+    bool newState = Renderer::ToggleEnabled();
+
+    if (console)
     {
-        auto console = RE::ConsoleLog::GetSingleton();
-        bool newState = Renderer::ToggleEnabled();
-
-        if (console) {
-            if (newState) {
-                console->Print("glyph: Nameplate rendering ENABLED");
-            } else {
-                console->Print("glyph: Nameplate rendering DISABLED");
-            }
+        if (newState)
+        {
+            console->Print("glyph: Nameplate rendering ENABLED");
         }
-
-        logger::info("glyph: Rendering toggled to {}", newState ? "ON" : "OFF");
-
-        return true;
+        else
+        {
+            console->Print("glyph: Nameplate rendering DISABLED");
+        }
     }
 
-    void Register()
-    {
-        logger::info("Registering glyph console command...");
+    logger::info("glyph: Rendering toggled to {}", newState ? "ON" : "OFF");
 
-        auto* commands = RE::SCRIPT_FUNCTION::GetFirstConsoleCommand();
-        if (!commands) {
-            logger::error("Failed to get console command table");
+    return true;
+}
+
+void Register()
+{
+    logger::info("Registering glyph console command...");
+
+    auto* commands = RE::SCRIPT_FUNCTION::GetFirstConsoleCommand();
+    if (!commands)
+    {
+        logger::error("Failed to get console command table");
+        return;
+    }
+
+    std::uint32_t commandCount = RE::SCRIPT_FUNCTION::Commands::kConsoleCommandsEnd -
+                                 RE::SCRIPT_FUNCTION::Commands::kConsoleOpBase;
+
+    for (std::uint32_t i = 0; i < commandCount; ++i)
+    {
+        auto* cmd = &commands[i];
+        if (cmd && cmd->functionName && _stricmp(cmd->functionName, "glyph") == 0)
+        {
+            logger::info("Console command 'glyph' already registered");
             return;
         }
+    }
 
-        std::uint32_t commandCount = RE::SCRIPT_FUNCTION::Commands::kConsoleCommandsEnd -
-                                     RE::SCRIPT_FUNCTION::Commands::kConsoleOpBase;
+    // Find an unused command slot to replace
+    bool found = false;
+    for (std::uint32_t i = 0; i < commandCount && !found; ++i)
+    {
+        auto* cmd = &commands[i];
+        if (!cmd || !cmd->functionName)
+            continue;
 
-        for (std::uint32_t i = 0; i < commandCount; ++i) {
-            auto* cmd = &commands[i];
-            if (cmd && cmd->functionName && _stricmp(cmd->functionName, "glyph") == 0) {
-                logger::info("Console command 'glyph' already registered");
-                return;
-            }
-        }
-
-        // Find an unused command slot to replace
-        bool found = false;
-        for (std::uint32_t i = 0; i < commandCount && !found; ++i) {
-            auto* cmd = &commands[i];
-            if (!cmd || !cmd->functionName) continue;
-
-            // Replace TestSeenData
-            if (_stricmp(cmd->functionName, "TestSeenData") == 0) {
-                cmd->functionName = "glyph";
-                cmd->shortName = "";
-                cmd->helpString = "Toggle nameplate rendering on/off";
-                cmd->referenceFunction = false;
-                cmd->executeFunction = GlyphExecute;
-                cmd->numParams = 0;
-                cmd->params = nullptr;
-                found = true;
-                logger::info("Registered 'glyph' console command");
-            }
-        }
-
-        if (!found) {
-            logger::warn("Could not find slot for glyph command");
-        } else {
-            logger::info("Usage: Type 'glyph' to toggle nameplate rendering");
+        // Replace TestSeenData
+        if (_stricmp(cmd->functionName, "TestSeenData") == 0)
+        {
+            cmd->functionName = "glyph";
+            cmd->shortName = "";
+            cmd->helpString = "Toggle nameplate rendering on/off";
+            cmd->referenceFunction = false;
+            cmd->executeFunction = GlyphExecute;
+            cmd->numParams = 0;
+            cmd->params = nullptr;
+            found = true;
+            logger::info("Registered 'glyph' console command");
         }
     }
+
+    if (!found)
+    {
+        logger::warn("Could not find slot for glyph command");
+    }
+    else
+    {
+        logger::info("Usage: Type 'glyph' to toggle nameplate rendering");
+    }
 }
+}  // namespace ConsoleCommands
 
 /**
  * SKSE message handler - key lifecycle states:
@@ -124,8 +142,10 @@ namespace ConsoleCommands
  */
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
-    auto readTemplateSettingsSnapshot = []() {
-        struct Snapshot {
+    auto readTemplateSettingsSnapshot = []()
+    {
+        struct Snapshot
+        {
             bool enabled = false;
             std::string formID;
             std::string plugin;
@@ -138,7 +158,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
         return snapshot;
     };
 
-    switch (a_msg->type) {
+    switch (a_msg->type)
+    {
         case SKSE::MessagingInterface::kPostLoad:
             logger::debug("Post load event received");
             break;
@@ -158,7 +179,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
         case SKSE::MessagingInterface::kPostLoadGame:
             // Loading a save, player should be available soon
             logger::debug("Post load game event received");
-            if (readTemplateSettingsSnapshot().enabled) {
+            if (readTemplateSettingsSnapshot().enabled)
+            {
                 AppearanceTemplate::SetPendingAppearanceApply();
             }
             // Test overlay interface after game load
@@ -171,11 +193,16 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
                 const auto snapshot = readTemplateSettingsSnapshot();
                 logger::debug("New game event received - will apply after character creation");
                 logger::info("UseTemplateAppearance={}, FormID={}, Plugin={}",
-                    snapshot.enabled, snapshot.formID, snapshot.plugin);
-                if (snapshot.enabled) {
+                             snapshot.enabled,
+                             snapshot.formID,
+                             snapshot.plugin);
+                if (snapshot.enabled)
+                {
                     AppearanceTemplate::SetPendingAppearanceApply();
                     logger::info("Pending appearance flag set to TRUE");
-                } else {
+                }
+                else
+                {
                     logger::warn("UseTemplateAppearance is FALSE, not setting pending flag");
                 }
             }
@@ -222,7 +249,8 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
 
     // Register for SKSE messages
     auto messaging = SKSE::GetMessagingInterface();
-    if (messaging) {
+    if (messaging)
+    {
         messaging->RegisterListener(MessageHandler);
         logger::debug("Registered SKSE message listener");
 
@@ -242,7 +270,8 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
  *
  * Provides version, name, and compatibility info to SKSE.
  */
-extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []() {
+extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []()
+{
     SKSE::PluginVersionData version;
     version.PluginVersion(REL::Version(0, 1, 0, 0));
     version.PluginName("glyph");
@@ -260,7 +289,8 @@ extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []() 
  *
  * @return `true` always.
  */
-extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Query(const SKSE::QueryInterface*, SKSE::PluginInfo* a_info)
+extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Query(const SKSE::QueryInterface*,
+                                                               SKSE::PluginInfo* a_info)
 {
     a_info->infoVersion = SKSE::PluginInfo::kVersion;
     a_info->name = "glyph";

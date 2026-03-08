@@ -45,7 +45,8 @@
  * **Step 2 - Normalize.** Divide by the vector's length to get a
  * unit direction (length $= 1$), so only orientation matters:
  *
- * $$\hat{d} = \frac{\vec{v}}{\|\vec{v}\|} = \frac{p_{actor} - p_{cam}}{\sqrt{v_x^2 + v_y^2 + v_z^2}}$$
+ * $$\hat{d} = \frac{\vec{v}}{\|\vec{v}\|} = \frac{p_{actor} - p_{cam}}{\sqrt{v_x^2 + v_y^2 +
+ * v_z^2}}$$
  *
  * **Step 3 - Dot product.** The camera also provides a unit forward
  * vector $\hat{f}$ (the direction the player is looking). The dot
@@ -83,75 +84,79 @@
  *
  * All distances are in Skyrim game units where $\approx 70$ units $= 1$ meter.
  *
- * |                    Constant | Value  | Description                                                       |
+ * |                    Constant | Value  | Description |
  * |-----------------------------|--------|-------------------------------------------------------------------|
- * |   `kCloseDistanceThreshold` | 100.0  | Always visible when $\\|p_{actor} - p_{cam}\\| < 100$ units       |
- * | `kBehindCameraDotThreshold` | -0.2   | Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$) |
- * |     `kHeadHeightMultiplier` | 0.9    | Reserved, currently unused                                        |
+ * |   `kCloseDistanceThreshold` | 100.0  | Always visible when $\\|p_{actor} - p_{cam}\\| < 100$
+ * units       | | `kBehindCameraDotThreshold` | -0.2   | Behind camera when $\hat{f} \cdot \hat{d}
+ * < -0.2$ ($\approx 101$) | |     `kHeadHeightMultiplier` | 0.9    | Reserved, currently unused |
  */
 namespace Occlusion
 {
-    /**
-     * Constants for occlusion calculations.
-     */
-    namespace Constants
-    {
-        constexpr float kCloseDistanceThreshold = 100.0f;    ///< Visible when $\|p_{actor} - p_{cam}\| < 100$ game units
-        constexpr float kBehindCameraDotThreshold = -0.2f;   ///< Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$)
-        constexpr float kHeadHeightMultiplier = 0.9f;        ///< Reserved, currently unused
-    }
+/**
+ * Constants for occlusion calculations.
+ */
+namespace Constants
+{
+constexpr float kCloseDistanceThreshold =
+    100.0f;  ///< Visible when $\|p_{actor} - p_{cam}\| < 100$ game units
+constexpr float kBehindCameraDotThreshold =
+    -0.2f;  ///< Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$)
+constexpr float kHeadHeightMultiplier = 0.9f;  ///< Reserved, currently unused
+}  // namespace Constants
 
-    /**
-     * Check if player has line of sight to the specified actor.
-     *
-     * Uses the game's built-in `Actor::HasLineOfSight` function for accurate
-     * collision detection against world geometry.
-     *
-     * @param actor The actor to check visibility for.
-     *
-     * @return `true` if player can see the actor, `false` if blocked.
-     */
-    bool HasLineOfSightToActor(RE::Actor* actor);
+/**
+ * Check if player has line of sight to the specified actor.
+ *
+ * Uses the game's built-in `Actor::HasLineOfSight` function for accurate
+ * collision detection against world geometry.
+ *
+ * @param actor The actor to check visibility for.
+ *
+ * @return `true` if player can see the actor, `false` if blocked.
+ */
+bool HasLineOfSightToActor(RE::Actor* actor);
 
-    /**
-     * Check if an actor should be considered occluded.
-     *
-     * Considers multiple factors:
-     * - Global occlusion setting
-     * - Distance from camera
-     * - Behind-camera check
-     * - Line of sight through world geometry
-     *
-     * @param actor The actor to check.
-     * @param player The player actor.
-     * @param actorWorldPos The world position to check from.
-     *
-     * @return `true` if the actor is occluded and nameplate should be hidden.
-     */
-    bool IsActorOccluded(RE::Actor* actor, RE::Actor* player, const RE::NiPoint3& actorWorldPos);
+/**
+ * Check if an actor should be considered occluded.
+ *
+ * Considers multiple factors:
+ * - Global occlusion setting
+ * - Distance from camera
+ * - Behind-camera check
+ * - Line of sight through world geometry
+ *
+ * @param actor The actor to check.
+ * @param player The player actor.
+ * @param actorWorldPos The world position to check from.
+ *
+ * @return `true` if the actor is occluded and nameplate should be hidden.
+ */
+bool IsActorOccluded(RE::Actor* actor, RE::Actor* player, const RE::NiPoint3& actorWorldPos);
 
-    /**
-     * Get camera position and forward direction.
-     *
-     * @param[out] outPos Camera world position.
-     * @param[out] outForward Camera forward direction.
-     *
-     * @return `true` if camera data was retrieved successfully.
-     */
-    bool GetCameraInfo(RE::NiPoint3& outPos, RE::NiPoint3& outForward);
+/**
+ * Get camera position and forward direction.
+ *
+ * @param[out] outPos Camera world position.
+ * @param[out] outForward Camera forward direction.
+ *
+ * @return `true` if camera data was retrieved successfully.
+ */
+bool GetCameraInfo(RE::NiPoint3& outPos, RE::NiPoint3& outForward);
 
-    /**
-     * Check if a world position is behind the camera.
-     *
-     * Uses dot product between camera forward and direction to target.
-     * Threshold is set to ~101 degrees to catch actors just past peripheral vision.
-     *
-     * @param worldPos The position to check.
-     * @param cameraPos Camera world position.
-     * @param cameraForward Camera forward direction.
-     *
-     * @return `true` if the position is behind the camera.
-     */
-    bool IsBehindCamera(const RE::NiPoint3& worldPos, const RE::NiPoint3& cameraPos, const RE::NiPoint3& cameraForward);
+/**
+ * Check if a world position is behind the camera.
+ *
+ * Uses dot product between camera forward and direction to target.
+ * Threshold is set to ~101 degrees to catch actors just past peripheral vision.
+ *
+ * @param worldPos The position to check.
+ * @param cameraPos Camera world position.
+ * @param cameraForward Camera forward direction.
+ *
+ * @return `true` if the position is behind the camera.
+ */
+bool IsBehindCamera(const RE::NiPoint3& worldPos,
+                    const RE::NiPoint3& cameraPos,
+                    const RE::NiPoint3& cameraForward);
 
-}
+}  // namespace Occlusion

@@ -57,11 +57,12 @@
  *
  * ## :material-hook: Hooked Functions
  *
- * |                                      Function |   Method   |    Address/Index     | Purpose                            |
+ * |                                      Function |   Method   |    Address/Index     | Purpose |
  * |-----------------------------------------------|------------|----------------------|------------------------------------|
- * | `BSGraphics::Renderer::CreateD3DAndSwapChain` | Thunk call | REL_ID(75595, 77226) | D3D11 device/swapchain init        |
- * |                        `HUDMenu::PostDisplay` |   VTable   |      vtable[6]       | Per-frame overlay rendering        |
- * |               `IDXGISwapChain::Present`       | COM VTable |      vtable[8]       | Fallback render for upscaler compat|
+ * | `BSGraphics::Renderer::CreateD3DAndSwapChain` | Thunk call | REL_ID(75595, 77226) | D3D11
+ * device/swapchain init        | |                        `HUDMenu::PostDisplay` |   VTable   |
+ * vtable[6]       | Per-frame overlay rendering        | |               `IDXGISwapChain::Present`
+ * | COM VTable |      vtable[8]       | Fallback render for upscaler compat|
  *
  * The Present hook acts as a safety net: if upscalers (DLSS, FSR) restructure
  * the pipeline and PostDisplay is skipped, the overlay renders in PresentHook
@@ -121,33 +122,33 @@
  */
 namespace Hooks
 {
-    /**
-     * Install all required game hooks.
-     *
-     * Installs hooks for D3D11 initialization and HUD rendering. Must be called
-     * once during plugin initialization in `SKSEPlugin_Load`.
-     *
-     * **Installation Sequence:**
-     * 1. Allocate trampoline memory (14 bytes minimum)
-     * 2. Hook `BSGraphics::Renderer::CreateD3DAndSwapChain`
-     * 3. Hook `HUDMenu::PostDisplay` virtual function
-     *
-     * If hooks fail to install, errors are logged via SKSE's logger.
-     * The plugin will continue loading but overlay will not function.
-     *
-     * ```cpp
-     * // In SKSEPlugin_Load:
-     * SKSE::AllocTrampoline(14);
-     * Hooks::Install();
-     * ```
-     *
-     * @pre SKSE trampoline must be initialized with sufficient space.
-     * @pre Address Library must be loaded and available.
-     *
-     * @post D3D11 initialization will trigger ImGui setup.
-     * @post HUD rendering will include overlay drawing.
-     *
-     * @see Renderer::Draw, Renderer::TickRT
-     */
-    void Install();
-}
+/**
+ * Install all required game hooks.
+ *
+ * Installs hooks for D3D11 initialization and HUD rendering. Must be called
+ * once during plugin initialization in `SKSEPlugin_Load`.
+ *
+ * **Installation Sequence:**
+ * 1. Allocate trampoline memory (14 bytes minimum)
+ * 2. Hook `BSGraphics::Renderer::CreateD3DAndSwapChain`
+ * 3. Hook `HUDMenu::PostDisplay` virtual function
+ *
+ * If hooks fail to install, errors are logged via SKSE's logger.
+ * The plugin will continue loading but overlay will not function.
+ *
+ * ```cpp
+ * // In SKSEPlugin_Load:
+ * SKSE::AllocTrampoline(14);
+ * Hooks::Install();
+ * ```
+ *
+ * @pre SKSE trampoline must be initialized with sufficient space.
+ * @pre Address Library must be loaded and available.
+ *
+ * @post D3D11 initialization will trigger ImGui setup.
+ * @post HUD rendering will include overlay drawing.
+ *
+ * @see Renderer::Draw, Renderer::TickRT
+ */
+void Install();
+}  // namespace Hooks

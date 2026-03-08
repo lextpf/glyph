@@ -56,78 +56,84 @@
  */
 namespace ParticleTextures
 {
-    enum class BlendMode {
-        Alpha = 0,
-        Additive = 1,
-        Screen = 2
-    };
+enum class BlendMode
+{
+    Alpha = 0,
+    Additive = 1,
+    Screen = 2
+};
 
-    /**
-     * Initialize particle textures using the D3D11 device.
-     * Scans subfolders and loads all PNG textures.
-     * Call after D3D11 device is created and ImGui is initialized.
-     *
-     * @param device D3D11 device to create textures on
-     * @return true if at least one texture loaded successfully
-     */
-    bool Initialize(ID3D11Device* device);
+/**
+ * Initialize particle textures using the D3D11 device.
+ * Scans subfolders and loads all PNG textures.
+ * Call after D3D11 device is created and ImGui is initialized.
+ *
+ * @param device D3D11 device to create textures on
+ * @return true if at least one texture loaded successfully
+ */
+bool Initialize(ID3D11Device* device);
 
-    /**
+/**
      * Check if particle textures have been loaded.
-     * @return true if textures are available for use
+     * @return true if textures are
+ * available for use
      */
-    bool IsInitialized();
+bool IsInitialized();
 
-    /**
+/**
      * Release all particle texture resources.
      * Safe to call multiple times.
      */
-    void Shutdown();
+void Shutdown();
 
-    /**
-     * Get the number of loaded textures for a particle type.
-     * @param style Particle style index
-     * @return Number of textures available (0 if none)
-     */
-    int GetTextureCount(int style);
+/**
+ * Get the number of loaded textures for a particle type.
+ * @param style Particle style index
+ * @return Number of textures available (0 if none)
+ */
+int GetTextureCount(int style);
 
-    /**
-     * Get a texture based on particle index.
-     * Uses particle index to select consistently (no flickering).
-     * @param style Particle style
-     * @param particleIndex Index of the particle
-     * @return ImTextureID or empty if not loaded
-     */
-    ImTextureID GetRandomTexture(int style, int particleIndex);
+/**
+ * Get a texture based on particle index.
+ * Uses particle index to select consistently (no flickering).
+ * @param style Particle style
+ * @param particleIndex Index of the particle
+ * @return ImTextureID or empty if not loaded
+ */
+ImTextureID GetRandomTexture(int style, int particleIndex);
 
-    /**
-     * Draw a textured particle sprite with specific particle index.
-     * Selects texture based on particle index for variety.
-     *
-     * @param list ImGui draw list
-     * @param center Center position of the sprite
-     * @param size Size of the sprite (width and height)
-     * @param style Particle style (determines which texture folder)
-     * @param particleIndex Index of the particle
-     * @param color Tint color (white = no tint)
-     * @param blendMode Blend state to use while drawing this sprite
-     * @param rotation Rotation angle in radians
-     */
-    void DrawSpriteWithIndex(ImDrawList* list, const ImVec2& center, float size,
-                             int style, int particleIndex, ImU32 color,
-                             BlendMode blendMode = BlendMode::Alpha,
-                             float rotation = 0.0f);
+/**
+ * Draw a textured particle sprite with specific particle index.
+ * Selects texture based on particle index for variety.
+ *
+ * @param list ImGui draw list
+ * @param center Center position of the sprite
+ * @param size Size of the sprite (width and height)
+ * @param style Particle style (determines which texture folder)
+ * @param particleIndex Index of the particle
+ * @param color Tint color (white = no tint)
+ * @param blendMode Blend state to use while drawing this sprite
+ * @param rotation Rotation angle in radians
+ */
+void DrawSpriteWithIndex(ImDrawList* list,
+                         const ImVec2& center,
+                         float size,
+                         int style,
+                         int particleIndex,
+                         ImU32 color,
+                         BlendMode blendMode = BlendMode::Alpha,
+                         float rotation = 0.0f);
 
-    /**
-     * Push additive blend state onto the draw list via callback.
-     * All subsequent draws will use additive blending until PopBlendState.
-     * @param dl ImGui draw list
-     */
-    void PushAdditiveBlend(ImDrawList* dl);
+/**
+ * Push additive blend state onto the draw list via callback.
+ * All subsequent draws will use additive blending until PopBlendState.
+ * @param dl ImGui draw list
+ */
+void PushAdditiveBlend(ImDrawList* dl);
 
-    /**
-     * Reset blend state to ImGui defaults.
-     * @param dl ImGui draw list
-     */
-    void PopBlendState(ImDrawList* dl);
-}
+/**
+ * Reset blend state to ImGui defaults.
+ * @param dl ImGui draw list
+ */
+void PopBlendState(ImDrawList* dl);
+}  // namespace ParticleTextures

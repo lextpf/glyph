@@ -98,71 +98,71 @@
  */
 namespace Renderer
 {
-    /**
-     * Main draw function called each frame.
-     *
-     * Renders all floating nameplates using ImGui. This is the primary
-     * entry point called from the render hook.
-     *
-     * Must be called from the render thread. Actor data is accessed
-     * through a mutex-protected snapshot.
-     *
-     * ```cpp
-     * // Called from HUDMenu::PostDisplay hook
-     * void HUDHook::thunk(RE::HUDMenu* a_this) {
-     *     func(a_this);  // Call original
-     *
-     *     Renderer::TickRT();
-     *     if (Renderer::IsOverlayAllowedRT()) {
-     *         Renderer::Draw();
-     *     }
-     * }
-     * ```
-     *
-     * @pre ImGui context must be initialized.
-     * @pre Must be called within an ImGui frame (after NewFrame, before EndFrame).
-     *
-     * @see TickRT, IsOverlayAllowedRT
-     */
-    void Draw();
+/**
+ * Main draw function called each frame.
+ *
+ * Renders all floating nameplates using ImGui. This is the primary
+ * entry point called from the render hook.
+ *
+ * Must be called from the render thread. Actor data is accessed
+ * through a mutex-protected snapshot.
+ *
+ * ```cpp
+ * // Called from HUDMenu::PostDisplay hook
+ * void HUDHook::thunk(RE::HUDMenu* a_this) {
+ *     func(a_this);  // Call original
+ *
+ *     Renderer::TickRT();
+ *     if (Renderer::IsOverlayAllowedRT()) {
+ *         Renderer::Draw();
+ *     }
+ * }
+ * ```
+ *
+ * @pre ImGui context must be initialized.
+ * @pre Must be called within an ImGui frame (after NewFrame, before EndFrame).
+ *
+ * @see TickRT, IsOverlayAllowedRT
+ */
+void Draw();
 
-    /**
-     * Render thread tick function.
-     *
-     * Called every frame to schedule actor data updates. The actual
-     * data collection runs on the game thread via SKSE's task interface.
-     *
-     * @pre Must be called from the render thread.
-     *
-     * @see Draw, IsOverlayAllowedRT
-     */
-    void TickRT();
+/**
+ * Render thread tick function.
+ *
+ * Called every frame to schedule actor data updates. The actual
+ * data collection runs on the game thread via SKSE's task interface.
+ *
+ * @pre Must be called from the render thread.
+ *
+ * @see Draw, IsOverlayAllowedRT
+ */
+void TickRT();
 
-    /**
-     * Check if overlay rendering is allowed.
-     *
-     * Determines whether the floating names overlay should be visible
-     * based on game state.
-     *
-     * @return `true` if overlay can be drawn, `false` if it should be hidden.
-     *
-     * @post Return value is valid for current frame only.
-     *
-     * Overlay is hidden when:
-     * - Game is loading or resetting
-     * - Player is in menus (inventory, map, journal, etc.)
-     * - Player cell is not attached
-     * - Player is in combat
-     * - Manually disabled via ToggleEnabled()
-     *
-     * @see Draw, TickRT
-     */
-    bool IsOverlayAllowedRT();
+/**
+ * Check if overlay rendering is allowed.
+ *
+ * Determines whether the floating names overlay should be visible
+ * based on game state.
+ *
+ * @return `true` if overlay can be drawn, `false` if it should be hidden.
+ *
+ * @post Return value is valid for current frame only.
+ *
+ * Overlay is hidden when:
+ * - Game is loading or resetting
+ * - Player is in menus (inventory, map, journal, etc.)
+ * - Player cell is not attached
+ * - Player is in combat
+ * - Manually disabled via ToggleEnabled()
+ *
+ * @see Draw, TickRT
+ */
+bool IsOverlayAllowedRT();
 
-    /**
-     * Toggle the rendering on/off.
-     *
-     * @return The new enabled state (true = enabled, false = disabled).
-     */
-    bool ToggleEnabled();
-}
+/**
+ * Toggle the rendering on/off.
+ *
+ * @return The new enabled state (true = enabled, false = disabled).
+ */
+bool ToggleEnabled();
+}  // namespace Renderer
