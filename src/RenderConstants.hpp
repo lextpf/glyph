@@ -72,4 +72,33 @@ inline constexpr int MAX_TIER_INDEX =
     100;  ///< Maximum tier index in INI (prevents unbounded allocation)
 inline constexpr int MAX_SPECIAL_TITLE_INDEX = 50;  ///< Maximum special title index in INI
 
+// ----------------------------------------------------------------------------
+// Layout / animation tuning (formerly INI-configurable).
+// These values are baked into the build because real-world tuning is rare and
+// the matching INI knobs were almost never adjusted; surface them again as
+// INI keys if you find yourself recompiling to tweak them.
+// ----------------------------------------------------------------------------
+
+inline constexpr float TITLE_MAIN_GAP =
+    6.0f;  ///< Vertical gap between title and main line (pixels)
+inline constexpr float INFO_LINE_GAP =
+    4.0f;  ///< Vertical gap between main line and info row (pixels)
+inline constexpr float SEGMENT_PADDING =
+    5.0f;  ///< Horizontal padding between main-line segments (pixels)
+inline constexpr float OUTLINE_MIN_SCALE =
+    .75f;  ///< Minimum outline width ratio when text is downscaled
+inline constexpr bool PROPORTIONAL_SPACING =
+    true;  ///< Scale pixel spacings (padding, gaps, outlines) with text size
+
+// Effect intensity range (tier progression interpolates between min and max).
+inline constexpr float EFFECT_ALPHA_MIN = .20f;
+inline constexpr float EFFECT_ALPHA_MAX = .60f;
+inline constexpr float EFFECT_STRENGTH_MIN = .15f;
+inline constexpr float EFFECT_STRENGTH_MAX = .60f;
+
+// Animation speed bands by tier (smaller = slower).
+inline constexpr float ANIM_SPEED_LOW_TIER = .35f;   ///< Tiers 0-7
+inline constexpr float ANIM_SPEED_MID_TIER = .20f;   ///< Tier 8
+inline constexpr float ANIM_SPEED_HIGH_TIER = .10f;  ///< Tier 9+
+
 }  // namespace RenderConstants
