@@ -28,104 +28,12 @@
 #include "PCH.hpp"
 
 #include "AppearanceTemplate.hpp"
+#include "ConsoleCommands.hpp"
 #include "Hooks.hpp"
 #include "Renderer.hpp"
 #include "Settings.hpp"
 
 #include <string>
-
-// Console command registration and handlers.
-//
-// Provides the `glyph` console command for toggling nameplate rendering.
-// Registers by replacing an unused vanilla command slot at plugin load.
-namespace ConsoleCommands
-{
-// glyph console command.
-// Usage: Type 'glyph' in console to toggle nameplate rendering on/off.
-bool GlyphExecute(const RE::SCRIPT_PARAMETER*,
-                  RE::SCRIPT_FUNCTION::ScriptData*,
-                  RE::TESObjectREFR*,
-                  RE::TESObjectREFR*,
-                  RE::Script*,
-                  RE::ScriptLocals*,
-                  double&,
-                  std::uint32_t&)
-{
-    auto console = RE::ConsoleLog::GetSingleton();
-    bool newState = Renderer::ToggleEnabled();
-
-    if (console)
-    {
-        if (newState)
-        {
-            console->Print("glyph: Nameplate rendering ENABLED");
-        }
-        else
-        {
-            console->Print("glyph: Nameplate rendering DISABLED");
-        }
-    }
-
-    logger::info("glyph: Rendering toggled to {}", newState ? "ON" : "OFF");
-
-    return true;
-}
-
-void Register()
-{
-    logger::info("Registering glyph console command...");
-
-    auto* commands = RE::SCRIPT_FUNCTION::GetFirstConsoleCommand();
-    if (!commands)
-    {
-        logger::error("Failed to get console command table");
-        return;
-    }
-
-    std::uint32_t commandCount = RE::SCRIPT_FUNCTION::Commands::kConsoleCommandsEnd -
-                                 RE::SCRIPT_FUNCTION::Commands::kConsoleOpBase;
-
-    // Find an unused command slot to replace, and check if already registered
-    RE::SCRIPT_FUNCTION* targetSlot = nullptr;
-    for (std::uint32_t i = 0; i < commandCount; ++i)
-    {
-        auto* cmd = &commands[i];
-        if (!cmd || !cmd->functionName)
-        {
-            continue;
-        }
-
-        if (_stricmp(cmd->functionName, "glyph") == 0)
-        {
-            logger::info("Console command 'glyph' already registered");
-            return;
-        }
-
-        // Replace TestSeenData
-        if (!targetSlot && _stricmp(cmd->functionName, "TestSeenData") == 0)
-        {
-            targetSlot = cmd;
-        }
-    }
-
-    if (targetSlot)
-    {
-        targetSlot->functionName = "glyph";
-        targetSlot->shortName = "";
-        targetSlot->helpString = "Toggle nameplate rendering on/off";
-        targetSlot->referenceFunction = false;
-        targetSlot->executeFunction = GlyphExecute;
-        targetSlot->numParams = 0;
-        targetSlot->params = nullptr;
-        logger::info("Registered 'glyph' console command");
-        logger::info("Usage: Type 'glyph' to toggle nameplate rendering");
-    }
-    else
-    {
-        logger::warn("Could not find slot for glyph command");
-    }
-}
-}  // namespace ConsoleCommands
 
 // SKSE message handler - key lifecycle states:
 // - kDataLoaded: register console commands, retry NiOverride
@@ -203,14 +111,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
     }
 }
 
-// SKSE plugin load entry point.
-//
-// Called by SKSE after the plugin DLL is loaded. Initializes logging,
-// loads settings, and installs hooks.
-//
-// a_skse: SKSE load interface.
-//
-// Returns `true` if initialization succeeded.
+// SKSE plugin load entry point. Initializes logging, loads settings, and
+// installs hooks.
 extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
     using namespace std::literals;
@@ -271,13 +173,8 @@ extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []()
     return version;
 }();
 
-// SKSE plugin query entry point.
-//
-// Called by SKSE during plugin enumeration. Provides basic plugin info.
-//
-// a_info: Output plugin information structure.
-//
-// Returns `true` always.
+// SKSE plugin query entry point. Called during plugin enumeration; provides
+// basic plugin info.
 extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Query(const SKSE::QueryInterface*,
                                                                SKSE::PluginInfo* a_info)
 {
