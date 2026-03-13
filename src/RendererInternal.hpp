@@ -51,11 +51,7 @@ struct RenderSettingsSnapshot
     float titleShadowOffsetY = .0f;
     float mainShadowOffsetX = .0f;
     float mainShadowOffsetY = .0f;
-    float segmentPadding = .0f;
     bool fastOutlines = false;
-    float titleMainGap = .0f;
-    float outlineMinScale = .65f;
-    bool proportionalSpacing = false;
 
     // Glow
     bool enableGlow = false;
@@ -106,12 +102,6 @@ struct RenderSettingsSnapshot
     // Particles
     bool useParticleTextures = false;
     bool enableParticleAura = false;
-    bool enableStars = false;
-    bool enableSparks = false;
-    bool enableWisps = false;
-    bool enableRunes = false;
-    bool enableOrbs = false;
-    bool enableCrystals = false;
     int particleCount = 0;
     float particleSize = .0f;
     float particleSpeed = .0f;
@@ -120,14 +110,7 @@ struct RenderSettingsSnapshot
     int particleBlendMode = 0;
 
     // Animation & Color
-    float animSpeedLowTier = .0f;
-    float animSpeedMidTier = .0f;
-    float animSpeedHighTier = .0f;
     float nameColorMix = .0f;
-    float effectAlphaMin = .0f;
-    float effectAlphaMax = .0f;
-    float strengthMin = .0f;
-    float strengthMax = .0f;
     float tierVibrancyBoost = .0f;
     float innerTextAlpha = 1.0f;
     float outlineAlpha = 1.0f;
@@ -164,11 +147,39 @@ struct RenderSettingsSnapshot
     std::vector<Settings::TierDefinition> tiers = {};
     std::string titleFormat = {};
     std::vector<Settings::Segment> displayFormat = {};
+    std::vector<Settings::Segment> infoFormat = {};
     std::vector<Settings::SpecialTitleDefinition> specialTitles = {};
 
     // Pre-sorted special titles (pointers into specialTitles above).
     // Populated once per snapshot via PopulateSortedSpecialTitles().
     std::vector<const Settings::SpecialTitleDefinition*> sortedSpecialTitles = {};
+
+    /// Resolved label strings + classification thresholds for the contextual
+    /// nameplate tokens (`%r`, `%d`, `%c`).  Snapshotted as plain values so
+    /// render helpers can grab a `string_view` per actor without re-locking.
+    struct LabelTokens
+    {
+        std::string relFollower;
+        std::string relAlly;
+        std::string relNeutral;
+        std::string relHostile;
+        std::string ldWeak;
+        std::string ldEven;
+        std::string ldStrong;
+        std::string ldDeadly;
+        std::string ctNPC;
+        std::string ctBeast;
+        std::string ctUndead;
+        std::string ctDaedra;
+        std::string ctDragon;
+        int deltaWeakBelow = -5;
+        int deltaStrongAbove = 5;
+        int deltaDeadlyAbove = 10;
+    };
+    LabelTokens labels = {};
+
+    /// Focus-target expanded-nameplate settings (value copy).
+    Settings::FocusSettings focus = {};
 
     // Factory: populate all fields from Settings under shared lock.
     static RenderSettingsSnapshot CaptureFromSettings();
@@ -211,6 +222,11 @@ struct ActorCache
     float exitPhase = .0f;      ///< Exit animation progress (0=visible, 1=fully exited)
     bool entranceDone = false;  ///< True when entrance animation finished
 
+    /// Smoothed focus state for the focus-target expanded nameplate feature.
+    /// Targets 1.0 while this actor is the cone winner, 0.0 otherwise.
+    /// Drives both the ambient dim multiplier and the title/info row fade.
+    float focusSmooth = .0f;
+
     /// Motion trail history (separate from posHistory used for smoothing).
     static constexpr int TRAIL_HISTORY_SIZE = 8;
     ImVec2 trailHistory[TRAIL_HISTORY_SIZE]{};  ///< Trail ghost positions
@@ -246,12 +262,45 @@ struct ActorCache
     }
 };
 
-/// Actor disposition.
+/// Actor disposition (drives existing nameplate color logic).
 enum class Disposition : std::uint8_t
 {
     Neutral,      ///< Neutral NPCs (white/gray)
     Enemy,        ///< Hostile NPCs (red)
     AllyOrFriend  ///< Friendly/allied NPCs (blue)
+};
+
+/// Refined player-relationship channel for the `%r` token.  Parallel to
+/// `Disposition` -- kept separate so the legacy 3-state color logic isn't
+/// forced to expand.
+enum class RelationshipKind : std::uint8_t
+{
+    Hostile,  ///< IsHostileToActor(player)
+    Neutral,  ///< Default -- neither hostile, nor teammate, nor talkable
+    Ally,     ///< CanTalkToPlayer (friendly NPC) but not a teammate
+    Follower  ///< IsPlayerTeammate
+};
+
+/// Actor level relative to player level for the `%d` token.  Thresholds
+/// live in `Settings::Labels()` and default to <=-5, >=+5, >=+10.
+enum class LevelDelta : std::uint8_t
+{
+    Weak,    ///< Far below player level
+    Even,    ///< Within +/-(StrongAtOrAbove - 1) of player
+    Strong,  ///< Notably above player
+    Deadly   ///< Far above player (overrides Strong)
+};
+
+/// Coarse actor classification for the `%c` token, derived from the
+/// `ActorTypeX` keyword set.  NPC is the fallback when no creature
+/// keyword matches.
+enum class CreatureKind : std::uint8_t
+{
+    NPC,     ///< Humanoid (ActorTypeNPC) -- default
+    Beast,   ///< ActorTypeCreature / ActorTypeAnimal
+    Undead,  ///< ActorTypeUndead
+    Daedra,  ///< ActorTypeDaedra
+    Dragon   ///< ActorTypeDragon
 };
 
 /// Data for rendering a single actor's nameplate.
@@ -265,6 +314,13 @@ struct ActorDrawData
     Disposition dispo{Disposition::Neutral};  ///< Disposition towards player
     bool isPlayer{false};                     ///< Whether this is the player character
     bool isOccluded{false};                   ///< Whether actor is occluded from view
+
+    /// @name Contextual nameplate facts (resolved on game thread)
+    /// @{
+    RelationshipKind relationship{RelationshipKind::Neutral};  ///< %r token source
+    LevelDelta levelDelta{LevelDelta::Even};                   ///< %d token source
+    CreatureKind creatureKind{CreatureKind::NPC};              ///< %c token source
+    /// @}
 };
 
 /// Cached line-of-sight result for an actor, checked periodically rather than
@@ -339,6 +395,22 @@ struct RenderSeg
     ImVec2 displaySize;       ///< Measured size of displayText
 };
 
+/// Bundle of resolved actor-fact values passed to `FormatString` for one
+/// expansion call.  All string_views point into the active
+/// `RenderSettingsSnapshot::labels` (lives for the frame, per-frame
+/// snapshot cached at `RendererState::cachedSnap`), so the views are
+/// safe to read for the duration of any single `FormatString` call.
+struct ActorLabelContext
+{
+    std::string_view name;          ///< Actor display name (%n)
+    int level = 0;                  ///< Actor level (%l)
+    const char* title = nullptr;    ///< Tier or special title (%t); nullable
+    std::string_view relationship;  ///< Resolved %r label
+    std::string_view levelDelta;    ///< Resolved %d label
+    std::string_view creatureKind;  ///< Resolved %c label
+    std::uint32_t formID = 0;       ///< For deterministic per-actor effects in future tokens
+};
+
 /**
  * Color terminology used throughout the rendering pipeline:
  *
@@ -392,9 +464,14 @@ struct LabelStyle
     float baseOutlineWidth;
     float distToPlayer;
 
+    /// Extra alpha multiplier applied to the info row (and only the info row)
+    /// so it can be hidden on ambient actors and faded in on focus changes.
+    /// 1.0 = no effect; 0.0 = info row fully hidden.
+    float infoAlphaMul = 1.0f;
+
     float CalcOutlineWidth(float fontSize, const RenderSettingsSnapshot& snap) const
     {
-        float ratio = std::max(fontSize / snap.nameFontSize, snap.outlineMinScale);
+        float ratio = std::max(fontSize / snap.nameFontSize, RenderConstants::OUTLINE_MIN_SCALE);
         float w = baseOutlineWidth * ratio;
         if (snap.visual.EnableDistanceOutlineScale)
         {
@@ -426,14 +503,19 @@ struct LabelLayout
     float mainLineHeight;             ///< Height of the tallest segment
     float segmentPadding;             ///< Horizontal padding between segments
 
+    std::vector<RenderSeg> infoSegments;  ///< Info row segments (built from InfoFormat)
+    float infoLineWidth = .0f;            ///< Total width of all info segments plus padding
+    float infoLineHeight = .0f;           ///< Height of the tallest info segment
+
     std::string titleStr;         ///< Full title text
     std::string titleDisplayStr;  ///< Title text after typewriter truncation
     ImVec2 titleSize;             ///< Measured size of titleDisplayStr
 
-    ImVec2 startPos;   ///< Screen-space anchor from WorldToScreen
-    float titleY;      ///< Y position of title line top
-    float mainLineY;   ///< Y position of main line top
-    float totalWidth;  ///< Width of the wider of title/main line
+    ImVec2 startPos;        ///< Screen-space anchor from WorldToScreen
+    float titleY;           ///< Y position of title line top
+    float mainLineY;        ///< Y position of main line top
+    float infoLineY = .0f;  ///< Y position of info row top (only valid if infoSegments non-empty)
+    float totalWidth;       ///< Width of the widest of title/main/info line
 
     ImVec2 nameplateCenter;  ///< Center of the nameplate bounding box
     float nameplateTop;      ///< Top edge of nameplate (screen Y)
@@ -518,6 +600,17 @@ void UpdateSnapshot_GameThread();
 void QueueSnapshotUpdate_RenderThread();
 
 // ============================================================================
+// Focus selection (Renderer.cpp)
+// ============================================================================
+
+/// Pick the formID of the actor whose direction from the camera lies inside
+/// the configured cone with the smallest angular offset, or 0 if no actor
+/// qualifies.  Render-thread only -- reads camera pose via
+/// `Occlusion::GetCameraInfo`.  The player is never picked.
+uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
+                            const RenderSettingsSnapshot& snapSettings);
+
+// ============================================================================
 // Layout functions (RendererLayout.cpp)
 // ============================================================================
 
@@ -527,12 +620,10 @@ void QueueSnapshotUpdate_RenderThread();
 void CalcTightYBoundsFromTop(
     ImFont* font, float fontSize, const char* text, float& outTop, float& outBottom);
 
-/// Replace %n, %l, %t placeholders in a format string.  Uses single-pass
-/// replacement to avoid expanding placeholders embedded in substitution values.
-std::string FormatString(const std::string& fmt,
-                         const std::string_view nameVal,
-                         int levelVal,
-                         const char* titleVal = nullptr);
+/// Replace placeholders in a format string (`%n`, `%l`, `%t`, `%r`, `%d`, `%c`)
+/// with values from the supplied `ActorLabelContext`.  Single-pass replacement
+/// avoids expanding placeholders embedded in substitution values.
+std::string FormatString(const std::string& fmt, const ActorLabelContext& ctx);
 
 /// Returns a default TierDefinition used when no tiers are configured.
 /// Lazily initialized on first call.
@@ -651,6 +742,16 @@ void DrawTitleText(ImDrawList* dl,
 
 /// Render each segment of the main nameplate line with its configured effect.
 void DrawMainLineSegments(ImDrawList* dl,
+                          const ActorDrawData& d,
+                          const LabelStyle& style,
+                          const LabelLayout& layout,
+                          ImDrawListSplitter* splitter,
+                          bool fastOutlines,
+                          const RenderSettingsSnapshot& snap);
+
+/// Render the contextual info row below the main line.  No-op when no info
+/// segments survived the per-segment drop-if-blank trimming.
+void DrawInfoLineSegments(ImDrawList* dl,
                           const ActorDrawData& d,
                           const LabelStyle& style,
                           const LabelLayout& layout,
