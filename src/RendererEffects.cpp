@@ -953,7 +953,7 @@ static OrnamentMetrics ComputeOrnamentMetrics(const ActorDrawData& d,
     m.ornamentFont = ornamentFont;
     m.ornamentSize = snap.ornamentFontSize * snap.ornamentScale * sizeMultiplier * textSizeScale;
 
-    const float spacingScale = snap.proportionalSpacing ? textSizeScale : 1.0f;
+    const float spacingScale = textSizeScale;
     const float extraPadding = m.ornamentSize * .30f;
     m.totalSpacing = snap.ornamentSpacing * 1.35f * spacingScale + extraPadding;
     m.ornamentCharGap = std::max(2.0f, m.ornamentSize * .16f);
@@ -1012,12 +1012,12 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
     const Settings::TierDefinition& tier = *style.tier;
     const uint16_t lv = (uint16_t)std::min<int>(d.level, 9999);
 
-    bool tierHasParticles = !tier.particleTypes.empty() && tier.particleTypes != "None";
-    bool globalHasParticles = snap.enableOrbs || snap.enableWisps || snap.enableRunes ||
-                              snap.enableSparks || snap.enableStars || snap.enableCrystals;
-    bool hasAnyParticles = tierHasParticles || globalHasParticles;
+    // Per-tier ParticleTypes is the sole source of truth for which styles render.
+    // A tier with empty / "None" particle types renders no particles unless a
+    // special title forces them on.
+    const bool tierHasParticles = !tier.particleTypes.empty() && tier.particleTypes != "None";
     cfg.showParticles =
-        ((snap.enableParticleAura && hasAnyParticles && style.tierAllowsParticles) ||
+        ((snap.enableParticleAura && tierHasParticles && style.tierAllowsParticles) ||
          (style.specialTitle && style.specialTitle->forceParticles)) &&
         lodEffectsFactor > .01f;
     if (!cfg.showParticles)
@@ -1042,8 +1042,7 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
             ImGui::ColorConvertFloat4ToU32(ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, 1.0f));
     }
 
-    const float pSpacingScale =
-        snap.proportionalSpacing ? (layout.nameFontSize / layout.fontName->FontSize) : 1.0f;
+    const float pSpacingScale = layout.nameFontSize / layout.fontName->FontSize;
 
     // Wrap the particle aura around ornaments too when they are visible.
     // Symmetric inflation keeps the cloud centered on the actor's head bone;
@@ -1078,24 +1077,12 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
         .0f,
         1.0f);
 
-    if (tierHasParticles)
-    {
-        cfg.showOrbs = tier.particleTypes.find("Orbs") != std::string::npos;
-        cfg.showWisps = tier.particleTypes.find("Wisps") != std::string::npos;
-        cfg.showRunes = tier.particleTypes.find("Runes") != std::string::npos;
-        cfg.showSparks = tier.particleTypes.find("Sparks") != std::string::npos;
-        cfg.showStars = tier.particleTypes.find("Stars") != std::string::npos;
-        cfg.showCrystals = tier.particleTypes.find("Crystals") != std::string::npos;
-    }
-    else
-    {
-        cfg.showOrbs = snap.enableOrbs;
-        cfg.showWisps = snap.enableWisps;
-        cfg.showRunes = snap.enableRunes;
-        cfg.showSparks = snap.enableSparks;
-        cfg.showStars = snap.enableStars;
-        cfg.showCrystals = snap.enableCrystals;
-    }
+    cfg.showOrbs = tier.particleTypes.find("Orbs") != std::string::npos;
+    cfg.showWisps = tier.particleTypes.find("Wisps") != std::string::npos;
+    cfg.showRunes = tier.particleTypes.find("Runes") != std::string::npos;
+    cfg.showSparks = tier.particleTypes.find("Sparks") != std::string::npos;
+    cfg.showStars = tier.particleTypes.find("Stars") != std::string::npos;
+    cfg.showCrystals = tier.particleTypes.find("Crystals") != std::string::npos;
 
     cfg.enabledStyles = (int)cfg.showOrbs + (int)cfg.showWisps + (int)cfg.showRunes +
                         (int)cfg.showSparks + (int)cfg.showStars + (int)cfg.showCrystals;
@@ -1498,8 +1485,7 @@ void DrawTitleText(ImDrawList* dl,
         return;
     }
 
-    const float spacingScale =
-        snap.proportionalSpacing ? (layout.nameFontSize / layout.fontName->FontSize) : 1.0f;
+    const float spacingScale = layout.nameFontSize / layout.fontName->FontSize;
 
     float titleOffsetX = (layout.totalWidth - layout.titleSize.x) * .5f;
     ImVec2 titlePos(layout.startPos.x - layout.totalWidth * .5f + titleOffsetX,
@@ -1618,17 +1604,24 @@ void DrawTitleText(ImDrawList* dl,
     }
 }
 
-// Render each segment of the main nameplate line.
-void DrawMainLineSegments(ImDrawList* dl,
-                          const ActorDrawData& d,
-                          const LabelStyle& style,
-                          const LabelLayout& layout,
-                          ImDrawListSplitter* splitter,
-                          bool fastOutlines,
-                          const RenderSettingsSnapshot& snap)
+// Render a row of nameplate segments at the supplied line geometry.  Shared
+// by `DrawMainLineSegments` (main row) and `DrawInfoLineSegments` (info row);
+// both rows reuse the same per-actor style/effect derivations, only the
+// segment vector + line Y/width/height vary.
+static void DrawSegmentRow(ImDrawList* dl,
+                           const ActorDrawData& d,
+                           const LabelStyle& style,
+                           const LabelLayout& layout,
+                           const std::vector<RenderSeg>& segments,
+                           float lineWidth,
+                           float lineHeight,
+                           float lineY,
+                           ImDrawListSplitter* splitter,
+                           bool fastOutlines,
+                           const RenderSettingsSnapshot& snap)
 {
     const float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
-    const float spacingScale = snap.proportionalSpacing ? textSizeScale : 1.0f;
+    const float spacingScale = textSizeScale;
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const int chFront = gpuGlow ? 2 : 1;
     auto nameGlow = BuildOutlineGlow(snap, style.supportName, style.alpha);
@@ -1649,11 +1642,11 @@ void DrawMainLineSegments(ImDrawList* dl,
         snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
 
     ImVec2 currentPos;
-    currentPos.x = layout.startPos.x - layout.totalWidth * .5f +
-                   (layout.totalWidth - layout.mainLineWidth) * .5f;
-    currentPos.y = layout.startPos.y + layout.mainLineY;
+    currentPos.x =
+        layout.startPos.x - layout.totalWidth * .5f + (layout.totalWidth - lineWidth) * .5f;
+    currentPos.y = layout.startPos.y + lineY;
 
-    for (const auto& seg : layout.segments)
+    for (const auto& seg : segments)
     {
         if (seg.displayText.empty())
         {
@@ -1791,6 +1784,70 @@ void DrawMainLineSegments(ImDrawList* dl,
 
         currentPos.x += seg.size.x + layout.segmentPadding;
     }
+}
+
+// Render each segment of the main nameplate line.
+void DrawMainLineSegments(ImDrawList* dl,
+                          const ActorDrawData& d,
+                          const LabelStyle& style,
+                          const LabelLayout& layout,
+                          ImDrawListSplitter* splitter,
+                          bool fastOutlines,
+                          const RenderSettingsSnapshot& snap)
+{
+    DrawSegmentRow(dl,
+                   d,
+                   style,
+                   layout,
+                   layout.segments,
+                   layout.mainLineWidth,
+                   layout.mainLineHeight,
+                   layout.mainLineY,
+                   splitter,
+                   fastOutlines,
+                   snap);
+}
+
+// Render the contextual info row below the main line.  No-op when no info
+// segments survived drop-if-blank trimming.  Honors `style.infoAlphaMul`,
+// which the focus-target feature uses to hide the info row on ambient
+// (non-focused) actors and fade it in on the focused actor.
+void DrawInfoLineSegments(ImDrawList* dl,
+                          const ActorDrawData& d,
+                          const LabelStyle& style,
+                          const LabelLayout& layout,
+                          ImDrawListSplitter* splitter,
+                          bool fastOutlines,
+                          const RenderSettingsSnapshot& snap)
+{
+    if (layout.infoSegments.empty())
+    {
+        return;
+    }
+    if (style.infoAlphaMul < .01f)
+    {
+        return;
+    }
+
+    // Apply the info-row alpha multiplier to a local copy of style so the
+    // segment drawer's color packing picks up the reduced alpha without
+    // touching the caller's style (which is used by other rows).
+    LabelStyle infoStyle = style;
+    infoStyle.alpha *= style.infoAlphaMul;
+    infoStyle.titleAlpha *= style.infoAlphaMul;
+    infoStyle.levelAlpha *= style.infoAlphaMul;
+
+    DrawSegmentRow(dl,
+                   d,
+                   infoStyle,
+                   layout,
+                   layout.infoSegments,
+                   layout.infoLineWidth,
+                   layout.infoLineHeight,
+                   layout.infoLineY,
+                   splitter,
+                   fastOutlines,
+                   snap);
 }
 
 }  // namespace Renderer
