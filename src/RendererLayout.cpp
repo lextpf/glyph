@@ -51,17 +51,16 @@ void CalcTightYBoundsFromTop(
     }
 }
 
-// Replace %n, %l, %t placeholders in a format string.
+// Replace placeholders in a format string with values from an actor label context.
 // Single-pass to avoid expanding placeholders embedded in substitution values.
-std::string FormatString(const std::string& fmt,
-                         const std::string_view nameVal,
-                         int levelVal,
-                         const char* titleVal)
+// Supported placeholders: %n (name), %l (level), %t (title), %r (relationship),
+// %d (level delta), %c (creature kind).
+std::string FormatString(const std::string& fmt, const ActorLabelContext& ctx)
 {
-    const std::string lStr = std::to_string(levelVal);
+    const std::string lStr = std::to_string(ctx.level);
 
     std::string result;
-    result.reserve(fmt.size() + nameVal.size());
+    result.reserve(fmt.size() + ctx.name.size() + 64);
 
     for (size_t i = 0; i < fmt.size(); ++i)
     {
@@ -70,7 +69,7 @@ std::string FormatString(const std::string& fmt,
             switch (fmt[i + 1])
             {
                 case 'n':
-                    result.append(nameVal.data(), nameVal.size());
+                    result.append(ctx.name.data(), ctx.name.size());
                     ++i;
                     continue;
                 case 'l':
@@ -78,19 +77,115 @@ std::string FormatString(const std::string& fmt,
                     ++i;
                     continue;
                 case 't':
-                    if (titleVal)
+                    if (ctx.title != nullptr)
                     {
-                        result.append(titleVal);
+                        result.append(ctx.title);
                         ++i;
                         continue;
                     }
                     break;
+                case 'r':
+                    result.append(ctx.relationship.data(), ctx.relationship.size());
+                    ++i;
+                    continue;
+                case 'd':
+                    result.append(ctx.levelDelta.data(), ctx.levelDelta.size());
+                    ++i;
+                    continue;
+                case 'c':
+                    result.append(ctx.creatureKind.data(), ctx.creatureKind.size());
+                    ++i;
+                    continue;
             }
         }
         result += fmt[i];
     }
     return result;
 }
+
+namespace
+{
+// Resolve enum -> label string from the per-frame settings snapshot.
+std::string_view LabelFor(RelationshipKind r, const RenderSettingsSnapshot::LabelTokens& lbl)
+{
+    switch (r)
+    {
+        case RelationshipKind::Hostile:
+            return lbl.relHostile;
+        case RelationshipKind::Neutral:
+            return lbl.relNeutral;
+        case RelationshipKind::Ally:
+            return lbl.relAlly;
+        case RelationshipKind::Follower:
+            return lbl.relFollower;
+    }
+    return {};
+}
+
+std::string_view LabelFor(LevelDelta d, const RenderSettingsSnapshot::LabelTokens& lbl)
+{
+    switch (d)
+    {
+        case LevelDelta::Weak:
+            return lbl.ldWeak;
+        case LevelDelta::Even:
+            return lbl.ldEven;
+        case LevelDelta::Strong:
+            return lbl.ldStrong;
+        case LevelDelta::Deadly:
+            return lbl.ldDeadly;
+    }
+    return {};
+}
+
+std::string_view LabelFor(CreatureKind k, const RenderSettingsSnapshot::LabelTokens& lbl)
+{
+    switch (k)
+    {
+        case CreatureKind::NPC:
+            return lbl.ctNPC;
+        case CreatureKind::Beast:
+            return lbl.ctBeast;
+        case CreatureKind::Undead:
+            return lbl.ctUndead;
+        case CreatureKind::Daedra:
+            return lbl.ctDaedra;
+        case CreatureKind::Dragon:
+            return lbl.ctDragon;
+    }
+    return {};
+}
+
+// Build a label context for an actor.  String views point into snap.labels,
+// which is stable for the lifetime of the cached snapshot (regenerated only
+// when Settings::Generation() advances).  The title pointer must be set by
+// the caller after `BuildLabelContext` returns.
+ActorLabelContext BuildLabelContext(const ActorDrawData& d, const RenderSettingsSnapshot& snap)
+{
+    ActorLabelContext ctx{};
+    ctx.name = d.name.empty() ? std::string_view{" "} : std::string_view{d.name};
+    ctx.level = static_cast<int>(d.level);
+    ctx.title = nullptr;
+    ctx.relationship = LabelFor(d.relationship, snap.labels);
+    ctx.levelDelta = LabelFor(d.levelDelta, snap.labels);
+    ctx.creatureKind = LabelFor(d.creatureKind, snap.labels);
+    ctx.formID = d.formID;
+    return ctx;
+}
+
+// True when every character in `s` is ASCII whitespace.  Empty string is true.
+bool IsAllWhitespace(std::string_view s)
+{
+    for (char c : s)
+    {
+        if (std::isspace(static_cast<unsigned char>(c)) == 0)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
 
 const Settings::TierDefinition& GetFallbackTier()
 {
@@ -228,7 +323,8 @@ static void ComputeTierColors(LabelStyle& style,
     style.Rc = Pastelize(tier.rightColor);
 
     const float effectAlphaMul =
-        snap.effectAlphaMin + (snap.effectAlphaMax - snap.effectAlphaMin) * levelT;
+        RenderConstants::EFFECT_ALPHA_MIN +
+        (RenderConstants::EFFECT_ALPHA_MAX - RenderConstants::EFFECT_ALPHA_MIN) * levelT;
     style.effectAlpha = alpha * tierIntensity * effectAlphaMul;
 
     auto MixToWhite = [](ImVec4 c, float amount)
@@ -426,18 +522,18 @@ static void ComputeAnimationParams(LabelStyle& style,
     }
     levelT = std::clamp(levelT, .0f, 1.0f);
 
-    float tierAnimSpeed = snap.animSpeedLowTier;
+    float tierAnimSpeed = RenderConstants::ANIM_SPEED_LOW_TIER;
     if (snap.tiers.size() > 1)
     {
         float tierRatio =
             static_cast<float>(style.tierIdx) / static_cast<float>(snap.tiers.size() - 1);
         if (tierRatio >= .9f)
         {
-            tierAnimSpeed = snap.animSpeedHighTier;
+            tierAnimSpeed = RenderConstants::ANIM_SPEED_HIGH_TIER;
         }
         else if (tierRatio >= .8f)
         {
-            tierAnimSpeed = snap.animSpeedMidTier;
+            tierAnimSpeed = RenderConstants::ANIM_SPEED_MID_TIER;
         }
     }
     if (under100)
@@ -449,7 +545,9 @@ static void ComputeAnimationParams(LabelStyle& style,
     style.phase01 = frac(time * tierAnimSpeed + phaseSeed);
 
     style.strength =
-        tierIntensity * (snap.strengthMin + (snap.strengthMax - snap.strengthMin) * levelT);
+        tierIntensity *
+        (RenderConstants::EFFECT_STRENGTH_MIN +
+         (RenderConstants::EFFECT_STRENGTH_MAX - RenderConstants::EFFECT_STRENGTH_MIN) * levelT);
 }
 
 // Compute all color, tier, and effect data for a label.
@@ -531,32 +629,40 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
 // ComputeLabelLayout helpers
 // ============================================================================
 
-// Build rendered segments from the display format, applying typewriter truncation.
-static void BuildSegments(LabelLayout& layout,
-                          const ActorDrawData& d,
-                          const LabelStyle& style,
-                          float textSizeScale,
-                          int typewriterCharsToShow,
-                          int& totalCharsProcessed,
-                          const RenderSettingsSnapshot& snap)
+// Build one row of rendered segments from a format list and advance the
+// typewriter accounting.  Shared by the main row (DisplayFormat) and info
+// row (InfoFormat).  Segments marked `dropIfBlank` whose post-expansion
+// text trims to empty are omitted entirely (no width, no padding).
+static void BuildLineSegments(std::vector<RenderSeg>& outSegs,
+                              float& outLineWidth,
+                              float& outLineHeight,
+                              const std::vector<Settings::Segment>& fmtList,
+                              const ActorLabelContext& ctx,
+                              ImFont* fontName,
+                              float nameFontSize,
+                              ImFont* fontLevel,
+                              float levelFontSize,
+                              float segmentPadding,
+                              int typewriterCharsToShow,
+                              int& totalCharsProcessed)
 {
-    const char* safeName = d.name.empty() ? " " : d.name.c_str();
-
-    layout.mainLineWidth = .0f;
-    layout.mainLineHeight = .0f;
-
-    static const std::vector<Settings::Segment> kDefaultDisplayFormat = {{"%n", false},
-                                                                         {" Lv.%l", true}};
-
-    const auto& fmtList = snap.displayFormat.empty() ? kDefaultDisplayFormat : snap.displayFormat;
+    outSegs.clear();
+    outLineWidth = .0f;
+    outLineHeight = .0f;
 
     for (const auto& fmt : fmtList)
     {
         RenderSeg seg;
-        seg.text = FormatString(fmt.format, safeName, d.level);
+        seg.text = FormatString(fmt.format, ctx);
+
+        if (fmt.dropIfBlank && IsAllWhitespace(seg.text))
+        {
+            continue;
+        }
+
         seg.isLevel = fmt.useLevelFont;
-        seg.font = seg.isLevel ? layout.fontLevel : layout.fontName;
-        seg.fontSize = seg.isLevel ? layout.levelFontSize : layout.nameFontSize;
+        seg.font = seg.isLevel ? fontLevel : fontName;
+        seg.fontSize = seg.isLevel ? levelFontSize : nameFontSize;
         seg.size = seg.font->CalcTextSizeA(seg.fontSize, FLT_MAX, .0f, seg.text.c_str());
 
         if (typewriterCharsToShow >= 0)
@@ -585,20 +691,66 @@ static void BuildSegments(LabelLayout& layout,
         seg.displaySize =
             seg.font->CalcTextSizeA(seg.fontSize, FLT_MAX, .0f, seg.displayText.c_str());
 
-        layout.segments.push_back(seg);
-        layout.mainLineWidth += seg.size.x;
-        if (seg.size.y > layout.mainLineHeight)
+        outSegs.push_back(seg);
+        outLineWidth += seg.size.x;
+        if (seg.size.y > outLineHeight)
         {
-            layout.mainLineHeight = seg.size.y;
+            outLineHeight = seg.size.y;
         }
     }
 
-    const float spacingScale = snap.proportionalSpacing ? textSizeScale : 1.0f;
-    layout.segmentPadding = snap.segmentPadding * spacingScale;
-    if (!layout.segments.empty())
+    if (!outSegs.empty())
     {
-        layout.mainLineWidth += (layout.segments.size() - 1) * layout.segmentPadding;
+        outLineWidth += (outSegs.size() - 1) * segmentPadding;
     }
+}
+
+// Build main row + info row segments from snap.displayFormat / snap.infoFormat.
+// Typewriter reveal continues across both rows (main -> info), so the info
+// segments appear after the main line has finished typing.
+static void BuildSegments(LabelLayout& layout,
+                          const ActorDrawData& d,
+                          const LabelStyle& /*style*/,
+                          float textSizeScale,
+                          int typewriterCharsToShow,
+                          int& totalCharsProcessed,
+                          const RenderSettingsSnapshot& snap)
+{
+    static const std::vector<Settings::Segment> kDefaultDisplayFormat = {{"%n", false, false},
+                                                                         {" Lv.%l", true, false}};
+
+    const auto& mainFmt = snap.displayFormat.empty() ? kDefaultDisplayFormat : snap.displayFormat;
+
+    const ActorLabelContext ctx = BuildLabelContext(d, snap);
+
+    const float spacingScale = textSizeScale;
+    layout.segmentPadding = RenderConstants::SEGMENT_PADDING * spacingScale;
+
+    BuildLineSegments(layout.segments,
+                      layout.mainLineWidth,
+                      layout.mainLineHeight,
+                      mainFmt,
+                      ctx,
+                      layout.fontName,
+                      layout.nameFontSize,
+                      layout.fontLevel,
+                      layout.levelFontSize,
+                      layout.segmentPadding,
+                      typewriterCharsToShow,
+                      totalCharsProcessed);
+
+    BuildLineSegments(layout.infoSegments,
+                      layout.infoLineWidth,
+                      layout.infoLineHeight,
+                      snap.infoFormat,
+                      ctx,
+                      layout.fontName,
+                      layout.nameFontSize,
+                      layout.fontLevel,
+                      layout.levelFontSize,
+                      layout.segmentPadding,
+                      typewriterCharsToShow,
+                      totalCharsProcessed);
 }
 
 // Compute title text, vertical bounds, positions, and nameplate bounding box.
@@ -610,13 +762,14 @@ static void ComputePositionAndBounds(LabelLayout& layout,
                                      int totalCharsProcessed,
                                      const RenderSettingsSnapshot& snap)
 {
-    const char* safeName = d.name.empty() ? " " : d.name.c_str();
     const float outlineWidth = style.outlineWidth;
 
     // Title
     const char* titleToUse =
         style.specialTitle ? style.specialTitle->displayTitle.c_str() : style.tier->title.c_str();
-    layout.titleStr = FormatString(snap.titleFormat, safeName, d.level, titleToUse);
+    ActorLabelContext titleCtx = BuildLabelContext(d, snap);
+    titleCtx.title = titleToUse;
+    layout.titleStr = FormatString(snap.titleFormat, titleCtx);
     layout.titleDisplayStr = layout.titleStr;
 
     if (typewriterCharsToShow >= 0)
@@ -673,8 +826,7 @@ static void ComputePositionAndBounds(LabelLayout& layout,
         mainBottom = .0f;
     }
 
-    const float spacingScale =
-        snap.proportionalSpacing ? (layout.nameFontSize / layout.fontName->FontSize) : 1.0f;
+    const float spacingScale = layout.nameFontSize / layout.fontName->FontSize;
     const float titleShadowY = snap.titleShadowOffsetY * spacingScale;
     const float mainShadowY = snap.mainShadowOffsetY * spacingScale;
     float titleBottomDraw = titleBottom + titleShadowY;
@@ -682,7 +834,7 @@ static void ComputePositionAndBounds(LabelLayout& layout,
     float mainBottomDraw = mainBottom + outlineWidth + mainShadowY;
 
     layout.mainLineY = -mainBottomDraw;
-    const float titleGap = snap.titleMainGap * spacingScale;
+    const float titleGap = RenderConstants::TITLE_MAIN_GAP * spacingScale;
     layout.titleY = layout.mainLineY + mainTopDraw - titleBottomDraw - titleGap;
 
     layout.startPos = entry.smooth;
@@ -695,10 +847,43 @@ static void ComputePositionAndBounds(LabelLayout& layout,
         }
     }
 
-    layout.totalWidth = std::max(layout.mainLineWidth, layout.titleSize.x);
+    // Info row positioning -- drawn below the main line, separated by INFO_LINE_GAP.
+    // Only contributes height when at least one info segment survived dropIfBlank.
+    float infoTop = .0f;
+    float infoBottom = .0f;
+    if (!layout.infoSegments.empty())
+    {
+        infoTop = +FLT_MAX;
+        infoBottom = -FLT_MAX;
+        bool anyInfo = false;
+        for (const auto& seg : layout.infoSegments)
+        {
+            float sTop = .0f, sBottom = .0f;
+            CalcTightYBoundsFromTop(seg.font, seg.fontSize, seg.text.c_str(), sTop, sBottom);
+            float vOffset = (layout.infoLineHeight - seg.size.y) * .5f;
+            infoTop = std::min(infoTop, vOffset + sTop);
+            infoBottom = std::max(infoBottom, vOffset + sBottom);
+            anyInfo = true;
+        }
+        if (!anyInfo)
+        {
+            infoTop = .0f;
+            infoBottom = .0f;
+        }
+
+        // mainLineY + mainBottomDraw is the anchor (~ 0).  Info top should be a
+        // gap below the anchor.  infoLineY is the line-box top, with infoTop being
+        // the offset of the topmost glyph from that line-box top.
+        const float infoGap = RenderConstants::INFO_LINE_GAP * spacingScale;
+        layout.infoLineY = infoGap - infoTop;
+    }
+
+    layout.totalWidth = std::max({layout.mainLineWidth, layout.titleSize.x, layout.infoLineWidth});
 
     layout.nameplateTop = layout.startPos.y + layout.titleY + titleTop;
-    layout.nameplateBottom = layout.startPos.y + layout.mainLineY + mainBottom;
+    layout.nameplateBottom = layout.infoSegments.empty()
+                                 ? layout.startPos.y + layout.mainLineY + mainBottom
+                                 : layout.startPos.y + layout.infoLineY + infoBottom;
     layout.nameplateLeft = layout.startPos.x - layout.totalWidth * .5f;
     layout.nameplateRight = layout.startPos.x + layout.totalWidth * .5f;
     layout.nameplateWidth = layout.totalWidth;
