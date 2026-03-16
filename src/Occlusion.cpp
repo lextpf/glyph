@@ -33,7 +33,7 @@ bool IsBehindCamera(const RE::NiPoint3& worldPos,
     RE::NiPoint3 toTarget = worldPos - cameraPos;
     float distance = toTarget.Length();
 
-    if (distance < 0.001f)
+    if (distance < .001f)
     {
         return false;  // At camera position, not behind
     }
@@ -47,7 +47,7 @@ bool IsBehindCamera(const RE::NiPoint3& worldPos,
     float dot =
         toTarget.x * cameraForward.x + toTarget.y * cameraForward.y + toTarget.z * cameraForward.z;
 
-    return dot < Constants::kBehindCameraDotThreshold;
+    return dot < Constants::BEHIND_CAMERA_DOT_THRESHOLD;
 }
 
 // Fail-safe: returns true (visible) on any error to avoid false occlusion.
@@ -89,7 +89,7 @@ bool IsActorOccluded(RE::Actor* actor, RE::Actor* player, const RE::NiPoint3& ac
     float distance = toActor.Length();
 
     // Very close actors are always visible
-    if (distance < Constants::kCloseDistanceThreshold)
+    if (distance < Constants::CLOSE_DISTANCE_THRESHOLD)
     {
         return false;
     }

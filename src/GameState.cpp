@@ -19,17 +19,32 @@ bool CanDrawOverlay()
 
     if (auto ui = RE::UI::GetSingleton())
     {
-        if (ui->IsMenuOpen("Loading Menu") || ui->IsMenuOpen("Main Menu") ||
-            ui->IsMenuOpen("MapMenu") || ui->IsMenuOpen("Fader Menu") || ui->IsMenuOpen("Menu") ||
-            ui->IsMenuOpen("Console") || ui->IsMenuOpen("TweenMenu") ||
-            ui->IsMenuOpen("Journal Menu") || ui->IsMenuOpen("InventoryMenu") ||
-            ui->IsMenuOpen("MagicMenu") || ui->IsMenuOpen("ContainerMenu") ||
-            ui->IsMenuOpen("BarterMenu") || ui->IsMenuOpen("GiftMenu") ||
-            ui->IsMenuOpen("Crafting Menu") || ui->IsMenuOpen("FavoritesMenu") ||
-            ui->IsMenuOpen("Lockpicking Menu") || ui->IsMenuOpen("Sleep/Wait Menu") ||
-            ui->IsMenuOpen("StatsMenu"))
+        static constexpr const char* SUPPRESSED_MENUS[] = {
+            "Loading Menu",
+            "Main Menu",
+            "MapMenu",
+            "Fader Menu",
+            "Menu",
+            "Console",
+            "TweenMenu",
+            "Journal Menu",
+            "InventoryMenu",
+            "MagicMenu",
+            "ContainerMenu",
+            "BarterMenu",
+            "GiftMenu",
+            "Crafting Menu",
+            "FavoritesMenu",
+            "Lockpicking Menu",
+            "Sleep/Wait Menu",
+            "StatsMenu",
+        };
+        for (const auto* menu : SUPPRESSED_MENUS)
         {
-            return false;
+            if (ui->IsMenuOpen(menu))
+            {
+                return false;
+            }
         }
     }
 

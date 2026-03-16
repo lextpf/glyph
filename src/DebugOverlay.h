@@ -48,7 +48,7 @@
  * ## :material-view-dashboard: Performance
  *
  * The overlay uses a rolling average for frame time smoothing with a
- * configurable sample count (`RenderConstants::kFrameTimeSamples`).
+ * configurable sample count (`RenderConstants::FRAME_TIME_SAMPLES`).
  * Overhead is minimal (~0.1ms per frame when visible).
  */
 namespace DebugOverlay
@@ -60,9 +60,9 @@ namespace DebugOverlay
 struct Stats
 {
     // Frame Timing
-    float fps = 0.0f;             ///< Current frames per second
-    float frameTimeMs = 0.0f;     ///< Current frame time in milliseconds
-    float avgFrameTimeMs = 0.0f;  ///< Rolling average frame time
+    float fps = .0f;             ///< Current frames per second
+    float frameTimeMs = .0f;     ///< Current frame time in milliseconds
+    float avgFrameTimeMs = .0f;  ///< Rolling average frame time
 
     // Actor Stats
     int actorCount = 0;      ///< Total actors being tracked
@@ -77,7 +77,7 @@ struct Stats
     int updatesPerSecond = 0;  ///< Actor data updates per second
 
     // Rolling Average Data
-    float frameTimeHistory[RenderConstants::kFrameTimeSamples] = {
+    float frameTimeHistory[RenderConstants::FRAME_TIME_SAMPLES] = {
         0};                  ///< Frame time history buffer
     int frameTimeIndex = 0;  ///< Current index in history buffer
 };
