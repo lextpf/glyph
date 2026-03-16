@@ -36,9 +36,17 @@ struct TextureInfo
 };
 
 // Multiple textures per particle type
-static std::array<std::vector<TextureInfo>, NUM_TYPES> g_textures;
+static std::array<std::vector<TextureInfo>, NUM_TYPES>& Textures()
+{
+    static std::array<std::vector<TextureInfo>, NUM_TYPES> instance;
+    return instance;
+}
 static std::atomic<bool> g_initialized{false};
-static std::mutex g_initMutex;
+static std::mutex& InitMutex()
+{
+    static std::mutex instance;
+    return instance;
+}
 
 // Point sampler for small sprites
 static ID3D11SamplerState* g_pointSampler = nullptr;
@@ -51,7 +59,7 @@ static ID3D11DeviceContext* g_context = nullptr;
 
 static void ReleaseResources_NoLock()
 {
-    for (auto& typeTextures : g_textures)
+    for (auto& typeTextures : Textures())
     {
         for (auto& tex : typeTextures)
         {
@@ -94,20 +102,22 @@ static void ReleaseResources_NoLock()
     g_initialized = false;
 }
 
-/**
- * Load a PNG file using WIC and create a D3D11 texture.
- * Returns TextureInfo with dimensions.
- */
+// Load a PNG file using WIC and create a D3D11 texture.
+// Returns TextureInfo with dimensions.
 static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& path)
 {
     TextureInfo info;
     if (!device || path.empty())
+    {
         return info;
+    }
 
     // Convert path to wide string
     int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
     if (wideLen <= 0)
+    {
         return info;
+    }
 
     std::wstring widePath(wideLen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &widePath[0], wideLen);
@@ -136,28 +146,36 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& 
     ComPtr<IWICBitmapFrameDecode> frame;
     hr = decoder->GetFrame(0, &frame);
     if (FAILED(hr))
+    {
         return info;
+    }
 
     // Convert to RGBA
     ComPtr<IWICFormatConverter> converter;
     hr = wicFactory->CreateFormatConverter(&converter);
     if (FAILED(hr))
+    {
         return info;
+    }
 
     hr = converter->Initialize(frame.Get(),
                                GUID_WICPixelFormat32bppRGBA,
                                WICBitmapDitherTypeNone,
                                nullptr,
-                               0.0f,
+                               .0f,
                                WICBitmapPaletteTypeCustom);
     if (FAILED(hr))
+    {
         return info;
+    }
 
     // Get dimensions
     UINT width, height;
     hr = converter->GetSize(&width, &height);
     if (FAILED(hr))
+    {
         return info;
+    }
 
     // Read pixels
     if (width == 0 || height == 0 || width > ((std::numeric_limits<UINT>::max)() / 4))
@@ -178,7 +196,9 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& 
     std::vector<BYTE> pixels(static_cast<size_t>(bufferSize));
     hr = converter->CopyPixels(nullptr, stride, bufferSize, pixels.data());
     if (FAILED(hr))
+    {
         return info;
+    }
 
     // Sanitize transparent pixels so blend modes (especially screen-like) don't pick up
     // hidden RGB from fully transparent texels and produce box artifacts.
@@ -245,17 +265,19 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& 
     return info;
 }
 
-/**
- * Load all PNG files from a folder into the texture array for a particle type.
- */
+// Load all PNG files from a folder into the texture array for a particle type.
 static int LoadTexturesFromFolder(ID3D11Device* device,
                                   int styleIndex,
                                   const std::string& folderPath)
 {
     if (styleIndex < 0 || styleIndex >= NUM_TYPES)
+    {
         return 0;
+    }
     if (folderPath.empty())
+    {
         return 0;
+    }
 
     int loadedCount = 0;
 
@@ -272,7 +294,9 @@ static int LoadTexturesFromFolder(ID3D11Device* device,
         for (const auto& entry : fs::directory_iterator(folder))
         {
             if (!entry.is_regular_file())
+            {
                 continue;
+            }
 
             auto ext = entry.path().extension().string();
             std::transform(ext.begin(),
@@ -295,7 +319,7 @@ static int LoadTexturesFromFolder(ID3D11Device* device,
             auto info = LoadTextureFromFile(device, texturePath.string());
             if (info.srv)
             {
-                g_textures[styleIndex].push_back(info);
+                Textures()[styleIndex].push_back(info);
                 loadedCount++;
             }
         }
@@ -316,11 +340,15 @@ static int LoadTexturesFromFolder(ID3D11Device* device,
 
 bool Initialize(ID3D11Device* device)
 {
-    std::lock_guard<std::mutex> lock(g_initMutex);
+    std::lock_guard<std::mutex> lock(InitMutex());
     if (!device)
+    {
         return false;
+    }
     if (g_initialized.load(std::memory_order_acquire))
+    {
         return true;
+    }
 
     // Reset stale partial state from previous failed initialization attempts.
     ReleaseResources_NoLock();
@@ -352,7 +380,7 @@ bool Initialize(ID3D11Device* device)
     pointDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
     pointDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
     pointDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    pointDesc.MipLODBias = 0.0f;
+    pointDesc.MipLODBias = .0f;
     pointDesc.MaxAnisotropy = 1;
     pointDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
     pointDesc.MinLOD = 0;
@@ -495,15 +523,17 @@ bool IsInitialized()
 
 void Shutdown()
 {
-    std::lock_guard<std::mutex> lock(g_initMutex);
+    std::lock_guard<std::mutex> lock(InitMutex());
     ReleaseResources_NoLock();
 }
 
 int GetTextureCount(int style)
 {
     if (style < 0 || style >= NUM_TYPES)
+    {
         return 0;
-    return static_cast<int>(g_textures[style].size());
+    }
+    return static_cast<int>(Textures()[style].size());
 }
 
 // Simple hash for better texture distribution while remaining stable
@@ -524,13 +554,17 @@ static size_t HashIndex(int style, int particleIndex)
 static const TextureInfo* GetTextureInfoForIndex(int style, int particleIndex)
 {
     if (style < 0 || style >= NUM_TYPES)
+    {
         return nullptr;
-    if (g_textures[style].empty())
+    }
+    if (Textures()[style].empty())
+    {
         return nullptr;
+    }
 
-    const size_t texCount = g_textures[style].size();
+    const size_t texCount = Textures()[style].size();
     const size_t texIndex = HashIndex(style, particleIndex) % texCount;
-    return &g_textures[style][texIndex];
+    return &Textures()[style][texIndex];
 }
 
 ImTextureID GetRandomTexture(int style, int particleIndex)
@@ -549,11 +583,15 @@ void DrawSpriteWithIndex(ImDrawList* list,
                          float rotation)
 {
     if (!list || style < 0 || style >= NUM_TYPES)
+    {
         return;
+    }
 
     const TextureInfo* texInfo = GetTextureInfoForIndex(style, particleIndex);
     if (!texInfo || !texInfo->srv)
+    {
         return;
+    }
     ImTextureID tex = reinterpret_cast<ImTextureID>(texInfo->srv);
 
     // Normalize display size for high-resolution textures.
@@ -561,11 +599,13 @@ void DrawSpriteWithIndex(ImDrawList* list,
     const int texMaxPx = (texInfo->width > texInfo->height) ? texInfo->width : texInfo->height;
     const float texMaxDim = static_cast<float>(texMaxPx);
     const float resolutionScale =
-        (texMaxDim > 0.0f) ? std::clamp(1200.0f / texMaxDim, 0.45f, 1.0f) : 1.0f;
+        (texMaxDim > .0f) ? std::clamp(1200.0f / texMaxDim, .45f, 1.0f) : 1.0f;
     const float scaledSize = size * resolutionScale;
-    float halfSize = scaledSize * 0.5f;
-    if (halfSize <= 0.01f)
+    float halfSize = scaledSize * .5f;
+    if (halfSize <= .01f)
+    {
         return;
+    }
 
     // Use linear filtering for HD textures, point filtering for tiny sprites.
     ID3D11SamplerState* samplerToUse =
@@ -595,7 +635,7 @@ void DrawSpriteWithIndex(ImDrawList* list,
         list->AddCallback(SetBlendCallback, blendToUse);
     }
 
-    if (rotation == 0.0f)
+    if (rotation == .0f)
     {
         // Simple axis-aligned quad
         ImVec2 pMin(center.x - halfSize, center.y - halfSize);
@@ -654,12 +694,16 @@ void DrawSpriteWithIndex(ImDrawList* list,
 void PushAdditiveBlend(ImDrawList* dl)
 {
     if (dl && g_additiveBlend)
+    {
         dl->AddCallback(SetBlendCallback, g_additiveBlend);
+    }
 }
 
 void PopBlendState(ImDrawList* dl)
 {
     if (dl)
+    {
         dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+    }
 }
 }  // namespace ParticleTextures

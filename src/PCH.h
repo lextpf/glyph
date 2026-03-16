@@ -81,7 +81,7 @@ std::size_t hash_value(const BSPointerHandle<T>& a_handle)
 {
     boost::hash<uint32_t> hasher;
     return hasher(a_handle.native_handle());
-};
+}
 }  // namespace RE
 
 /**
@@ -92,24 +92,24 @@ std::size_t hash_value(const BSPointerHandle<T>& a_handle)
  *
  * @see SKSE::GetTrampoline()
  */
-namespace stl
+namespace Stl
 {
 template <class T>
-void write_thunk_call(std::uintptr_t a_src)
+void WriteThunkCall(std::uintptr_t a_src)
 {
     auto& trampoline = SKSE::GetTrampoline();
     T::func = trampoline.write_call<5>(a_src, T::thunk);
 }
 
 template <class F, class T>
-void write_vfunc()
+void WriteVfunc()
 {
     REL::Relocation<std::uintptr_t> vtbl{F::VTABLE[0]};
     T::func = vtbl.write_vfunc(T::idx, T::thunk);
 }
 
 template <class T, std::size_t BYTES>
-void hook_function_prologue(std::uintptr_t a_src)
+void HookFunctionPrologue(std::uintptr_t a_src)
 {
     struct Patch : Xbyak::CodeGenerator
     {
@@ -137,15 +137,15 @@ void hook_function_prologue(std::uintptr_t a_src)
     T::func = reinterpret_cast<std::uintptr_t>(alloc);
 }
 
-constexpr inline auto enum_range(auto first, auto last)
+constexpr inline auto EnumRange(auto first, auto last)
 {
-    auto enum_range =
+    auto result =
         std::views::iota(std::to_underlying(first), std::to_underlying(last)) |
-        std::views::transform([](auto enum_val) { return (decltype(first))enum_val; });
+        std::views::transform([](auto enum_val) { return static_cast<decltype(first)>(enum_val); });
 
-    return enum_range;
-};
-}  // namespace stl
+    return result;
+}
+}  // namespace Stl
 
 /**
  * Select address offset based on Skyrim edition.
@@ -158,9 +158,9 @@ constexpr inline auto enum_range(auto first, auto last)
  * @return The appropriate offset for the current build target.
  */
 #ifdef SKYRIM_AE
-#define OFFSET(se, ae) ae
+#define GLYPH_OFFSET(se, ae) ae
 #else
-#define OFFSET(se, ae) se
+#define GLYPH_OFFSET(se, ae) se
 #endif
 
 #include "Version.h"

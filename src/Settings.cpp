@@ -34,40 +34,40 @@ std::vector<TierDefinition> Tiers;
 std::vector<SpecialTitleDefinition> SpecialTitles;
 
 // Distance & Visibility
-float FadeStartDistance;
-float FadeEndDistance;
-float ScaleStartDistance;
-float ScaleEndDistance;
-float MinimumScale;
-float MaxScanDistance;
+float FadeStartDistance = 200.0f;
+float FadeEndDistance = 2500.0f;
+float ScaleStartDistance = 200.0f;
+float ScaleEndDistance = 2500.0f;
+float MinimumScale = .1f;
+float MaxScanDistance = 3000.0f;
 
 // Occlusion Settings
 bool EnableOcclusionCulling = true;
-float OcclusionSettleTime = 0.58f;
+float OcclusionSettleTime = .58f;
 int OcclusionCheckInterval = 3;
 
 // Visual Effects
-float TitleShadowOffsetX;
-float TitleShadowOffsetY;
-float MainShadowOffsetX;
-float MainShadowOffsetY;
-float SegmentPadding;
+float TitleShadowOffsetX = 2.0f;
+float TitleShadowOffsetY = 2.0f;
+float MainShadowOffsetX = 4.0f;
+float MainShadowOffsetY = 4.0f;
+float SegmentPadding = 4.0f;
 
 // Outline Settings
-float OutlineWidthMin;
-float OutlineWidthMax;
+float OutlineWidthMin = 2.0f;
+float OutlineWidthMax = 2.5f;
 bool FastOutlines = false;
 
 // Glow Settings
 bool EnableGlow = false;
 float GlowRadius = 4.0f;
-float GlowIntensity = 0.5f;
+float GlowIntensity = .5f;
 int GlowSamples = 8;
 
 // Typewriter Settings
 bool EnableTypewriter = false;
 float TypewriterSpeed = 30.0f;
-float TypewriterDelay = 0.0f;
+float TypewriterDelay = .0f;
 
 // Debug Settings
 bool EnableDebugOverlay = false;
@@ -89,7 +89,7 @@ int ParticleCount = 8;
 float ParticleSize = 3.0f;
 float ParticleSpeed = 1.0f;
 float ParticleSpread = 20.0f;
-float ParticleAlpha = 0.8f;
+float ParticleAlpha = .8f;
 // Textures loaded from subfolders: Data/SKSE/Plugins/glyph/particles/<type>/
 
 // Display Options
@@ -99,22 +99,22 @@ bool HideCreatures = false;
 int ReloadKey = 0;  // 0 = disabled, 207 = End key
 
 // Animation
-float AnimSpeedLowTier;
-float AnimSpeedMidTier;
-float AnimSpeedHighTier;
+float AnimSpeedLowTier = .35f;
+float AnimSpeedMidTier = .20f;
+float AnimSpeedHighTier = .10f;
 
 // Color & Effects
-float ColorWashAmount;
-float NameColorMix;
-float EffectAlphaMin;
-float EffectAlphaMax;
-float StrengthMin;
-float StrengthMax;
+float ColorWashAmount = .50f;
+float NameColorMix = .35f;
+float EffectAlphaMin = .20f;
+float EffectAlphaMax = .60f;
+float StrengthMin = .15f;
+float StrengthMax = .60f;
 
 // Smoothing, settle time in seconds
-float AlphaSettleTime;
-float ScaleSettleTime;
-float PositionSettleTime;
+float AlphaSettleTime = .46f;
+float ScaleSettleTime = .46f;
+float PositionSettleTime = .38f;
 
 VisualSettings& Visual()
 {
@@ -124,15 +124,15 @@ VisualSettings& Visual()
 
 // Font Settings
 std::string NameFontPath;
-float NameFontSize;
+float NameFontSize = 122.0f;
 std::string LevelFontPath;
-float LevelFontSize;
+float LevelFontSize = 61.0f;
 std::string TitleFontPath;
-float TitleFontSize;
+float TitleFontSize = 42.0f;
 
 // Ornament font settings
 std::string OrnamentFontPath;
-float OrnamentFontSize;
+float OrnamentFontSize = 64.0f;
 
 // Appearance template settings
 std::string TemplateFormID;
@@ -346,11 +346,11 @@ static void ResetToDefaults()
     FadeEndDistance = 2500.0f;
     ScaleStartDistance = 200.0f;
     ScaleEndDistance = 2500.0f;
-    MinimumScale = 0.1f;
+    MinimumScale = .1f;
     MaxScanDistance = 3000.0f;
 
     EnableOcclusionCulling = true;
-    OcclusionSettleTime = 0.58f;
+    OcclusionSettleTime = .58f;
     OcclusionCheckInterval = 3;
 
     TitleShadowOffsetX = 2.0f;
@@ -365,12 +365,12 @@ static void ResetToDefaults()
 
     EnableGlow = false;
     GlowRadius = 4.0f;
-    GlowIntensity = 0.5f;
+    GlowIntensity = .5f;
     GlowSamples = 8;
 
     EnableTypewriter = false;
     TypewriterSpeed = 30.0f;
-    TypewriterDelay = 0.0f;
+    TypewriterDelay = .0f;
 
     EnableDebugOverlay = false;
 
@@ -389,27 +389,27 @@ static void ResetToDefaults()
     ParticleSize = 3.0f;
     ParticleSpeed = 1.0f;
     ParticleSpread = 20.0f;
-    ParticleAlpha = 0.8f;
+    ParticleAlpha = .8f;
 
     VerticalOffset = 8.0f;
     HidePlayer = false;
     HideCreatures = false;
     ReloadKey = 0;
 
-    AnimSpeedLowTier = 0.35f;
-    AnimSpeedMidTier = 0.20f;
-    AnimSpeedHighTier = 0.10f;
+    AnimSpeedLowTier = .35f;
+    AnimSpeedMidTier = .20f;
+    AnimSpeedHighTier = .10f;
 
-    ColorWashAmount = 0.50f;
-    NameColorMix = 0.35f;
-    EffectAlphaMin = 0.20f;
-    EffectAlphaMax = 0.60f;
-    StrengthMin = 0.15f;
-    StrengthMax = 0.60f;
+    ColorWashAmount = .50f;
+    NameColorMix = .35f;
+    EffectAlphaMin = .20f;
+    EffectAlphaMax = .60f;
+    StrengthMin = .15f;
+    StrengthMax = .60f;
 
-    AlphaSettleTime = 0.46f;
-    ScaleSettleTime = 0.46f;
-    PositionSettleTime = 0.38f;
+    AlphaSettleTime = .46f;
+    ScaleSettleTime = .46f;
+    PositionSettleTime = .38f;
 
     Visual() = VisualSettings{};
 
@@ -437,46 +437,58 @@ static void ResetToDefaults()
 
 static void ClampAndValidate()
 {
-    FadeStartDistance = std::max(0.0f, FadeStartDistance);
+    FadeStartDistance = std::max(.0f, FadeStartDistance);
     FadeEndDistance = std::max(FadeStartDistance + 1.0f, FadeEndDistance);
 
-    ScaleStartDistance = std::max(0.0f, ScaleStartDistance);
+    ScaleStartDistance = std::max(.0f, ScaleStartDistance);
     ScaleEndDistance = std::max(ScaleStartDistance + 1.0f, ScaleEndDistance);
-    MinimumScale = std::clamp(MinimumScale, 0.01f, 5.0f);
-    MaxScanDistance = std::max(0.0f, MaxScanDistance);
+    MinimumScale = std::clamp(MinimumScale, .01f, 5.0f);
+    MaxScanDistance = std::max(.0f, MaxScanDistance);
 
-    OcclusionSettleTime = std::max(0.01f, OcclusionSettleTime);
+    OcclusionSettleTime = std::max(.01f, OcclusionSettleTime);
     OcclusionCheckInterval = std::max(1, OcclusionCheckInterval);
 
-    GlowRadius = std::max(0.0f, GlowRadius);
-    GlowIntensity = std::clamp(GlowIntensity, 0.0f, 1.0f);
+    GlowRadius = std::max(.0f, GlowRadius);
+    GlowIntensity = std::clamp(GlowIntensity, .0f, 1.0f);
     GlowSamples = std::clamp(GlowSamples, 1, 64);
 
-    TypewriterSpeed = std::max(0.0f, TypewriterSpeed);
-    TypewriterDelay = std::max(0.0f, TypewriterDelay);
+    TypewriterSpeed = std::max(.0f, TypewriterSpeed);
+    TypewriterDelay = std::max(.0f, TypewriterDelay);
 
     ParticleCount = std::max(0, ParticleCount);
-    ParticleSize = std::max(0.0f, ParticleSize);
-    ParticleSpeed = std::max(0.0f, ParticleSpeed);
-    ParticleSpread = std::max(0.0f, ParticleSpread);
-    ParticleAlpha = std::clamp(ParticleAlpha, 0.0f, 1.0f);
+    ParticleSize = std::max(.0f, ParticleSize);
+    ParticleSpeed = std::max(.0f, ParticleSpeed);
+    ParticleSpread = std::max(.0f, ParticleSpread);
+    ParticleAlpha = std::clamp(ParticleAlpha, .0f, 1.0f);
 
-    ColorWashAmount = std::clamp(ColorWashAmount, 0.0f, 1.0f);
-    NameColorMix = std::clamp(NameColorMix, 0.0f, 1.0f);
-    EffectAlphaMin = std::clamp(EffectAlphaMin, 0.0f, 1.0f);
-    EffectAlphaMax = std::clamp(EffectAlphaMax, 0.0f, 1.0f);
-    StrengthMin = std::max(0.0f, StrengthMin);
-    StrengthMax = std::max(0.0f, StrengthMax);
+    ColorWashAmount = std::clamp(ColorWashAmount, .0f, 1.0f);
+    NameColorMix = std::clamp(NameColorMix, .0f, 1.0f);
+    EffectAlphaMin = std::clamp(EffectAlphaMin, .0f, 1.0f);
+    EffectAlphaMax = std::clamp(EffectAlphaMax, .0f, 1.0f);
+    StrengthMin = std::max(.0f, StrengthMin);
+    StrengthMax = std::max(.0f, StrengthMax);
 
-    AlphaSettleTime = std::max(0.01f, AlphaSettleTime);
-    ScaleSettleTime = std::max(0.01f, ScaleSettleTime);
-    PositionSettleTime = std::max(0.01f, PositionSettleTime);
+    if (EffectAlphaMin > EffectAlphaMax)
+    {
+        std::swap(EffectAlphaMin, EffectAlphaMax);
+    }
+    if (StrengthMin > StrengthMax)
+    {
+        std::swap(StrengthMin, StrengthMax);
+    }
+
+    AlphaSettleTime = std::max(.01f, AlphaSettleTime);
+    ScaleSettleTime = std::max(.01f, ScaleSettleTime);
+    PositionSettleTime = std::max(.01f, PositionSettleTime);
 
     Visual().OverlapIterations = std::clamp(Visual().OverlapIterations, 1, 16);
     Visual().LODTransitionRange = std::max(1.0f, Visual().LODTransitionRange);
-    Visual().PositionSmoothingBlend = std::clamp(Visual().PositionSmoothingBlend, 0.0f, 1.0f);
-    Visual().LargeMovementThreshold = std::max(0.0f, Visual().LargeMovementThreshold);
-    Visual().LargeMovementBlend = std::clamp(Visual().LargeMovementBlend, 0.0f, 1.0f);
+    Visual().PositionSmoothingBlend = std::clamp(Visual().PositionSmoothingBlend, .0f, 1.0f);
+    Visual().LargeMovementThreshold = std::max(.0f, Visual().LargeMovementThreshold);
+    Visual().LargeMovementBlend = std::clamp(Visual().LargeMovementBlend, .0f, 1.0f);
+
+    OutlineWidthMin = std::max(.0f, OutlineWidthMin);
+    OutlineWidthMax = std::max(OutlineWidthMin, OutlineWidthMax);
 
     if (Tiers.empty())
     {
@@ -492,9 +504,9 @@ static void ClampAndValidate()
         tier.particleCount = std::max(0, tier.particleCount);
         for (int i = 0; i < 3; ++i)
         {
-            tier.leftColor[i] = std::clamp(tier.leftColor[i], 0.0f, 1.0f);
-            tier.rightColor[i] = std::clamp(tier.rightColor[i], 0.0f, 1.0f);
-            tier.highlightColor[i] = std::clamp(tier.highlightColor[i], 0.0f, 1.0f);
+            tier.leftColor[i] = std::clamp(tier.leftColor[i], .0f, 1.0f);
+            tier.rightColor[i] = std::clamp(tier.rightColor[i], .0f, 1.0f);
+            tier.highlightColor[i] = std::clamp(tier.highlightColor[i], .0f, 1.0f);
         }
     }
 
@@ -504,8 +516,8 @@ static void ClampAndValidate()
         special.keywordLower = ToLowerAscii(special.keyword);
         for (int i = 0; i < 3; ++i)
         {
-            special.color[i] = std::clamp(special.color[i], 0.0f, 1.0f);
-            special.glowColor[i] = std::clamp(special.glowColor[i], 0.0f, 1.0f);
+            special.color[i] = std::clamp(special.color[i], .0f, 1.0f);
+            special.glowColor[i] = std::clamp(special.glowColor[i], .0f, 1.0f);
         }
     }
 }
@@ -515,7 +527,9 @@ static std::string Trim(const std::string& str)
 {
     size_t first = str.find_first_not_of(" \t\r\n");
     if (std::string::npos == first)
+    {
         return str;
+    }
     size_t last = str.find_last_not_of(" \t\r\n");
     return str.substr(first, (last - first + 1));
 }
@@ -593,7 +607,9 @@ static bool ParseBool(const std::string& str)
 {
     std::string lower = str;
     for (auto& c : lower)
+    {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
     return (lower == "true" || lower == "1" || lower == "yes" || lower == "on" ||
             lower == "enabled");
 }
@@ -621,33 +637,61 @@ static EffectType ParseEffectType(const std::string& str)
     }
     // Map string names to effect types
     if (s == "none")
+    {
         return EffectType::None;
+    }
     if (s == "gradient")
+    {
         return EffectType::Gradient;
+    }
     if (s == "verticalgradient")
+    {
         return EffectType::VerticalGradient;
+    }
     if (s == "diagonalgradient")
+    {
         return EffectType::DiagonalGradient;
+    }
     if (s == "radialgradient")
+    {
         return EffectType::RadialGradient;
+    }
     if (s == "shimmer")
+    {
         return EffectType::Shimmer;
+    }
     if (s == "chromaticshimmer")
+    {
         return EffectType::ChromaticShimmer;
+    }
     if (s == "pulsegradient")
+    {
         return EffectType::PulseGradient;
+    }
     if (s == "rainbowwave")
+    {
         return EffectType::RainbowWave;
+    }
     if (s == "conicrainbow")
+    {
         return EffectType::ConicRainbow;
+    }
     if (s == "aurora")
+    {
         return EffectType::Aurora;
+    }
     if (s == "sparkle")
+    {
         return EffectType::Sparkle;
+    }
     if (s == "plasma")
+    {
         return EffectType::Plasma;
+    }
     if (s == "scanline")
+    {
         return EffectType::Scanline;
+    }
     // Default to simple gradient if unknown
     return EffectType::Gradient;
 }
@@ -681,8 +725,8 @@ void Load()
 
     auto addWarning = [&](size_t lineNo, const std::string& message)
     {
-        constexpr size_t kMaxWarnings = 48;
-        if (parseWarnings.size() < kMaxWarnings)
+        constexpr size_t MAX_WARNINGS = 48;
+        if (parseWarnings.size() < MAX_WARNINGS)
         {
             std::ostringstream ss;
             ss << "L" << lineNo << ": " << message;
@@ -703,7 +747,9 @@ void Load()
 
         // Skip empty lines and comments (both ; and # style for user convenience)
         if (line.empty() || line[0] == ';' || line[0] == '#')
+        {
             continue;
+        }
 
         // Detect section headers like [Tier0], [Tier1], etc.
         // Section headers change the parsing context for subsequent kv pairs
@@ -914,9 +960,11 @@ void Load()
                 {
                     token = Trim(token);
                     if (token.empty())
+                    {
                         continue;  // Skip empty tokens (e.g., "1.0,,2.0")
+                    }
 
-                    float v = ParseFloat(token, 0.0f);
+                    float v = ParseFloat(token, .0f);
                     switch (paramIdx)
                     {
                         case 0:
@@ -1124,213 +1172,403 @@ void Load()
             }
             // Float value parsing
             else if (key == "FadeStartDistance")
-                FadeStartDistance = ParseFloat(val, 0.0f);
+            {
+                FadeStartDistance = ParseFloat(val, .0f);
+            }
             else if (key == "FadeEndDistance")
-                FadeEndDistance = ParseFloat(val, 0.0f);
+            {
+                FadeEndDistance = ParseFloat(val, .0f);
+            }
             else if (key == "ScaleStartDistance")
-                ScaleStartDistance = ParseFloat(val, 0.0f);
+            {
+                ScaleStartDistance = ParseFloat(val, .0f);
+            }
             else if (key == "ScaleEndDistance")
-                ScaleEndDistance = ParseFloat(val, 0.0f);
+            {
+                ScaleEndDistance = ParseFloat(val, .0f);
+            }
             else if (key == "MinimumScale")
-                MinimumScale = ParseFloat(val, 0.0f);
+            {
+                MinimumScale = ParseFloat(val, .0f);
+            }
             else if (key == "MaxScanDistance")
-                MaxScanDistance = ParseFloat(val, 0.0f);
+            {
+                MaxScanDistance = ParseFloat(val, .0f);
+            }
             // Occlusion Settings
             else if (key == "EnableOcclusionCulling")
+            {
                 EnableOcclusionCulling = ParseBool(val);
+            }
             else if (key == "OcclusionSettleTime")
-                OcclusionSettleTime = ParseFloat(val, 0.58f);
+            {
+                OcclusionSettleTime = ParseFloat(val, .58f);
+            }
             else if (key == "OcclusionCheckInterval")
+            {
                 OcclusionCheckInterval = ParseInt(val, 3);
+            }
             else if (key == "TitleShadowOffsetX")
-                TitleShadowOffsetX = ParseFloat(val, 0.0f);
+            {
+                TitleShadowOffsetX = ParseFloat(val, .0f);
+            }
             else if (key == "TitleShadowOffsetY")
-                TitleShadowOffsetY = ParseFloat(val, 0.0f);
+            {
+                TitleShadowOffsetY = ParseFloat(val, .0f);
+            }
             else if (key == "MainShadowOffsetX")
-                MainShadowOffsetX = ParseFloat(val, 0.0f);
+            {
+                MainShadowOffsetX = ParseFloat(val, .0f);
+            }
             else if (key == "MainShadowOffsetY")
-                MainShadowOffsetY = ParseFloat(val, 0.0f);
+            {
+                MainShadowOffsetY = ParseFloat(val, .0f);
+            }
             else if (key == "SegmentPadding")
-                SegmentPadding = ParseFloat(val, 0.0f);
+            {
+                SegmentPadding = ParseFloat(val, .0f);
+            }
             else if (key == "OutlineWidthMin")
-                OutlineWidthMin = ParseFloat(val, 0.0f);
+            {
+                OutlineWidthMin = ParseFloat(val, .0f);
+            }
             else if (key == "OutlineWidthMax")
-                OutlineWidthMax = ParseFloat(val, 0.0f);
+            {
+                OutlineWidthMax = ParseFloat(val, .0f);
+            }
             else if (key == "FastOutlines")
+            {
                 FastOutlines = ParseBool(val);
+            }
             // Glow Settings
             else if (key == "EnableGlow")
+            {
                 EnableGlow = ParseBool(val);
+            }
             else if (key == "GlowRadius")
+            {
                 GlowRadius = ParseFloat(val, 4.0f);
+            }
             else if (key == "GlowIntensity")
-                GlowIntensity = ParseFloat(val, 0.5f);
+            {
+                GlowIntensity = ParseFloat(val, .5f);
+            }
             else if (key == "GlowSamples")
+            {
                 GlowSamples = ParseInt(val, 8);
+            }
             // Typewriter Settings
             else if (key == "EnableTypewriter")
+            {
                 EnableTypewriter = ParseBool(val);
+            }
             else if (key == "TypewriterSpeed")
+            {
                 TypewriterSpeed = ParseFloat(val, 30.0f);
+            }
             else if (key == "TypewriterDelay")
-                TypewriterDelay = ParseFloat(val, 0.0f);
+            {
+                TypewriterDelay = ParseFloat(val, .0f);
+            }
             // Debug Settings
             else if (key == "EnableDebugOverlay")
+            {
                 EnableDebugOverlay = ParseBool(val);
+            }
             // Side Ornaments
             else if (key == "EnableOrnaments" || key == "EnableFlourishes")
+            {
                 EnableOrnaments = ParseBool(val);
+            }
             else if (key == "OrnamentScale" || key == "FlourishScale")
+            {
                 OrnamentScale = ParseFloat(val, 1.0f);
+            }
             else if (key == "OrnamentSpacing" || key == "FlourishSpacing")
+            {
                 OrnamentSpacing = ParseFloat(val, 6.0f);
+            }
             // Particle Aura
             else if (key == "EnableParticleAura")
+            {
                 EnableParticleAura = ParseBool(val);
+            }
             else if (key == "EnableStars")
+            {
                 EnableStars = ParseBool(val);
+            }
             else if (key == "EnableSparks")
+            {
                 EnableSparks = ParseBool(val);
+            }
             else if (key == "EnableWisps")
+            {
                 EnableWisps = ParseBool(val);
+            }
             else if (key == "EnableRunes")
+            {
                 EnableRunes = ParseBool(val);
+            }
             else if (key == "EnableOrbs")
+            {
                 EnableOrbs = ParseBool(val);
+            }
             else if (key == "ParticleCount")
+            {
                 ParticleCount = ParseInt(val, 8);
+            }
             else if (key == "ParticleSize")
+            {
                 ParticleSize = ParseFloat(val, 3.0f);
+            }
             else if (key == "ParticleSpeed")
+            {
                 ParticleSpeed = ParseFloat(val, 1.0f);
+            }
             else if (key == "ParticleSpread")
+            {
                 ParticleSpread = ParseFloat(val, 20.0f);
+            }
             else if (key == "ParticleAlpha")
-                ParticleAlpha = ParseFloat(val, 0.8f);
+            {
+                ParticleAlpha = ParseFloat(val, .8f);
+            }
             else if (key == "UseParticleTextures")
+            {
                 UseParticleTextures = ParseBool(val);
+            }
             // Textures now auto-loaded from glyph/particles/<type>/ folders
             // Display Options
             else if (key == "VerticalOffset")
+            {
                 VerticalOffset = ParseFloat(val, 8.0f);
+            }
             else if (key == "HidePlayer")
+            {
                 HidePlayer = ParseBool(val);
+            }
             else if (key == "HideCreatures")
+            {
                 HideCreatures = ParseBool(val);
+            }
             else if (key == "ReloadKey")
+            {
                 ReloadKey = ParseInt(val, 0);
+            }
             else if (key == "AnimSpeedLowTier")
-                AnimSpeedLowTier = ParseFloat(val, 0.0f);
+            {
+                AnimSpeedLowTier = ParseFloat(val, .0f);
+            }
             else if (key == "AnimSpeedMidTier")
-                AnimSpeedMidTier = ParseFloat(val, 0.0f);
+            {
+                AnimSpeedMidTier = ParseFloat(val, .0f);
+            }
             else if (key == "AnimSpeedHighTier")
-                AnimSpeedHighTier = ParseFloat(val, 0.0f);
+            {
+                AnimSpeedHighTier = ParseFloat(val, .0f);
+            }
             else if (key == "ColorWashAmount")
-                ColorWashAmount = ParseFloat(val, 0.0f);
+            {
+                ColorWashAmount = ParseFloat(val, .0f);
+            }
             else if (key == "NameColorMix")
-                NameColorMix = ParseFloat(val, 0.0f);
+            {
+                NameColorMix = ParseFloat(val, .0f);
+            }
             else if (key == "EffectAlphaMin")
-                EffectAlphaMin = ParseFloat(val, 0.0f);
+            {
+                EffectAlphaMin = ParseFloat(val, .0f);
+            }
             else if (key == "EffectAlphaMax")
-                EffectAlphaMax = ParseFloat(val, 0.0f);
+            {
+                EffectAlphaMax = ParseFloat(val, .0f);
+            }
             else if (key == "StrengthMin")
-                StrengthMin = ParseFloat(val, 0.0f);
+            {
+                StrengthMin = ParseFloat(val, .0f);
+            }
             else if (key == "StrengthMax")
-                StrengthMax = ParseFloat(val, 0.0f);
+            {
+                StrengthMax = ParseFloat(val, .0f);
+            }
             else if (key == "AlphaSettleTime")
-                AlphaSettleTime = ParseFloat(val, 0.46f);
+            {
+                AlphaSettleTime = ParseFloat(val, .46f);
+            }
             else if (key == "ScaleSettleTime")
-                ScaleSettleTime = ParseFloat(val, 0.46f);
+            {
+                ScaleSettleTime = ParseFloat(val, .46f);
+            }
             else if (key == "PositionSettleTime")
-                PositionSettleTime = ParseFloat(val, 0.38f);
+            {
+                PositionSettleTime = ParseFloat(val, .38f);
+            }
             // Distance-Based Outline
             else if (key == "EnableDistanceOutlineScale")
+            {
                 Visual().EnableDistanceOutlineScale = ParseBool(val);
+            }
             else if (key == "OutlineDistanceMin")
-                Visual().OutlineDistanceMin = ParseFloat(val, 0.8f);
+            {
+                Visual().OutlineDistanceMin = ParseFloat(val, .8f);
+            }
             else if (key == "OutlineDistanceMax")
+            {
                 Visual().OutlineDistanceMax = ParseFloat(val, 1.5f);
+            }
             // Minimum Readable Size
             else if (key == "MinimumPixelHeight")
-                Visual().MinimumPixelHeight = ParseFloat(val, 0.0f);
+            {
+                Visual().MinimumPixelHeight = ParseFloat(val, .0f);
+            }
             // LOD by Distance
             else if (key == "EnableLOD")
+            {
                 Visual().EnableLOD = ParseBool(val);
+            }
             else if (key == "LODFarDistance")
+            {
                 Visual().LODFarDistance = ParseFloat(val, 1800.0f);
+            }
             else if (key == "LODMidDistance")
+            {
                 Visual().LODMidDistance = ParseFloat(val, 800.0f);
+            }
             else if (key == "LODTransitionRange")
+            {
                 Visual().LODTransitionRange = ParseFloat(val, 200.0f);
+            }
             // Visual Hierarchy
             else if (key == "TitleAlphaMultiplier")
-                Visual().TitleAlphaMultiplier = ParseFloat(val, 0.80f);
+            {
+                Visual().TitleAlphaMultiplier = ParseFloat(val, .80f);
+            }
             else if (key == "LevelAlphaMultiplier")
-                Visual().LevelAlphaMultiplier = ParseFloat(val, 0.85f);
+            {
+                Visual().LevelAlphaMultiplier = ParseFloat(val, .85f);
+            }
             // Overlap Prevention
             else if (key == "EnableOverlapPrevention")
+            {
                 Visual().EnableOverlapPrevention = ParseBool(val);
+            }
             else if (key == "OverlapPaddingY")
+            {
                 Visual().OverlapPaddingY = ParseFloat(val, 4.0f);
+            }
             else if (key == "OverlapIterations")
+            {
                 Visual().OverlapIterations = ParseInt(val, 3);
+            }
             // Position Smoothing Tuning
             else if (key == "PositionSmoothingBlend")
+            {
                 Visual().PositionSmoothingBlend = ParseFloat(val, 1.0f);
+            }
             else if (key == "LargeMovementThreshold")
+            {
                 Visual().LargeMovementThreshold = ParseFloat(val, 50.0f);
+            }
             else if (key == "LargeMovementBlend")
-                Visual().LargeMovementBlend = ParseFloat(val, 0.5f);
+            {
+                Visual().LargeMovementBlend = ParseFloat(val, .5f);
+            }
             // Tier Effect Gating
             else if (key == "EnableTierEffectGating")
+            {
                 Visual().EnableTierEffectGating = ParseBool(val);
+            }
             else if (key == "GlowMinTier")
+            {
                 Visual().GlowMinTier = ParseInt(val, 5);
+            }
             else if (key == "ParticleMinTier")
+            {
                 Visual().ParticleMinTier = ParseInt(val, 10);
+            }
             else if (key == "OrnamentMinTier")
+            {
                 Visual().OrnamentMinTier = ParseInt(val, 10);
+            }
             // Font Settings
             else if (key == "NameFontPath")
+            {
                 NameFontPath = val;
+            }
             else if (key == "NameFontSize")
-                NameFontSize = ParseFloat(val, 0.0f);
+            {
+                NameFontSize = ParseFloat(val, .0f);
+            }
             else if (key == "LevelFontPath")
+            {
                 LevelFontPath = val;
+            }
             else if (key == "LevelFontSize")
-                LevelFontSize = ParseFloat(val, 0.0f);
+            {
+                LevelFontSize = ParseFloat(val, .0f);
+            }
             else if (key == "TitleFontPath")
+            {
                 TitleFontPath = val;
+            }
             else if (key == "TitleFontSize")
-                TitleFontSize = ParseFloat(val, 0.0f);
+            {
+                TitleFontSize = ParseFloat(val, .0f);
+            }
             // Ornament Font Settings
             else if (key == "OrnamentFontPath")
+            {
                 OrnamentFontPath = val;
+            }
             else if (key == "OrnamentFontSize")
+            {
                 OrnamentFontSize = ParseFloat(val, 64.0f);
+            }
             // Appearance Template Settings
             else if (key == "TemplateFormID")
+            {
                 TemplateFormID = val;
+            }
             else if (key == "TemplatePlugin")
+            {
                 TemplatePlugin = val;
+            }
             else if (key == "UseTemplateAppearance")
+            {
                 UseTemplateAppearance = ParseBool(val);
+            }
             else if (key == "TemplateIncludeRace")
+            {
                 TemplateIncludeRace = ParseBool(val);
+            }
             else if (key == "TemplateIncludeBody")
+            {
                 TemplateIncludeBody = ParseBool(val);
+            }
             else if (key == "TemplateCopyFaceGen")
+            {
                 TemplateCopyFaceGen = ParseBool(val);
+            }
             else if (key == "TemplateCopySkin")
+            {
                 TemplateCopySkin = ParseBool(val);
+            }
             else if (key == "TemplateCopyOverlays")
+            {
                 TemplateCopyOverlays = ParseBool(val);
+            }
             else if (key == "TemplateCopyOutfit")
+            {
                 TemplateCopyOutfit = ParseBool(val);
+            }
             else if (key == "TemplateReapplyOnReload")
+            {
                 TemplateReapplyOnReload = ParseBool(val);
+            }
             else if (key == "TemplateFaceGenPlugin")
+            {
                 TemplateFaceGenPlugin = val;
+            }
             else
             {
                 ++unknownKeyCount;

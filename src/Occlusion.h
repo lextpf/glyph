@@ -86,9 +86,9 @@
  *
  * |                    Constant | Value  | Description |
  * |-----------------------------|--------|-------------------------------------------------------------------|
- * |   `kCloseDistanceThreshold` | 100.0  | Always visible when $\\|p_{actor} - p_{cam}\\| < 100$
- * units       | | `kBehindCameraDotThreshold` | -0.2   | Behind camera when $\hat{f} \cdot \hat{d}
- * < -0.2$ ($\approx 101$) | |     `kHeadHeightMultiplier` | 0.9    | Reserved, currently unused |
+ * |   `CLOSE_DISTANCE_THRESHOLD` | 100.0  | Always visible when $\\|p_{actor} - p_{cam}\\| < 100$
+ * units       | | `BEHIND_CAMERA_DOT_THRESHOLD` | -0.2   | Behind camera when $\hat{f} \cdot
+ * \hat{d} < -0.2$ ($\approx 101$) |
  */
 namespace Occlusion
 {
@@ -97,11 +97,10 @@ namespace Occlusion
  */
 namespace Constants
 {
-constexpr float kCloseDistanceThreshold =
+static constexpr float CLOSE_DISTANCE_THRESHOLD =
     100.0f;  ///< Visible when $\|p_{actor} - p_{cam}\| < 100$ game units
-constexpr float kBehindCameraDotThreshold =
-    -0.2f;  ///< Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$)
-constexpr float kHeadHeightMultiplier = 0.9f;  ///< Reserved, currently unused
+static constexpr float BEHIND_CAMERA_DOT_THRESHOLD =
+    -.2f;  ///< Behind camera when $\hat{f} \cdot \hat{d} < -0.2$ ($\approx 101$)
 }  // namespace Constants
 
 /**

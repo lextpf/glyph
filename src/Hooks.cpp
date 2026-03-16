@@ -19,41 +19,45 @@
 
 namespace Hooks
 {
-/// Atomic flag indicating whether ImGui has been initialized
+// Atomic flag indicating whether ImGui has been initialized
 std::atomic<bool> initialized = false;
 std::atomic<bool> initializing = false;
 
-/// Flag indicating whether mipmapped font atlas has been created
+// Flag indicating whether mipmapped font atlas has been created
 std::atomic<bool> mipmapsGenerated = false;
 
-/// Flag indicating whether particle textures have been loaded
+// Flag indicating whether particle textures have been loaded
 std::atomic<bool> particleTexturesLoaded = false;
 
-/// Flag indicating overlay should be rendered this frame
+// Flag indicating overlay should be rendered this frame
 std::atomic<bool> shouldRenderOverlay = false;
 
-/// Flag indicating overlay has been rendered this frame
+// Flag indicating overlay has been rendered this frame
 std::atomic<bool> overlayRenderedThisFrame = false;
 
-/// Render exception metrics (logged with throttling).
+// Render exception metrics (logged with throttling).
 std::atomic<uint32_t> renderExceptionCount = 0;
 std::atomic<bool> missingPresentLogged = false;
 std::atomic<bool> deviceChangeLogged = false;
 std::atomic<bool> backendReinitRequested = false;
-std::mutex g_stateMutex;
+static std::mutex& StateMutex()
+{
+    static std::mutex instance;
+    return instance;
+}
 
-/// Stored D3D11 device for mipmap generation
+// Stored D3D11 device for mipmap generation
 ID3D11Device* g_device = nullptr;
 
-/// Stored D3D11 context for mipmap generation
+// Stored D3D11 context for mipmap generation
 ID3D11DeviceContext* g_context = nullptr;
 
-/// Stored swap chain for Present hook
+// Stored swap chain for Present hook
 IDXGISwapChain* g_swapChain = nullptr;
 
-/// Original Present function pointer
+// Original Present function pointer
 using PresentFn = HRESULT(WINAPI*)(IDXGISwapChain*, UINT, UINT);
-PresentFn g_originalPresent = nullptr;
+std::atomic<PresentFn> g_originalPresent{nullptr};
 
 // Forward declaration of Present hook
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
@@ -80,12 +84,12 @@ bool TryInstallPresentHook(IDXGISwapChain* swapChain)
     const auto currentPresent = reinterpret_cast<PresentFn>(vtable[8]);
     const auto ourPresent = reinterpret_cast<PresentFn>(&PresentHook);
     {
-        const std::lock_guard<std::mutex> lock(g_stateMutex);
+        const std::lock_guard<std::mutex> lock(StateMutex());
         if (currentPresent == ourPresent)
         {
-            return g_originalPresent != nullptr;
+            return g_originalPresent.load(std::memory_order_relaxed) != nullptr;
         }
-        g_originalPresent = currentPresent;
+        g_originalPresent.store(currentPresent, std::memory_order_release);
     }
 
     DWORD oldProtect = 0;
@@ -122,7 +126,7 @@ struct CreateD3DAndSwapChain
                 bool changed = false;
                 if (swapChain && device && context)
                 {
-                    const std::lock_guard<std::mutex> lock(g_stateMutex);
+                    const std::lock_guard<std::mutex> lock(StateMutex());
                     changed =
                         (swapChain != g_swapChain || device != g_device || context != g_context);
                     if (changed)
@@ -204,7 +208,7 @@ struct CreateD3DAndSwapChain
 
         // Store for later mipmap generation
         {
-            const std::lock_guard<std::mutex> lock(g_stateMutex);
+            const std::lock_guard<std::mutex> lock(StateMutex());
             g_device = device;
             g_context = context;
         }
@@ -230,11 +234,11 @@ struct CreateD3DAndSwapChain
                 contextCreated = false;
             }
             {
-                const std::lock_guard<std::mutex> lock(g_stateMutex);
+                const std::lock_guard<std::mutex> lock(StateMutex());
                 g_device = nullptr;
                 g_context = nullptr;
                 g_swapChain = nullptr;
-                g_originalPresent = nullptr;
+                g_originalPresent.store(nullptr, std::memory_order_release);
             }
             ParticleTextures::Shutdown();
         };
@@ -324,7 +328,7 @@ struct CreateD3DAndSwapChain
 
         // Store swap chain and hook Present for post-upscaler rendering
         {
-            const std::lock_guard<std::mutex> lock(g_stateMutex);
+            const std::lock_guard<std::mutex> lock(StateMutex());
             g_swapChain = swapChain;
         }
 
@@ -341,20 +345,24 @@ struct CreateD3DAndSwapChain
     static inline REL::Relocation<decltype(thunk)> func;
 };
 
-/// Render overlay immediately
+// Render overlay immediately
 void RenderOverlayNow()
 {
     if (!initialized.load(std::memory_order_acquire))
+    {
         return;
+    }
     if (!ImGui::GetCurrentContext())
+    {
         return;
+    }
 
     try
     {
         ID3D11Device* device = nullptr;
         ID3D11DeviceContext* context = nullptr;
         {
-            const std::lock_guard<std::mutex> lock(g_stateMutex);
+            const std::lock_guard<std::mutex> lock(StateMutex());
             device = g_device;
             context = g_context;
         }
@@ -505,11 +513,11 @@ void RenderOverlayNow()
     }
 }
 
-/// Present hook, safety net for overlay rendering.
-/// Some upscalers (DLSS, FSR, etc.) restructure the rendering pipeline in
-/// ways that can cause PostDisplay to be skipped or deferred.
-/// This hook catches that case, we render it here as a last resort,
-/// right before the original Present flips the backbuffer to screen.
+// Present hook, safety net for overlay rendering.
+// Some upscalers (DLSS, FSR, etc.) restructure the rendering pipeline in
+// ways that can cause PostDisplay to be skipped or deferred.
+// This hook catches that case, we render it here as a last resort,
+// right before the original Present flips the backbuffer to screen.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
     if (shouldRenderOverlay.load(std::memory_order_acquire) &&
@@ -518,80 +526,80 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
         RenderOverlayNow();
     }
 
-    PresentFn originalPresent = nullptr;
-    {
-        const std::lock_guard<std::mutex> lock(g_stateMutex);
-        originalPresent = g_originalPresent;
-    }
+    // Fast path: atomic load avoids the mutex for the common case.
+    PresentFn originalPresent = g_originalPresent.load(std::memory_order_acquire);
 
     if (!originalPresent)
     {
-        // Attempt on-the-fly recovery from the swapchain vtable.
-        if (swapChain)
+        // Slow path: lock and re-read in case of a concurrent store.
         {
-            void** vtable = *reinterpret_cast<void***>(swapChain);
-            if (vtable && vtable[8])
+            const std::lock_guard<std::mutex> lock(StateMutex());
+            originalPresent = g_originalPresent.load(std::memory_order_relaxed);
+        }
+
+        if (!originalPresent)
+        {
+            // Attempt on-the-fly recovery from the swapchain vtable.
+            if (swapChain)
             {
-                auto candidate = reinterpret_cast<PresentFn>(vtable[8]);
-                if (candidate && candidate != reinterpret_cast<PresentFn>(&PresentHook))
+                void** vtable = *reinterpret_cast<void***>(swapChain);
+                if (vtable && vtable[8])
                 {
-                    const std::lock_guard<std::mutex> lock(g_stateMutex);
-                    if (!g_originalPresent)
+                    auto candidate = reinterpret_cast<PresentFn>(vtable[8]);
+                    if (candidate && candidate != reinterpret_cast<PresentFn>(&PresentHook))
                     {
-                        g_originalPresent = candidate;
+                        const std::lock_guard<std::mutex> lock(StateMutex());
+                        if (!g_originalPresent.load(std::memory_order_relaxed))
+                        {
+                            g_originalPresent.store(candidate, std::memory_order_release);
+                        }
+                        originalPresent = g_originalPresent.load(std::memory_order_relaxed);
                     }
-                    originalPresent = g_originalPresent;
                 }
             }
-        }
 
-        if (originalPresent)
-        {
-            return originalPresent(swapChain, syncInterval, flags);
+            if (!originalPresent)
+            {
+                if (!missingPresentLogged.exchange(true, std::memory_order_acq_rel))
+                {
+                    logger::error(
+                        "Hooks: Missing original IDXGISwapChain::Present pointer, returning "
+                        "success to avoid frame hard-fail");
+                }
+                return S_OK;
+            }
         }
-
-        if (!missingPresentLogged.exchange(true, std::memory_order_acq_rel))
-        {
-            logger::error(
-                "Hooks: Missing original IDXGISwapChain::Present pointer, returning success to "
-                "avoid frame hard-fail");
-        }
-        return S_OK;
     }
 
     // Forward to the real IDXGISwapChain::Present we saved during init.
     return originalPresent(swapChain, syncInterval, flags);
 }
 
-/**
- * @brief VTable hook for `HUDMenu::PostDisplay` (vtable index 6).
- *
- * Intercepts the game's HUD post-display call each frame to inject
- * overlay rendering. The hook executes on the render thread and
- * performs the following sequence:
- *
- * 1. Resets per-frame render flags
- * 2. Validates ImGui initialization and menu state
- * 3. Updates render-thread state via Renderer::TickRT()
- * 4. Checks for pending appearance template changes
- * 5. Calls the original `PostDisplay` so the game HUD renders first
- * 6. Renders the overlay on top (if allowed)
- *
- * Rendering after the original function ensures the overlay appears
- * above the HUD and is captured in screenshots.
- *
- * @note Executes on the render thread every frame.
- * @note Installed via `stl::write_vfunc<RE::HUDMenu, PostDisplay>()`.
- *
- * @see Renderer::TickRT, Renderer::IsOverlayAllowedRT, Renderer::Draw
- * @see PresentHook for the fallback path when upscalers skip PostDisplay
- */
+// VTable hook for `HUDMenu::PostDisplay` (vtable index 6).
+//
+// Intercepts the game's HUD post-display call each frame to inject
+// overlay rendering. The hook executes on the render thread and
+// performs the following sequence:
+//
+// 1. Resets per-frame render flags
+// 2. Validates ImGui initialization and menu state
+// 3. Updates render-thread state via Renderer::TickRT()
+// 4. Checks for pending appearance template changes
+// 5. Calls the original `PostDisplay` so the game HUD renders first
+// 6. Renders the overlay on top (if allowed)
+//
+// Rendering after the original function ensures the overlay appears
+// above the HUD and is captured in screenshots.
+//
+// Executes on the render thread every frame.
+// Installed via `Stl::WriteVfunc<RE::HUDMenu, PostDisplay>()`.
+//
+// See: Renderer::TickRT, Renderer::IsOverlayAllowedRT, Renderer::Draw
+// See: PresentHook for the fallback path when upscalers skip PostDisplay
 struct PostDisplay
 {
-    /**
-     * @brief Hook thunk called in place of the original `HUDMenu::PostDisplay`.
-     * @param a_menu Pointer to the HUD menu instance.
-     */
+    // Hook thunk called in place of the original `HUDMenu::PostDisplay`.
+    // a_menu: Pointer to the HUD menu instance.
     static void thunk(RE::IMenu* a_menu)
     {
         // Reset render flags at start of frame
@@ -631,9 +639,9 @@ struct PostDisplay
         }
     }
 
-    /// Original function pointer
+    // Original function pointer
     static inline REL::Relocation<decltype(thunk)> func;
-    /// Virtual function table index for PostDisplay
+    // Virtual function table index for PostDisplay
     static inline std::size_t idx = 0x6;
 };
 
@@ -645,8 +653,9 @@ void Install()
     try
     {
         // Hook D3D11 device creation for ImGui initialization
-        REL::Relocation<std::uintptr_t> target{RELOCATION_ID(75595, 77226), OFFSET(0x9, 0x275)};
-        stl::write_thunk_call<CreateD3DAndSwapChain>(target.address());
+        REL::Relocation<std::uintptr_t> target{RELOCATION_ID(75595, 77226),
+                                               GLYPH_OFFSET(0x9, 0x275)};
+        Stl::WriteThunkCall<CreateD3DAndSwapChain>(target.address());
         d3dHookInstalled = true;
     }
     catch (const std::exception& e)
@@ -661,7 +670,7 @@ void Install()
     try
     {
         // Hook HUD post-display, renders overlay after game HUD is complete
-        stl::write_vfunc<RE::HUDMenu, PostDisplay>();
+        Stl::WriteVfunc<RE::HUDMenu, PostDisplay>();
         hudHookInstalled = true;
     }
     catch (const std::exception& e)

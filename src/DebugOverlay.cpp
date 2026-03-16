@@ -15,23 +15,23 @@ void UpdateFrameStats(Stats& stats,
 {
     // Store current frame time in circular buffer for smoothing
     // Raw FPS values are jittery, so we average over multiple frames
-    constexpr int kSamples = RenderConstants::kFrameTimeSamples;
+    constexpr int SAMPLES = RenderConstants::FRAME_TIME_SAMPLES;
     stats.frameTimeHistory[stats.frameTimeIndex] = deltaTime * 1000.0f;
-    stats.frameTimeIndex = (stats.frameTimeIndex + 1) % kSamples;
+    stats.frameTimeIndex = (stats.frameTimeIndex + 1) % SAMPLES;
 
     // Sum all samples to compute rolling average
     // This smooths out frame time spikes for a more readable display
-    float sum = 0.0f;
-    for (int i = 0; i < kSamples; ++i)
+    float sum = .0f;
+    for (int i = 0; i < SAMPLES; ++i)
     {
         sum += stats.frameTimeHistory[i];
     }
-    stats.avgFrameTimeMs = sum / static_cast<float>(kSamples);
+    stats.avgFrameTimeMs = sum / static_cast<float>(SAMPLES);
 
     // Convert delta time to milliseconds and FPS
     // Guard against division by zero when game is paused
     stats.frameTimeMs = deltaTime * 1000.0f;
-    stats.fps = (deltaTime > 0.0f) ? (1.0f / deltaTime) : 0.0f;
+    stats.fps = (deltaTime > .0f) ? (1.0f / deltaTime) : .0f;
 
     // Track actor updates per second by comparing counters once per second
     // This avoids updating the display every frame which would be unreadable
@@ -48,7 +48,9 @@ void Render(const Context& ctx)
 {
     // Early out if disabled or no stats available
     if (!Settings::EnableDebugOverlay || !ctx.stats)
+    {
         return;
+    }
 
     const Stats& stats = *ctx.stats;
     const float time = static_cast<float>(ImGui::GetTime());
@@ -57,7 +59,7 @@ void Render(const Context& ctx)
     // Window auto-sizes to content height (height=0)
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowBgAlpha(0.75f);  // Semi-transparent so game is visible behind
+    ImGui::SetNextWindowBgAlpha(.75f);  // Semi-transparent so game is visible behind
 
     // Minimal window chrome
     // NoMove prevents accidental dragging during gameplay
@@ -69,36 +71,35 @@ void Render(const Context& ctx)
     if (ImGui::Begin("glyph Debug", nullptr, flags))
     {
         // Cyan header for visual distinction
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "glyph Debug");
+        ImGui::TextColored(ImVec4(.4f, .8f, 1.0f, 1.0f), "glyph Debug");
 
         // Flash green "[Reloaded!]" text after hot reload
-        // Fades out over kReloadNotificationDuration seconds
+        // Fades out over RELOAD_NOTIFICATION_DURATION seconds
         float timeSinceReload = time - ctx.lastReloadTime;
-        if (timeSinceReload < RenderConstants::kReloadNotificationDuration)
+        if (timeSinceReload < RenderConstants::RELOAD_NOTIFICATION_DURATION)
         {
             ImGui::SameLine();
             // Linear fade from full opacity to invisible
             float flashAlpha =
-                1.0f - timeSinceReload / RenderConstants::kReloadNotificationDuration;
-            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, flashAlpha), " [Reloaded!]");
+                1.0f - timeSinceReload / RenderConstants::RELOAD_NOTIFICATION_DURATION;
+            ImGui::TextColored(ImVec4(.2f, 1.0f, .2f, flashAlpha), " [Reloaded!]");
         }
 
         ImGui::Separator();
 
         // Orange headers for section titles throughout
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Performance");
+        ImGui::TextColored(ImVec4(1.0f, .8f, .4f, 1.0f), "Performance");
         ImGui::Text("FPS: %.1f", stats.fps);
         ImGui::Text("Frame: %.2f ms", stats.frameTimeMs);
         ImGui::Text("Avg:   %.2f ms", stats.avgFrameTimeMs);
 
         // ASCII-style FPS bar graph
-        float fpsNorm = std::clamp(stats.fps / 60.0f, 0.0f, 1.0f);
+        float fpsNorm = std::clamp(stats.fps / 60.0f, .0f, 1.0f);
 
         // Color-code by performance
-        ImVec4 fpsColor = (stats.fps >= 60.0f) ? ImVec4(0.2f, 0.9f, 0.2f, 1.0f)  // Green - smooth
-                          : (stats.fps >= 30.0f)
-                              ? ImVec4(0.9f, 0.9f, 0.2f, 1.0f)   // Yellow - playable
-                              : ImVec4(0.9f, 0.2f, 0.2f, 1.0f);  // Red - laggy
+        ImVec4 fpsColor = (stats.fps >= 60.0f)   ? ImVec4(.2f, .9f, .2f, 1.0f)  // Green - smooth
+                          : (stats.fps >= 30.0f) ? ImVec4(.9f, .9f, .2f, 1.0f)  // Yellow - playable
+                                                 : ImVec4(.9f, .2f, .2f, 1.0f);  // Red - laggy
 
         // Draw 20-character bar: Filled bars up to current FPS, dots for remainder
         ImGui::TextColored(fpsColor, "[");
@@ -112,7 +113,7 @@ void Render(const Context& ctx)
             }
             else
             {
-                ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.0f), ".");
+                ImGui::TextColored(ImVec4(.3f, .3f, .3f, 1.0f), ".");
             }
             ImGui::SameLine(0, 0);  // No spacing between characters
         }
@@ -121,7 +122,7 @@ void Render(const Context& ctx)
         ImGui::Spacing();
 
         // Shows how many NPCs are being tracked and their visibility state
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Actors");
+        ImGui::TextColored(ImVec4(1.0f, .8f, .4f, 1.0f), "Actors");
         ImGui::Text("Total:    %d", stats.actorCount);      // All tracked actors this frame
         ImGui::Text("Visible:  %d", stats.visibleActors);   // Passed visibility checks
         ImGui::Text("Occluded: %d", stats.occludedActors);  // Hidden behind geometry
@@ -130,14 +131,14 @@ void Render(const Context& ctx)
         ImGui::Spacing();
 
         // Actor cache persists data between frames to avoid redundant lookups
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Cache");
+        ImGui::TextColored(ImVec4(1.0f, .8f, .4f, 1.0f), "Cache");
         ImGui::Text("Entries: %zu", stats.cacheSize);  // Cached actor count
         ImGui::Text("Frame:   %u", ctx.frameNumber);   // Current render frame number
 
         ImGui::Spacing();
 
         // Tracks how often actor data is refreshed
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Updates");
+        ImGui::TextColored(ImVec4(1.0f, .8f, .4f, 1.0f), "Updates");
         ImGui::Text("Updates/sec: %d", stats.updatesPerSecond);  // Data refreshes per second
         ImGui::Text("Cooldown:    %d",
                     ctx.postLoadCooldown);  // Frames until full processing resumes
@@ -145,7 +146,7 @@ void Render(const Context& ctx)
         ImGui::Spacing();
 
         // Shows current INI settings state for quick verification
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Settings");
+        ImGui::TextColored(ImVec4(1.0f, .8f, .4f, 1.0f), "Settings");
         ImGui::Text("Occlusion: %s", Settings::EnableOcclusionCulling ? "On" : "Off");
         ImGui::Text("Glow:      %s", Settings::EnableGlow ? "On" : "Off");
         ImGui::Text("Typewriter:%s", Settings::EnableTypewriter ? "On" : "Off");
@@ -160,14 +161,14 @@ void Render(const Context& ctx)
         else
         {
             // Grayed out when hot reload is disabled
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Reload Key: Disabled");
+            ImGui::TextColored(ImVec4(.5f, .5f, .5f, 1.0f), "Reload Key: Disabled");
         }
 
         ImGui::Spacing();
 
         // Rough memory usage estimates based on struct sizes
         // Not exact due to allocator overhead, but useful for spotting leaks
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Memory (Est.)");
+        ImGui::TextColored(ImVec4(1.0f, .8f, .4f, 1.0f), "Memory (Est.)");
         size_t cacheMemory = stats.cacheSize * ctx.actorCacheEntrySize;
         size_t snapshotMemory = stats.actorCount * ctx.actorDrawDataSize;
         ImGui::Text("Cache:    ~%zu bytes", cacheMemory);     // Persistent actor cache

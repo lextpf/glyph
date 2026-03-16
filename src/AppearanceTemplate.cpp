@@ -102,14 +102,14 @@ void TestOverlayOnPlayer()
 // Forward declarations
 static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player);
 
-/**
- * Find a loaded actor that uses the given NPC as its base.
- * Returns nullptr if no such actor is currently loaded.
- */
+// Find a loaded actor that uses the given NPC as its base.
+// Returns nullptr if no such actor is currently loaded.
 static RE::Actor* FindActorByBase(RE::TESNPC* npc)
 {
     if (!npc)
+    {
         return nullptr;
+    }
 
     auto player = RE::PlayerCharacter::GetSingleton();
     auto* processLists = RE::ProcessLists::GetSingleton();
@@ -217,11 +217,15 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
     auto lookupFile = [&](const std::string& name) -> const RE::TESFile*
     {
         if (!dh)
+        {
             return nullptr;
+        }
         for (auto* f : dh->files)
         {
             if (f && f->fileName && _stricmp(f->fileName, name.c_str()) == 0)
+            {
                 return f;
+            }
         }
         return nullptr;
     };
@@ -243,7 +247,9 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
         {
             auto* f = (*templateNPC->sourceFiles.array)[i];
             if (f)
+            {
                 candidates.push_back(f);
+            }
         }
     }
 
@@ -260,7 +266,9 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
     {
         const RE::TESFile* origin = (*templateNPC->sourceFiles.array)[0];
         if (origin)
+        {
             candidates.push_back(origin);
+        }
     }
 
     // Deduplicate while preserving order
@@ -277,7 +285,9 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
             }
         }
         if (!exists)
+        {
             unique.push_back(f);
+        }
     }
 
     RE::FormID resolvedFormID = templateNPC->GetFormID();
@@ -290,16 +300,22 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
     {
         const RE::TESFile* plugin = unique[i];
         if (!plugin || !plugin->fileName)
+        {
             continue;
+        }
         RE::FormID faceID = FaceGenFileID(resolvedFormID, plugin);
         meshPath = BuildFaceGenMeshPath(plugin->fileName, faceID);
         tintPath = BuildFaceGenTintPath(plugin->fileName, faceID);
 
         RE::BSResourceNiBinaryStream meshStream(meshPath.c_str());
         if (i == 0)
+        {
             triedPrimary = meshPath;
+        }
         else
+        {
             triedSecondary = meshPath;
+        }
 
         if (meshStream.good())
         {
@@ -320,9 +336,13 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
     {
         SKSE::log::warn("AppearanceTemplate: FaceGen mesh not found!");
         if (!triedPrimary.empty())
+        {
             SKSE::log::warn("AppearanceTemplate: Tried primary path: {}", triedPrimary);
+        }
         if (!triedSecondary.empty() && triedSecondary != triedPrimary)
+        {
             SKSE::log::warn("AppearanceTemplate: Tried fallback path: {}", triedSecondary);
+        }
         SKSE::log::warn("AppearanceTemplate: Falling back to record-only appearance copy");
         SKSE::log::warn(
             "AppearanceTemplate: To fix, ensure FaceGen files exist or set TemplateFaceGenPlugin "
@@ -466,25 +486,35 @@ RE::FormID ResolveFormID(const std::string& formIdStr, const std::string& plugin
 bool IsRaceCompatible(RE::TESNPC* templateNPC)
 {
     if (!templateNPC)
+    {
         return false;
+    }
 
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player)
+    {
         return false;
+    }
 
     auto playerBase = player->GetActorBase();
     if (!playerBase)
+    {
         return false;
+    }
 
     auto playerRace = playerBase->GetRace();
     auto templateRace = templateNPC->GetRace();
 
     if (!playerRace || !templateRace)
+    {
         return false;
+    }
 
     // Check if same race
     if (playerRace == templateRace)
+    {
         return true;
+    }
 
     // Check if races are in the same race group (e.g., human races)
     // For safety, we'll just check if they're the same
@@ -751,13 +781,13 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
     // Tint layers include: Skin tone, makeup, war paint, dirt, etc.
     if (auto templateTints = templateNPC->tintLayers)
     {
-        constexpr std::size_t kMaxTintLayersSafe = 1024;
-        if (templateTints->size() > kMaxTintLayersSafe)
+        constexpr std::size_t MAX_TINT_LAYERS_SAFE = 1024;
+        if (templateTints->size() > MAX_TINT_LAYERS_SAFE)
         {
             SKSE::log::error(
                 "AppearanceTemplate: Template tint layer count {} exceeds safety limit {}",
                 templateTints->size(),
-                kMaxTintLayersSafe);
+                MAX_TINT_LAYERS_SAFE);
             return false;
         }
         std::vector<RE::TESNPC::Layer*> stagedTintLayers;
@@ -945,15 +975,15 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
     return true;
 }
 
-/**
- * Call BSFaceGenManager::RegenerateHead via REL::Relocation.
- * Fully reloading baked FaceGen meshes after faceNPC swap.
- * Not exposed in CommonLibSSE-NG headers, so we call it directly.
- */
+// Call BSFaceGenManager::RegenerateHead via REL::Relocation.
+// Fully reloading baked FaceGen meshes after faceNPC swap.
+// Not exposed in CommonLibSSE-NG headers, so we call it directly.
 static void RegenerateHead(RE::Actor* a_actor)
 {
     if (!a_actor)
+    {
         return;
+    }
 
     auto faceGenManager = RE::BSFaceGenManager::GetSingleton();
     if (!faceGenManager)
@@ -1266,10 +1296,8 @@ bool ApplyIfConfigured()
     return true;
 }
 
-/**
- * Copy equipped outfit from source actor to player.
- * Copies all equipped armor items (not weapons).
- */
+// Copy equipped outfit from source actor to player.
+// Copies all equipped armor items (not weapons).
 static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player)
 {
     if (!sourceActor || !player)
@@ -1341,11 +1369,15 @@ static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player)
     for (const auto& [form, data] : sourceInv)
     {
         if (!form || !data.second || data.second->IsWorn() == false)
+        {
             continue;
+        }
 
         auto armor = form->As<RE::TESObjectARMO>();
         if (!armor)
+        {
             continue;
+        }
 
         const bool hasItem = playerForms.find(form) != playerForms.end();
         const bool alreadyWorn = playerWornForms.find(form) != playerWornForms.end();

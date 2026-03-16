@@ -145,10 +145,10 @@ enum class EffectType
  * // Aurora effect: speed=0.5, waves=3.0, intensity=1.0, sway=0.3
  * EffectParams aurora;
  * aurora.type = EffectType::Aurora;
- * aurora.param1 = 0.5f;   // speed
+ * aurora.param1 = .5f;   // speed
  * aurora.param2 = 3.0f;   // wave count
  * aurora.param3 = 1.0f;   // intensity
- * aurora.param4 = 0.3f;   // sway amount
+ * aurora.param4 = .3f;   // sway amount
  * ```
  *
  * @see EffectType, TierDefinition, TextEffects::ApplyVertexEffect
@@ -157,11 +157,11 @@ struct EffectParams
 {
     EffectType type = EffectType::Gradient;  ///< Effect type to apply
 
-    float param1 = 0.0f;  ///< Effect parameter 1 (meaning varies by effect)
-    float param2 = 0.0f;  ///< Effect parameter 2
-    float param3 = 0.0f;  ///< Effect parameter 3
-    float param4 = 0.0f;  ///< Effect parameter 4
-    float param5 = 0.0f;  ///< Effect parameter 5
+    float param1 = .0f;  ///< Effect parameter 1 (meaning varies by effect)
+    float param2 = .0f;  ///< Effect parameter 2
+    float param3 = .0f;  ///< Effect parameter 3
+    float param4 = .0f;  ///< Effect parameter 4
+    float param5 = .0f;  ///< Effect parameter 5
 
     bool useWhiteBase = false;  ///< Draw white base layer under rainbow effects for brightness
 };
@@ -358,18 +358,18 @@ struct VisualSettings
 {
     // Distance-Based Outline
     bool EnableDistanceOutlineScale = false;  ///< Scale outline width by distance
-    float OutlineDistanceMin = 0.8f;          ///< Outline multiplier at close range
+    float OutlineDistanceMin = .8f;           ///< Outline multiplier at close range
     float OutlineDistanceMax = 1.5f;          ///< Outline multiplier at far range
     // Minimum Readable Size
-    float MinimumPixelHeight = 0.0f;  ///< Min pixel height for name text, 0=disabled
+    float MinimumPixelHeight = .0f;  ///< Min pixel height for name text, 0=disabled
     // LOD by Distance
     bool EnableLOD = false;             ///< Enable distance-based content LOD
     float LODFarDistance = 1800.0f;     ///< Beyond this: name+level only
     float LODMidDistance = 800.0f;      ///< Beyond this: no particles/ornaments
     float LODTransitionRange = 200.0f;  ///< Smooth transition width in game units
     // Visual Hierarchy
-    float TitleAlphaMultiplier = 0.80f;  ///< Alpha multiplier for title text
-    float LevelAlphaMultiplier = 0.85f;  ///< Alpha multiplier for level text
+    float TitleAlphaMultiplier = .80f;  ///< Alpha multiplier for title text
+    float LevelAlphaMultiplier = .85f;  ///< Alpha multiplier for level text
     // Overlap Prevention
     bool EnableOverlapPrevention = false;  ///< Push overlapping labels apart
     float OverlapPaddingY = 4.0f;          ///< Vertical padding between labels
@@ -377,7 +377,7 @@ struct VisualSettings
     // Position Smoothing Tuning
     float PositionSmoothingBlend = 1.0f;   ///< 1.0=moving-avg, 0.0=exponential
     float LargeMovementThreshold = 50.0f;  ///< Pixel threshold for large movement handling
-    float LargeMovementBlend = 0.5f;       ///< Blend factor for large movements
+    float LargeMovementBlend = .5f;        ///< Blend factor for large movements
     // Tier Effect Gating
     bool EnableTierEffectGating = false;  ///< Gate effects by tier index
     int GlowMinTier = 5;                  ///< Minimum tier for glow effects
@@ -422,7 +422,7 @@ extern std::string
  * Readers should hold a shared lock while consuming settings during
  * long operations. Settings::Load() acquires a unique lock.
  */
-std::shared_mutex& Mutex();
+[[nodiscard]] std::shared_mutex& Mutex();
 
 /**
  * Load all settings from glyph.ini.
