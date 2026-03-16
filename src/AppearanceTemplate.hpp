@@ -128,6 +128,36 @@ bool ApplyIfConfigured();
 void ResetAppliedFlag();
 
 /**
+ * @brief Apply the template appearance with an explicit target, bypassing
+ * the INI's `UseTemplateAppearance` gate and the per-session "already applied"
+ * guard.
+ *
+ * Intended for console-driven manual applies. Other settings under
+ * `[Appearance]` (TemplateIncludeRace, TemplateIncludeBody, TemplateCopyFaceGen,
+ * TemplateCopyOutfit) are still read from the INI.
+ *
+ * @param formIdStr Hex FormID string (with or without `0x` prefix).
+ * @param pluginName Plugin filename (e.g., `Inigo.esp`).
+ * @return true on successful apply.
+ */
+bool ApplyWithTarget(const std::string& formIdStr, const std::string& pluginName);
+
+/**
+ * @brief Returns true if a template appearance has been applied in the
+ * current session.
+ *
+ * Thread-safe (acquires the internal state mutex).
+ */
+bool IsApplied();
+
+/**
+ * @brief Returns a human-readable description of the most recently applied
+ * template (e.g., "Inigo.esp:0x00000D62"), or empty if nothing was applied
+ * yet in this session.
+ */
+std::string AppliedTargetDescription();
+
+/**
  * @brief Resolve a FormID from a plugin file.
  *
  * Handles load order by looking up the plugin's actual index via TESDataHandler.
