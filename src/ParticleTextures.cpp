@@ -30,7 +30,7 @@ static constexpr int NUM_TYPES = 5;  // Stars, Sparks, Wisps, Runes, Orbs
 // Texture info struct
 struct TextureInfo
 {
-    ID3D11ShaderResourceView* srv = nullptr;
+    ComPtr<ID3D11ShaderResourceView> srv;
     int width = 0;
     int height = 0;
 };
@@ -41,7 +41,7 @@ static std::array<std::vector<TextureInfo>, NUM_TYPES>& Textures()
     static std::array<std::vector<TextureInfo>, NUM_TYPES> instance;
     return instance;
 }
-static std::atomic<bool> g_initialized{false};
+static std::atomic<bool> s_Initialized{false};
 static std::mutex& InitMutex()
 {
     static std::mutex instance;
@@ -49,13 +49,13 @@ static std::mutex& InitMutex()
 }
 
 // Point sampler for small sprites
-static ID3D11SamplerState* g_pointSampler = nullptr;
+static ComPtr<ID3D11SamplerState> s_PointSampler;
 // Linear sampler for high-resolution textures
-static ID3D11SamplerState* g_linearSampler = nullptr;
-static ID3D11BlendState* g_additiveBlend = nullptr;
-static ID3D11BlendState* g_screenBlend = nullptr;
-static ID3D11Device* g_device = nullptr;
-static ID3D11DeviceContext* g_context = nullptr;
+static ComPtr<ID3D11SamplerState> s_LinearSampler;
+static ComPtr<ID3D11BlendState> s_AdditiveBlend;
+static ComPtr<ID3D11BlendState> s_ScreenBlend;
+static ComPtr<ID3D11Device> s_Device;
+static ComPtr<ID3D11DeviceContext> s_Context;
 
 static void ReleaseResources_NoLock()
 {
@@ -63,48 +63,25 @@ static void ReleaseResources_NoLock()
     {
         for (auto& tex : typeTextures)
         {
-            if (tex.srv)
-            {
-                tex.srv->Release();
-                tex.srv = nullptr;
-            }
+            tex.srv.Reset();
         }
         typeTextures.clear();
     }
 
-    if (g_pointSampler)
-    {
-        g_pointSampler->Release();
-        g_pointSampler = nullptr;
-    }
-    if (g_linearSampler)
-    {
-        g_linearSampler->Release();
-        g_linearSampler = nullptr;
-    }
-    if (g_additiveBlend)
-    {
-        g_additiveBlend->Release();
-        g_additiveBlend = nullptr;
-    }
-    if (g_screenBlend)
-    {
-        g_screenBlend->Release();
-        g_screenBlend = nullptr;
-    }
-    if (g_context)
-    {
-        g_context->Release();
-        g_context = nullptr;
-    }
-
-    g_device = nullptr;  // non-owning pointer
-    g_initialized = false;
+    s_PointSampler.Reset();
+    s_LinearSampler.Reset();
+    s_AdditiveBlend.Reset();
+    s_ScreenBlend.Reset();
+    s_Context.Reset();
+    s_Device.Reset();
+    s_Initialized = false;
 }
 
 // Load a PNG file using WIC and create a D3D11 texture.
 // Returns TextureInfo with dimensions.
-static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& path)
+static TextureInfo LoadTextureFromFile(ID3D11Device* device,
+                                       const std::string& path,
+                                       IWICImagingFactory* wicFactory)
 {
     TextureInfo info;
     if (!device || path.empty())
@@ -122,19 +99,9 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& 
     std::wstring widePath(wideLen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &widePath[0], wideLen);
 
-    // Create WIC factory
-    ComPtr<IWICImagingFactory> wicFactory;
-    HRESULT hr = CoCreateInstance(
-        CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
-    if (FAILED(hr))
-    {
-        SKSE::log::warn("ParticleTextures: Failed to create WIC factory for {}", path);
-        return info;
-    }
-
     // Load the image
     ComPtr<IWICBitmapDecoder> decoder;
-    hr = wicFactory->CreateDecoderFromFilename(
+    HRESULT hr = wicFactory->CreateDecoderFromFilename(
         widePath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
     if (FAILED(hr))
     {
@@ -249,15 +216,14 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& 
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
 
-    ID3D11ShaderResourceView* srv = nullptr;
-    hr = device->CreateShaderResourceView(texture.Get(), &srvDesc, &srv);
+    hr = device->CreateShaderResourceView(
+        texture.Get(), &srvDesc, info.srv.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
         SKSE::log::warn("ParticleTextures: Failed to create SRV for {}", path);
         return info;
     }
 
-    info.srv = srv;
     info.width = static_cast<int>(width);
     info.height = static_cast<int>(height);
 
@@ -268,7 +234,8 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device, const std::string& 
 // Load all PNG files from a folder into the texture array for a particle type.
 static int LoadTexturesFromFolder(ID3D11Device* device,
                                   int styleIndex,
-                                  const std::string& folderPath)
+                                  const std::string& folderPath,
+                                  IWICImagingFactory* wicFactory)
 {
     if (styleIndex < 0 || styleIndex >= NUM_TYPES)
     {
@@ -316,7 +283,7 @@ static int LoadTexturesFromFolder(ID3D11Device* device,
 
         for (const auto& texturePath : pngFiles)
         {
-            auto info = LoadTextureFromFile(device, texturePath.string());
+            auto info = LoadTextureFromFile(device, texturePath.string(), wicFactory);
             if (info.srv)
             {
                 Textures()[styleIndex].push_back(info);
@@ -345,7 +312,7 @@ bool Initialize(ID3D11Device* device)
     {
         return false;
     }
-    if (g_initialized.load(std::memory_order_acquire))
+    if (s_Initialized.load(std::memory_order_acquire))
     {
         return true;
     }
@@ -367,9 +334,9 @@ bool Initialize(ID3D11Device* device)
     }
 
     // Store device and get context
-    g_device = device;
-    device->GetImmediateContext(&g_context);
-    if (!g_context)
+    s_Device = device;
+    device->GetImmediateContext(s_Context.ReleaseAndGetAddressOf());
+    if (!s_Context)
     {
         SKSE::log::warn("ParticleTextures: Failed to get immediate device context");
     }
@@ -386,7 +353,7 @@ bool Initialize(ID3D11Device* device)
     pointDesc.MinLOD = 0;
     pointDesc.MaxLOD = D3D11_FLOAT32_MAX;
 
-    HRESULT hr = device->CreateSamplerState(&pointDesc, &g_pointSampler);
+    HRESULT hr = device->CreateSamplerState(&pointDesc, s_PointSampler.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
         SKSE::log::warn("ParticleTextures: Failed to create point sampler");
@@ -399,7 +366,7 @@ bool Initialize(ID3D11Device* device)
     // Create linear sampler for high-resolution textures
     D3D11_SAMPLER_DESC linearDesc = pointDesc;
     linearDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    hr = device->CreateSamplerState(&linearDesc, &g_linearSampler);
+    hr = device->CreateSamplerState(&linearDesc, s_LinearSampler.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
         SKSE::log::warn("ParticleTextures: Failed to create linear sampler");
@@ -421,7 +388,7 @@ bool Initialize(ID3D11Device* device)
     addDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
     addDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     addDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-    hr = device->CreateBlendState(&addDesc, &g_additiveBlend);
+    hr = device->CreateBlendState(&addDesc, s_AdditiveBlend.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
         SKSE::log::warn("ParticleTextures: Failed to create additive blend state");
@@ -436,7 +403,7 @@ bool Initialize(ID3D11Device* device)
     D3D11_BLEND_DESC screenDesc = addDesc;
     screenDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
     screenDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_COLOR;
-    hr = device->CreateBlendState(&screenDesc, &g_screenBlend);
+    hr = device->CreateBlendState(&screenDesc, s_ScreenBlend.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
         SKSE::log::warn("ParticleTextures: Failed to create screen blend state");
@@ -444,6 +411,20 @@ bool Initialize(ID3D11Device* device)
     else
     {
         SKSE::log::info("ParticleTextures: Created screen blend state");
+    }
+
+    ComPtr<IWICImagingFactory> wicFactory;
+    HRESULT wicHr = CoCreateInstance(
+        CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
+    if (FAILED(wicHr))
+    {
+        SKSE::log::error("ParticleTextures: Failed to create WIC factory (hr=0x{:08X})",
+                         static_cast<unsigned int>(wicHr));
+        if (needsCoUninitialize)
+        {
+            CoUninitialize();
+        }
+        return false;
     }
 
     // Base path for particle textures
@@ -468,7 +449,7 @@ bool Initialize(ID3D11Device* device)
     for (const auto& m : mappings)
     {
         std::string folderPath = basePath + m.folder;
-        int count = LoadTexturesFromFolder(device, m.style, folderPath);
+        int count = LoadTexturesFromFolder(device, m.style, folderPath, wicFactory.Get());
         if (count > 0)
         {
             SKSE::log::info(
@@ -486,39 +467,39 @@ bool Initialize(ID3D11Device* device)
         CoUninitialize();
     }
 
-    g_initialized.store(totalLoaded > 0, std::memory_order_release);
+    s_Initialized.store(totalLoaded > 0, std::memory_order_release);
     SKSE::log::info("ParticleTextures: === TOTAL: {} particle textures loaded ===", totalLoaded);
-    if (!g_initialized.load(std::memory_order_acquire))
+    if (!s_Initialized.load(std::memory_order_acquire))
     {
         SKSE::log::error("ParticleTextures: NO TEXTURES LOADED - falling back to shape rendering");
         ReleaseResources_NoLock();
     }
-    return g_initialized.load(std::memory_order_acquire);
+    return s_Initialized.load(std::memory_order_acquire);
 }
 
 // Callback to set a specific sampler before drawing a sprite.
 static void SetSamplerCallback(const ImDrawList*, const ImDrawCmd* cmd)
 {
     auto* sampler = reinterpret_cast<ID3D11SamplerState*>(cmd ? cmd->UserCallbackData : nullptr);
-    if (g_context && sampler)
+    if (s_Context && sampler)
     {
-        g_context->PSSetSamplers(0, 1, &sampler);
+        s_Context->PSSetSamplers(0, 1, &sampler);
     }
 }
 
 static void SetBlendCallback(const ImDrawList*, const ImDrawCmd* cmd)
 {
     auto* blend = reinterpret_cast<ID3D11BlendState*>(cmd ? cmd->UserCallbackData : nullptr);
-    if (g_context && blend)
+    if (s_Context && blend)
     {
         constexpr float blendFactor[4] = {0, 0, 0, 0};
-        g_context->OMSetBlendState(blend, blendFactor, 0xFFFFFFFF);
+        s_Context->OMSetBlendState(blend, blendFactor, 0xFFFFFFFF);
     }
 }
 
 bool IsInitialized()
 {
-    return g_initialized.load(std::memory_order_acquire);
+    return s_Initialized.load(std::memory_order_acquire);
 }
 
 void Shutdown()
@@ -570,7 +551,7 @@ static const TextureInfo* GetTextureInfoForIndex(int style, int particleIndex)
 ImTextureID GetRandomTexture(int style, int particleIndex)
 {
     const TextureInfo* info = GetTextureInfoForIndex(style, particleIndex);
-    return info ? reinterpret_cast<ImTextureID>(info->srv) : ImTextureID{};
+    return info ? reinterpret_cast<ImTextureID>(info->srv.Get()) : ImTextureID{};
 }
 
 void DrawSpriteWithIndex(ImDrawList* list,
@@ -592,7 +573,7 @@ void DrawSpriteWithIndex(ImDrawList* list,
     {
         return;
     }
-    ImTextureID tex = reinterpret_cast<ImTextureID>(texInfo->srv);
+    ImTextureID tex = reinterpret_cast<ImTextureID>(texInfo->srv.Get());
 
     // Normalize display size for high-resolution textures.
     // 2K (2048px) sources should display at a visible size, not shrink to dots.
@@ -609,16 +590,16 @@ void DrawSpriteWithIndex(ImDrawList* list,
 
     // Use linear filtering for HD textures, point filtering for tiny sprites.
     ID3D11SamplerState* samplerToUse =
-        (texMaxDim > 64.0f && g_linearSampler) ? g_linearSampler : g_pointSampler;
+        (texMaxDim > 64.0f && s_LinearSampler) ? s_LinearSampler.Get() : s_PointSampler.Get();
 
     ID3D11BlendState* blendToUse = nullptr;
     switch (blendMode)
     {
         case BlendMode::Additive:
-            blendToUse = g_additiveBlend;
+            blendToUse = s_AdditiveBlend.Get();
             break;
         case BlendMode::Screen:
-            blendToUse = g_screenBlend;
+            blendToUse = s_ScreenBlend.Get();
             break;
         case BlendMode::Alpha:
         default:
@@ -693,9 +674,9 @@ void DrawSpriteWithIndex(ImDrawList* list,
 
 void PushAdditiveBlend(ImDrawList* dl)
 {
-    if (dl && g_additiveBlend)
+    if (dl && s_AdditiveBlend)
     {
-        dl->AddCallback(SetBlendCallback, g_additiveBlend);
+        dl->AddCallback(SetBlendCallback, s_AdditiveBlend.Get());
     }
 }
 

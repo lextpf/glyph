@@ -11,6 +11,7 @@
 #include <imgui_freetype.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
+#include <wrl/client.h>
 #include <exception>
 #include <mutex>
 
@@ -20,26 +21,26 @@
 namespace Hooks
 {
 // Atomic flag indicating whether ImGui has been initialized
-std::atomic<bool> initialized = false;
-std::atomic<bool> initializing = false;
+std::atomic<bool> s_Initialized = false;
+std::atomic<bool> s_Initializing = false;
 
 // Flag indicating whether mipmapped font atlas has been created
-std::atomic<bool> mipmapsGenerated = false;
+std::atomic<bool> s_MipmapsGenerated = false;
 
 // Flag indicating whether particle textures have been loaded
-std::atomic<bool> particleTexturesLoaded = false;
+std::atomic<bool> s_ParticleTexturesLoaded = false;
 
 // Flag indicating overlay should be rendered this frame
-std::atomic<bool> shouldRenderOverlay = false;
+std::atomic<bool> s_ShouldRenderOverlay = false;
 
 // Flag indicating overlay has been rendered this frame
-std::atomic<bool> overlayRenderedThisFrame = false;
+std::atomic<bool> s_OverlayRenderedThisFrame = false;
 
 // Render exception metrics (logged with throttling).
-std::atomic<uint32_t> renderExceptionCount = 0;
-std::atomic<bool> missingPresentLogged = false;
-std::atomic<bool> deviceChangeLogged = false;
-std::atomic<bool> backendReinitRequested = false;
+std::atomic<uint32_t> s_RenderExceptionCount = 0;
+std::atomic<bool> s_MissingPresentLogged = false;
+std::atomic<bool> s_DeviceChangeLogged = false;
+std::atomic<bool> s_BackendReinitRequested = false;
 static std::mutex& StateMutex()
 {
     static std::mutex instance;
@@ -47,17 +48,17 @@ static std::mutex& StateMutex()
 }
 
 // Stored D3D11 device for mipmap generation
-ID3D11Device* g_device = nullptr;
+Microsoft::WRL::ComPtr<ID3D11Device> g_Device;
 
 // Stored D3D11 context for mipmap generation
-ID3D11DeviceContext* g_context = nullptr;
+Microsoft::WRL::ComPtr<ID3D11DeviceContext> g_Context;
 
 // Stored swap chain for Present hook
-IDXGISwapChain* g_swapChain = nullptr;
+Microsoft::WRL::ComPtr<IDXGISwapChain> g_SwapChain;
 
 // Original Present function pointer
 using PresentFn = HRESULT(WINAPI*)(IDXGISwapChain*, UINT, UINT);
-std::atomic<PresentFn> g_originalPresent{nullptr};
+std::atomic<PresentFn> g_OriginalPresent{nullptr};
 
 // Forward declaration of Present hook
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
@@ -83,14 +84,15 @@ bool TryInstallPresentHook(IDXGISwapChain* swapChain)
 
     const auto currentPresent = reinterpret_cast<PresentFn>(vtable[8]);
     const auto ourPresent = reinterpret_cast<PresentFn>(&PresentHook);
+
+    // Hold the lock across both the original-pointer store and the vtable
+    // write so that concurrent Present calls never observe one without the other.
+    const std::lock_guard<std::mutex> lock(StateMutex());
+    if (currentPresent == ourPresent)
     {
-        const std::lock_guard<std::mutex> lock(StateMutex());
-        if (currentPresent == ourPresent)
-        {
-            return g_originalPresent.load(std::memory_order_relaxed) != nullptr;
-        }
-        g_originalPresent.store(currentPresent, std::memory_order_release);
+        return g_OriginalPresent.load(std::memory_order_relaxed) != nullptr;
     }
+    g_OriginalPresent.store(currentPresent, std::memory_order_release);
 
     DWORD oldProtect = 0;
     if (!VirtualProtect(&vtable[8], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
@@ -99,10 +101,7 @@ bool TryInstallPresentHook(IDXGISwapChain* swapChain)
         return false;
     }
     vtable[8] = reinterpret_cast<void*>(&PresentHook);
-    if (!VirtualProtect(&vtable[8], sizeof(void*), oldProtect, &oldProtect))
-    {
-        logger::warn("Hooks: Failed to restore Present vtable memory protection");
-    }
+    VirtualProtect(&vtable[8], sizeof(void*), oldProtect, &oldProtect);
     return true;
 }
 
@@ -113,7 +112,7 @@ struct CreateD3DAndSwapChain
     {
         func();
 
-        if (initialized.load(std::memory_order_acquire))
+        if (s_Initialized.load(std::memory_order_acquire))
         {
             // Detect runtime swap-chain/device changes and refresh cached pointers.
             auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -127,27 +126,27 @@ struct CreateD3DAndSwapChain
                 if (swapChain && device && context)
                 {
                     const std::lock_guard<std::mutex> lock(StateMutex());
-                    changed =
-                        (swapChain != g_swapChain || device != g_device || context != g_context);
+                    changed = (swapChain != g_SwapChain.Get() || device != g_Device.Get() ||
+                               context != g_Context.Get());
                     if (changed)
                     {
-                        g_swapChain = swapChain;
-                        g_device = device;
-                        g_context = context;
+                        g_SwapChain = swapChain;
+                        g_Device = device;
+                        g_Context = context;
                     }
                 }
                 if (changed)
                 {
                     ParticleTextures::Shutdown();
-                    mipmapsGenerated.store(false, std::memory_order_release);
-                    particleTexturesLoaded.store(false, std::memory_order_release);
-                    backendReinitRequested.store(true, std::memory_order_release);
+                    s_MipmapsGenerated.store(false, std::memory_order_release);
+                    s_ParticleTexturesLoaded.store(false, std::memory_order_release);
+                    s_BackendReinitRequested.store(true, std::memory_order_release);
                     if (!TryInstallPresentHook(swapChain))
                     {
                         logger::error(
                             "Hooks: Failed to (re)install Present hook on updated swapchain");
                     }
-                    if (!deviceChangeLogged.exchange(true, std::memory_order_acq_rel))
+                    if (!s_DeviceChangeLogged.exchange(true, std::memory_order_acq_rel))
                     {
                         logger::warn(
                             "Hooks: Detected renderer device/swapchain change, scheduling backend "
@@ -160,13 +159,13 @@ struct CreateD3DAndSwapChain
 
         // Ensure only one thread attempts initialization at a time.
         bool expected = false;
-        if (!initializing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        if (!s_Initializing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
         {
             return;
         }
         struct InitScope
         {
-            ~InitScope() { initializing.store(false, std::memory_order_release); }
+            ~InitScope() { s_Initializing.store(false, std::memory_order_release); }
         } _;
 
         // Get Skyrim's renderer singleton
@@ -209,8 +208,8 @@ struct CreateD3DAndSwapChain
         // Store for later mipmap generation
         {
             const std::lock_guard<std::mutex> lock(StateMutex());
-            g_device = device;
-            g_context = context;
+            g_Device = device;
+            g_Context = context;
         }
 
         bool contextCreated = false;
@@ -235,10 +234,10 @@ struct CreateD3DAndSwapChain
             }
             {
                 const std::lock_guard<std::mutex> lock(StateMutex());
-                g_device = nullptr;
-                g_context = nullptr;
-                g_swapChain = nullptr;
-                g_originalPresent.store(nullptr, std::memory_order_release);
+                g_Device.Reset();
+                g_Context.Reset();
+                g_SwapChain.Reset();
+                g_OriginalPresent.store(nullptr, std::memory_order_release);
             }
             ParticleTextures::Shutdown();
         };
@@ -329,7 +328,7 @@ struct CreateD3DAndSwapChain
         // Store swap chain and hook Present for post-upscaler rendering
         {
             const std::lock_guard<std::mutex> lock(StateMutex());
-            g_swapChain = swapChain;
+            g_SwapChain = swapChain;
         }
 
         if (!TryInstallPresentHook(swapChain))
@@ -340,7 +339,7 @@ struct CreateD3DAndSwapChain
         }
 
         // Mark initialization as complete
-        initialized.store(true, std::memory_order_release);
+        s_Initialized.store(true, std::memory_order_release);
     }
     static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -348,7 +347,7 @@ struct CreateD3DAndSwapChain
 // Render overlay immediately
 void RenderOverlayNow()
 {
-    if (!initialized.load(std::memory_order_acquire))
+    if (!s_Initialized.load(std::memory_order_acquire))
     {
         return;
     }
@@ -359,15 +358,15 @@ void RenderOverlayNow()
 
     try
     {
-        ID3D11Device* device = nullptr;
-        ID3D11DeviceContext* context = nullptr;
+        Microsoft::WRL::ComPtr<ID3D11Device> device;
+        Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
         {
             const std::lock_guard<std::mutex> lock(StateMutex());
-            device = g_device;
-            context = g_context;
+            device = g_Device;
+            context = g_Context;
         }
 
-        if (backendReinitRequested.exchange(false, std::memory_order_acq_rel))
+        if (s_BackendReinitRequested.exchange(false, std::memory_order_acq_rel))
         {
             if (!device || !context)
             {
@@ -375,15 +374,15 @@ void RenderOverlayNow()
                 return;
             }
             ImGui_ImplDX11_Shutdown();
-            if (!ImGui_ImplDX11_Init(device, context))
+            if (!ImGui_ImplDX11_Init(device.Get(), context.Get()))
             {
                 logger::error(
                     "Hooks: Failed to reinitialize ImGui DX11 backend after device change");
-                initialized.store(false, std::memory_order_release);
+                s_Initialized.store(false, std::memory_order_release);
                 return;
             }
-            mipmapsGenerated.store(false, std::memory_order_release);
-            particleTexturesLoaded.store(false, std::memory_order_release);
+            s_MipmapsGenerated.store(false, std::memory_order_release);
+            s_ParticleTexturesLoaded.store(false, std::memory_order_release);
             logger::info("Hooks: Reinitialized ImGui DX11 backend after device change");
         }
 
@@ -392,7 +391,7 @@ void RenderOverlayNow()
         ImGui_ImplWin32_NewFrame();
 
         // Generate mipmapped font atlas on first frame
-        if (!mipmapsGenerated.load(std::memory_order_acquire) && device && context)
+        if (!s_MipmapsGenerated.load(std::memory_order_acquire) && device && context)
         {
             auto& io = ImGui::GetIO();
             unsigned char* pixels = nullptr;
@@ -421,34 +420,34 @@ void RenderOverlayNow()
                 texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
                 texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
-                ID3D11Texture2D* fontTexture = nullptr;
-                if (SUCCEEDED(device->CreateTexture2D(&texDesc, nullptr, &fontTexture)))
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> fontTexture;
+                if (SUCCEEDED(
+                        device->CreateTexture2D(&texDesc, nullptr, fontTexture.GetAddressOf())))
                 {
-                    context->UpdateSubresource(fontTexture, 0, nullptr, pixels, width * 4, 0);
+                    context->UpdateSubresource(fontTexture.Get(), 0, nullptr, pixels, width * 4, 0);
 
                     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
                     srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
                     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                     srvDesc.Texture2D.MipLevels = mipLevels;
 
-                    ID3D11ShaderResourceView* fontSRV = nullptr;
-                    if (SUCCEEDED(
-                            device->CreateShaderResourceView(fontTexture, &srvDesc, &fontSRV)))
+                    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> fontSRV;
+                    if (SUCCEEDED(device->CreateShaderResourceView(
+                            fontTexture.Get(), &srvDesc, fontSRV.GetAddressOf())))
                     {
-                        context->GenerateMips(fontSRV);
+                        context->GenerateMips(fontSRV.Get());
                         if (io.Fonts->TexID)
                         {
-                            ((ID3D11ShaderResourceView*)io.Fonts->TexID)->Release();
+                            reinterpret_cast<ID3D11ShaderResourceView*>(io.Fonts->TexID)->Release();
                         }
-                        io.Fonts->SetTexID((ImTextureID)fontSRV);
+                        io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(fontSRV.Detach()));
                         mipmapsReady = true;
                     }
-                    fontTexture->Release();
                 }
             }
             if (mipmapsReady)
             {
-                mipmapsGenerated.store(true, std::memory_order_release);
+                s_MipmapsGenerated.store(true, std::memory_order_release);
             }
         }
 
@@ -459,12 +458,12 @@ void RenderOverlayNow()
         }
 
         // Load particle textures on first frame
-        if (useParticleTextures && !particleTexturesLoaded.load(std::memory_order_acquire) &&
+        if (useParticleTextures && !s_ParticleTexturesLoaded.load(std::memory_order_acquire) &&
             device)
         {
-            if (ParticleTextures::Initialize(device))
+            if (ParticleTextures::Initialize(device.Get()))
             {
-                particleTexturesLoaded.store(true, std::memory_order_release);
+                s_ParticleTexturesLoaded.store(true, std::memory_order_release);
             }
         }
 
@@ -493,11 +492,11 @@ void RenderOverlayNow()
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
         // Mark that overlay was rendered this frame
-        overlayRenderedThisFrame.store(true, std::memory_order_release);
+        s_OverlayRenderedThisFrame.store(true, std::memory_order_release);
     }
     catch (const std::exception& e)
     {
-        const uint32_t count = renderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+        const uint32_t count = s_RenderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count <= 5 || (count % 120) == 0)
         {
             logger::error("Hooks: Exception in RenderOverlayNow (#{}): {}", count, e.what());
@@ -505,7 +504,7 @@ void RenderOverlayNow()
     }
     catch (...)
     {
-        const uint32_t count = renderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+        const uint32_t count = s_RenderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count <= 5 || (count % 120) == 0)
         {
             logger::error("Hooks: Unknown exception in RenderOverlayNow (#{}).", count);
@@ -520,21 +519,21 @@ void RenderOverlayNow()
 // right before the original Present flips the backbuffer to screen.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-    if (shouldRenderOverlay.load(std::memory_order_acquire) &&
-        !overlayRenderedThisFrame.load(std::memory_order_acquire))
+    if (s_ShouldRenderOverlay.load(std::memory_order_acquire) &&
+        !s_OverlayRenderedThisFrame.load(std::memory_order_acquire))
     {
         RenderOverlayNow();
     }
 
     // Fast path: atomic load avoids the mutex for the common case.
-    PresentFn originalPresent = g_originalPresent.load(std::memory_order_acquire);
+    PresentFn originalPresent = g_OriginalPresent.load(std::memory_order_acquire);
 
     if (!originalPresent)
     {
         // Slow path: lock and re-read in case of a concurrent store.
         {
             const std::lock_guard<std::mutex> lock(StateMutex());
-            originalPresent = g_originalPresent.load(std::memory_order_relaxed);
+            originalPresent = g_OriginalPresent.load(std::memory_order_relaxed);
         }
 
         if (!originalPresent)
@@ -549,18 +548,18 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
                     if (candidate && candidate != reinterpret_cast<PresentFn>(&PresentHook))
                     {
                         const std::lock_guard<std::mutex> lock(StateMutex());
-                        if (!g_originalPresent.load(std::memory_order_relaxed))
+                        if (!g_OriginalPresent.load(std::memory_order_relaxed))
                         {
-                            g_originalPresent.store(candidate, std::memory_order_release);
+                            g_OriginalPresent.store(candidate, std::memory_order_release);
                         }
-                        originalPresent = g_originalPresent.load(std::memory_order_relaxed);
+                        originalPresent = g_OriginalPresent.load(std::memory_order_relaxed);
                     }
                 }
             }
 
             if (!originalPresent)
             {
-                if (!missingPresentLogged.exchange(true, std::memory_order_acq_rel))
+                if (!s_MissingPresentLogged.exchange(true, std::memory_order_acq_rel))
                 {
                     logger::error(
                         "Hooks: Missing original IDXGISwapChain::Present pointer, returning "
@@ -603,11 +602,11 @@ struct PostDisplay
     static void thunk(RE::IMenu* a_menu)
     {
         // Reset render flags at start of frame
-        shouldRenderOverlay.store(false, std::memory_order_release);
-        overlayRenderedThisFrame.store(false, std::memory_order_release);
+        s_ShouldRenderOverlay.store(false, std::memory_order_release);
+        s_OverlayRenderedThisFrame.store(false, std::memory_order_release);
 
         // Early exit checks
-        if (!initialized.load(std::memory_order_acquire) || !CanDrawOverlay())
+        if (!s_Initialized.load(std::memory_order_acquire) || !GameState::CanDrawOverlay())
         {
             func(a_menu);
             return;
@@ -628,12 +627,12 @@ struct PostDisplay
 
         // Check if overlay should be rendered
         bool shouldRender = Renderer::IsOverlayAllowedRT();
-        shouldRenderOverlay.store(shouldRender, std::memory_order_release);
+        s_ShouldRenderOverlay.store(shouldRender, std::memory_order_release);
 
         // Call the original PostDisplay function first
         func(a_menu);
 
-        if (shouldRender && !overlayRenderedThisFrame.load(std::memory_order_acquire))
+        if (shouldRender && !s_OverlayRenderedThisFrame.load(std::memory_order_acquire))
         {
             RenderOverlayNow();
         }

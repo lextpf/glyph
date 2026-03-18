@@ -1,4 +1,5 @@
 #include "Occlusion.h"
+
 #include "Settings.h"
 
 #include <RE/A/Actor.h>
@@ -69,10 +70,13 @@ bool HasLineOfSightToActor(RE::Actor* actor)
     return true;  // If check failed, assume visible
 }
 
-bool IsActorOccluded(RE::Actor* actor, RE::Actor* player, const RE::NiPoint3& actorWorldPos)
+bool IsActorOccluded(RE::Actor* actor,
+                     RE::Actor* player,
+                     const RE::NiPoint3& actorWorldPos,
+                     bool occlusionEnabled)
 {
     // Early out if occlusion is disabled
-    if (!Settings::EnableOcclusionCulling || !actor || !player)
+    if (!occlusionEnabled || !actor || !player)
     {
         return false;
     }

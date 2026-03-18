@@ -453,7 +453,8 @@ static void UpdateOcclusionForActor(ActorDrawData& d,
     }
 
     // Perform fresh occlusion check using nameplate world position
-    d.isOccluded = Occlusion::IsActorOccluded(a, player, d.worldPos);
+    d.isOccluded =
+        Occlusion::IsActorOccluded(a, player, d.worldPos, Settings::EnableOcclusionCulling);
     entry.lastCheckFrame = snapshotFrame;
     entry.cachedOccluded = d.isOccluded;
 }
@@ -486,7 +487,7 @@ static void UpdateSnapshot_GameThread()
     }
 
     // Check if we're allowed to draw the overlay (not in menus, loading, etc.)
-    const bool allow = CanDrawOverlay();
+    const bool allow = GameState::CanDrawOverlay();
     GetState().allowOverlay.store(allow, std::memory_order_release);
 
     if (!allow)
@@ -744,6 +745,12 @@ static float ExpApproachAlpha(float dt, float settleTime, float epsilon = .01f)
     return std::clamp(1.0f - std::pow(epsilon, dt / settleTime), .0f, 1.0f);
 }
 
+// Use effect parameter if positive, otherwise return fallback default.
+static constexpr float ParamOr(float p, float fallback)
+{
+    return p > .0f ? p : fallback;
+}
+
 static void ApplyTextEffect(ImDrawList* drawList,
                             ImFont* font,
                             float fontSize,
@@ -763,62 +770,63 @@ static void ApplyTextEffect(ImDrawList* drawList,
     switch (effect.type)
     {
         case Settings::EffectType::None:
-            // Solid color with outline
             TextEffects::AddTextOutline4(
                 drawList, font, fontSize, pos, text, colL, outlineColor, outlineWidth);
             break;
 
         case Settings::EffectType::Gradient:
-            TextEffects::AddTextOutline4Gradient(
-                drawList, font, fontSize, pos, text, colL, colR, outlineColor, outlineWidth);
+            TextEffects::WithOutline<TextEffects::AddTextHorizontalGradient>(
+                drawList, font, fontSize, pos, text, outlineColor, outlineWidth, colL, colR);
             break;
 
         case Settings::EffectType::VerticalGradient:
-            TextEffects::AddTextOutline4VerticalGradient(
-                drawList, font, fontSize, pos, text, colL, colR, outlineColor, outlineWidth);
+            TextEffects::WithOutline<TextEffects::AddTextVerticalGradient>(
+                drawList, font, fontSize, pos, text, outlineColor, outlineWidth, colL, colR);
             break;
 
         case Settings::EffectType::DiagonalGradient:
-            TextEffects::AddTextOutline4DiagonalGradient(drawList,
-                                                         font,
-                                                         fontSize,
-                                                         pos,
-                                                         text,
-                                                         colL,
-                                                         colR,
-                                                         ImVec2(effect.param1, effect.param2),
-                                                         outlineColor,
-                                                         outlineWidth);
-            break;
-
-        case Settings::EffectType::RadialGradient:
-            TextEffects::AddTextOutline4RadialGradient(drawList,
-                                                       font,
-                                                       fontSize,
-                                                       pos,
-                                                       text,
-                                                       colL,
-                                                       colR,
-                                                       outlineColor,
-                                                       outlineWidth,
-                                                       effect.param1);
-            break;
-
-        case Settings::EffectType::Shimmer:
-            TextEffects::AddTextOutline4Shimmer(
+            TextEffects::WithOutline<TextEffects::AddTextDiagonalGradient>(
                 drawList,
                 font,
                 fontSize,
                 pos,
                 text,
+                outlineColor,
+                outlineWidth,
+                colL,
+                colR,
+                ImVec2(effect.param1, effect.param2));
+            break;
+
+        case Settings::EffectType::RadialGradient:
+            TextEffects::WithOutline<TextEffects::AddTextRadialGradient>(drawList,
+                                                                         font,
+                                                                         fontSize,
+                                                                         pos,
+                                                                         text,
+                                                                         outlineColor,
+                                                                         outlineWidth,
+                                                                         colL,
+                                                                         colR,
+                                                                         effect.param1,
+                                                                         nullptr);
+            break;
+
+        case Settings::EffectType::Shimmer:
+            TextEffects::WithOutline<TextEffects::AddTextShimmer>(
+                drawList,
+                font,
+                fontSize,
+                pos,
+                text,
+                outlineColor,
+                outlineWidth,
                 colL,
                 colR,
                 highlight,
-                outlineColor,
-                outlineWidth,
                 phase01,
                 effect.param1,
-                effect.param2 > .0f ? effect.param2 * strength : strength);
+                ParamOr(effect.param2, 1.0f) * strength);
             break;
 
         case Settings::EffectType::ChromaticShimmer:
@@ -842,23 +850,22 @@ static void ApplyTextEffect(ImDrawList* drawList,
         case Settings::EffectType::PulseGradient:
         {
             float time = (float)ImGui::GetTime();
-            TextEffects::AddTextOutline4PulseGradient(drawList,
-                                                      font,
-                                                      fontSize,
-                                                      pos,
-                                                      text,
-                                                      colL,
-                                                      colR,
-                                                      time,
-                                                      effect.param1,
-                                                      effect.param2 * strength,
-                                                      outlineColor,
-                                                      outlineWidth);
+            TextEffects::WithOutline<TextEffects::AddTextPulseGradient>(drawList,
+                                                                        font,
+                                                                        fontSize,
+                                                                        pos,
+                                                                        text,
+                                                                        outlineColor,
+                                                                        outlineWidth,
+                                                                        colL,
+                                                                        colR,
+                                                                        time,
+                                                                        effect.param1,
+                                                                        effect.param2 * strength);
         }
         break;
 
         case Settings::EffectType::RainbowWave:
-            // Always draw outline first for consistency
             TextEffects::AddTextOutline4RainbowWave(drawList,
                                                     font,
                                                     fontSize,
@@ -892,75 +899,68 @@ static void ApplyTextEffect(ImDrawList* drawList,
             break;
 
         case Settings::EffectType::Aurora:
-            // Aurora effect: param1=speed, param2=waves, param3=intensity, param4=sway
-            // Creates flowing northern lights effect with left/right colors
-            TextEffects::AddTextOutline4Aurora(drawList,
-                                               font,
-                                               fontSize,
-                                               pos,
-                                               text,
-                                               colL,
-                                               colR,
-                                               outlineColor,
-                                               outlineWidth,
-                                               effect.param1 > .0f ? effect.param1 : .5f,
-                                               effect.param2 > .0f ? effect.param2 : 3.0f,
-                                               effect.param3 > .0f ? effect.param3 : 1.0f,
-                                               effect.param4 > .0f ? effect.param4 : .3f);
+            TextEffects::WithOutline<TextEffects::AddTextAurora>(drawList,
+                                                                 font,
+                                                                 fontSize,
+                                                                 pos,
+                                                                 text,
+                                                                 outlineColor,
+                                                                 outlineWidth,
+                                                                 colL,
+                                                                 colR,
+                                                                 ParamOr(effect.param1, .5f),
+                                                                 ParamOr(effect.param2, 3.0f),
+                                                                 ParamOr(effect.param3, 1.0f),
+                                                                 ParamOr(effect.param4, .3f));
             break;
 
         case Settings::EffectType::Sparkle:
-            // Sparkle effect: param1=density, param2=speed, param3=intensity
-            // Uses highlight color for sparkles
-            TextEffects::AddTextOutline4Sparkle(
+            TextEffects::WithOutline<TextEffects::AddTextSparkle>(
                 drawList,
                 font,
                 fontSize,
                 pos,
                 text,
+                outlineColor,
+                outlineWidth,
                 colL,
                 colR,
                 highlight,
-                outlineColor,
-                outlineWidth,
-                effect.param1 > .0f ? effect.param1 : .3f,
-                effect.param2 > .0f ? effect.param2 : 2.0f,
-                effect.param3 > .0f ? effect.param3 * strength : strength);
+                ParamOr(effect.param1, .3f),
+                ParamOr(effect.param2, 2.0f),
+                ParamOr(effect.param3, 1.0f) * strength);
             break;
 
         case Settings::EffectType::Plasma:
-            // Plasma effect: param1=freq1, param2=freq2, param3=speed
-            TextEffects::AddTextOutline4Plasma(drawList,
-                                               font,
-                                               fontSize,
-                                               pos,
-                                               text,
-                                               colL,
-                                               colR,
-                                               outlineColor,
-                                               outlineWidth,
-                                               effect.param1 > .0f ? effect.param1 : 2.0f,
-                                               effect.param2 > .0f ? effect.param2 : 3.0f,
-                                               effect.param3 > .0f ? effect.param3 : .5f);
+            TextEffects::WithOutline<TextEffects::AddTextPlasma>(drawList,
+                                                                 font,
+                                                                 fontSize,
+                                                                 pos,
+                                                                 text,
+                                                                 outlineColor,
+                                                                 outlineWidth,
+                                                                 colL,
+                                                                 colR,
+                                                                 ParamOr(effect.param1, 2.0f),
+                                                                 ParamOr(effect.param2, 3.0f),
+                                                                 ParamOr(effect.param3, .5f));
             break;
 
         case Settings::EffectType::Scanline:
-            // Scanline effect: param1=speed, param2=width, param3=intensity
-            // Uses highlight color for scanline
-            TextEffects::AddTextOutline4Scanline(
+            TextEffects::WithOutline<TextEffects::AddTextScanline>(
                 drawList,
                 font,
                 fontSize,
                 pos,
                 text,
+                outlineColor,
+                outlineWidth,
                 colL,
                 colR,
                 highlight,
-                outlineColor,
-                outlineWidth,
-                effect.param1 > .0f ? effect.param1 : .5f,
-                effect.param2 > .0f ? effect.param2 : .15f,
-                effect.param3 > .0f ? effect.param3 * strength : strength);
+                ParamOr(effect.param1, .5f),
+                ParamOr(effect.param2, .15f),
+                ParamOr(effect.param3, 1.0f) * strength);
             break;
     }
 }
@@ -1122,9 +1122,9 @@ static const Settings::TierDefinition& GetFallbackTier()
         t.minLevel = 1;
         t.maxLevel = 250;
         t.title = "Unknown";
-        t.leftColor[0] = t.leftColor[1] = t.leftColor[2] = 1.0f;
-        t.rightColor[0] = t.rightColor[1] = t.rightColor[2] = 1.0f;
-        t.highlightColor[0] = t.highlightColor[1] = t.highlightColor[2] = 1.0f;
+        t.leftColor = Settings::Color3::White();
+        t.rightColor = Settings::Color3::White();
+        t.highlightColor = Settings::Color3::White();
         t.titleEffect.type = Settings::EffectType::Gradient;
         t.nameEffect.type = Settings::EffectType::Gradient;
         t.levelEffect.type = Settings::EffectType::Gradient;
@@ -1290,11 +1290,11 @@ static LabelStyle ComputeLabelStyle(const ActorDrawData& d, float alpha, float t
     const float tierIntensity = under100 ? .5f : 1.0f;
 
     // Pastelize tier colors
-    auto Pastelize = [&](const float* c) -> ImVec4
+    auto Pastelize = [&](const Settings::Color3& c) -> ImVec4
     {
         const float t = Settings::NameColorMix + (1.0f - Settings::NameColorMix) * levelT;
         return ImVec4(
-            1.0f + (c[0] - 1.0f) * t, 1.0f + (c[1] - 1.0f) * t, 1.0f + (c[2] - 1.0f) * t, 1.0f);
+            1.0f + (c.r - 1.0f) * t, 1.0f + (c.g - 1.0f) * t, 1.0f + (c.b - 1.0f) * t, 1.0f);
     };
 
     style.Lc = Pastelize(tier.leftColor);
@@ -1326,8 +1326,8 @@ static LabelStyle ComputeLabelStyle(const ActorDrawData& d, float alpha, float t
     if (style.specialTitle)
     {
         const auto* st = style.specialTitle;
-        ImVec4 specialCol(st->color[0], st->color[1], st->color[2], 1.0f);
-        style.specialGlowColor = ImVec4(st->glowColor[0], st->glowColor[1], st->glowColor[2], 1.0f);
+        ImVec4 specialCol(st->color.r, st->color.g, st->color.b, 1.0f);
+        style.specialGlowColor = ImVec4(st->glowColor.r, st->glowColor.g, st->glowColor.b, 1.0f);
 
         style.Lc = specialCol;
         style.Rc = specialCol;
@@ -1357,7 +1357,7 @@ static LabelStyle ComputeLabelStyle(const ActorDrawData& d, float alpha, float t
     style.colRLevel = ImGui::ColorConvertFloat4ToU32(
         ImVec4(style.RcLevel.x, style.RcLevel.y, style.RcLevel.z, style.levelAlpha));
     style.highlight = ImGui::ColorConvertFloat4ToU32(ImVec4(
-        tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], style.effectAlpha));
+        tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.effectAlpha));
 
     const float outlineAlpha = TextEffects::Saturate(alpha);
     const float shadowAlpha = TextEffects::Saturate(alpha * .75f);
@@ -1422,9 +1422,9 @@ static LabelLayout ComputeLabelLayout(const ActorDrawData& d,
     }
 
     // Fonts
-    layout.fontName = GetFontAt(0);
-    layout.fontLevel = GetFontAt(1);
-    layout.fontTitle = GetFontAt(2);
+    layout.fontName = GetFontAt(RenderConstants::FONT_INDEX_NAME);
+    layout.fontLevel = GetFontAt(RenderConstants::FONT_INDEX_LEVEL);
+    layout.fontTitle = GetFontAt(RenderConstants::FONT_INDEX_TITLE);
     if (!layout.fontName || !layout.fontLevel || !layout.fontTitle)
     {
         return layout;
@@ -1620,15 +1620,15 @@ static void DrawParticles(ImDrawList* dl,
     ImU32 particleColor;
     if (style.specialTitle)
     {
-        particleColor = ImGui::ColorConvertFloat4ToU32(ImVec4(style.specialTitle->color[0],
-                                                              style.specialTitle->color[1],
-                                                              style.specialTitle->color[2],
+        particleColor = ImGui::ColorConvertFloat4ToU32(ImVec4(style.specialTitle->color.r,
+                                                              style.specialTitle->color.g,
+                                                              style.specialTitle->color.b,
                                                               1.0f));
     }
     else
     {
         particleColor = ImGui::ColorConvertFloat4ToU32(
-            ImVec4(tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], 1.0f));
+            ImVec4(tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, 1.0f));
     }
 
     float spreadX = (layout.nameplateWidth * .5f + Settings::ParticleSpread * 1.4f);
@@ -1677,83 +1677,83 @@ static void DrawParticles(ImDrawList* dl,
 
     if (showOrbs)
     {
-        TextEffects::DrawParticleAura(dl,
-                                      layout.nameplateCenter,
-                                      spreadX,
-                                      spreadY,
-                                      particleColor,
-                                      boostedParticleAlpha,
-                                      Settings::ParticleStyle::Orbs,
-                                      boostedParticleCount,
-                                      boostedParticleSize,
-                                      Settings::ParticleSpeed,
-                                      time,
-                                      slot++,
-                                      enabledStyles);
+        TextEffects::DrawParticleAura({dl,
+                                       layout.nameplateCenter,
+                                       spreadX,
+                                       spreadY,
+                                       particleColor,
+                                       boostedParticleAlpha,
+                                       Settings::ParticleStyle::Orbs,
+                                       boostedParticleCount,
+                                       boostedParticleSize,
+                                       Settings::ParticleSpeed,
+                                       time,
+                                       slot++,
+                                       enabledStyles});
     }
     if (showWisps)
     {
-        TextEffects::DrawParticleAura(dl,
-                                      layout.nameplateCenter,
-                                      spreadX * 1.15f,
-                                      spreadY * 1.15f,
-                                      particleColor,
-                                      boostedParticleAlpha,
-                                      Settings::ParticleStyle::Wisps,
-                                      boostedParticleCount,
-                                      boostedParticleSize,
-                                      Settings::ParticleSpeed,
-                                      time,
-                                      slot++,
-                                      enabledStyles);
+        TextEffects::DrawParticleAura({dl,
+                                       layout.nameplateCenter,
+                                       spreadX * 1.15f,
+                                       spreadY * 1.15f,
+                                       particleColor,
+                                       boostedParticleAlpha,
+                                       Settings::ParticleStyle::Wisps,
+                                       boostedParticleCount,
+                                       boostedParticleSize,
+                                       Settings::ParticleSpeed,
+                                       time,
+                                       slot++,
+                                       enabledStyles});
     }
     if (showRunes)
     {
-        TextEffects::DrawParticleAura(dl,
-                                      layout.nameplateCenter,
-                                      spreadX * .9f,
-                                      spreadY * .7f,
-                                      particleColor,
-                                      boostedParticleAlpha,
-                                      Settings::ParticleStyle::Runes,
-                                      std::max(4, boostedParticleCount / 2),
-                                      boostedParticleSize * 1.2f,
-                                      Settings::ParticleSpeed * .6f,
-                                      time,
-                                      slot++,
-                                      enabledStyles);
+        TextEffects::DrawParticleAura({dl,
+                                       layout.nameplateCenter,
+                                       spreadX * .9f,
+                                       spreadY * .7f,
+                                       particleColor,
+                                       boostedParticleAlpha,
+                                       Settings::ParticleStyle::Runes,
+                                       std::max(4, boostedParticleCount / 2),
+                                       boostedParticleSize * 1.2f,
+                                       Settings::ParticleSpeed * .6f,
+                                       time,
+                                       slot++,
+                                       enabledStyles});
     }
     if (showSparks)
     {
-        TextEffects::DrawParticleAura(dl,
-                                      layout.nameplateCenter,
-                                      spreadX,
-                                      spreadY * .8f,
-                                      particleColor,
-                                      boostedParticleAlpha,
-                                      Settings::ParticleStyle::Sparks,
-                                      boostedParticleCount,
-                                      boostedParticleSize * .7f,
-                                      Settings::ParticleSpeed * 1.5f,
-                                      time,
-                                      slot++,
-                                      enabledStyles);
+        TextEffects::DrawParticleAura({dl,
+                                       layout.nameplateCenter,
+                                       spreadX,
+                                       spreadY * .8f,
+                                       particleColor,
+                                       boostedParticleAlpha,
+                                       Settings::ParticleStyle::Sparks,
+                                       boostedParticleCount,
+                                       boostedParticleSize * .7f,
+                                       Settings::ParticleSpeed * 1.5f,
+                                       time,
+                                       slot++,
+                                       enabledStyles});
     }
     if (showStars)
     {
-        TextEffects::DrawParticleAura(dl,
-                                      layout.nameplateCenter,
-                                      spreadX,
-                                      spreadY,
-                                      particleColor,
-                                      boostedParticleAlpha,
-                                      Settings::ParticleStyle::Stars,
-                                      boostedParticleCount,
-                                      boostedParticleSize,
-                                      Settings::ParticleSpeed,
-                                      time,
-                                      slot++,
-                                      enabledStyles);
+        TextEffects::DrawParticleAura({dl,
+                                       layout.nameplateCenter,
+                                       spreadX,
+                                       spreadY,
+                                       particleColor,
+                                       boostedParticleAlpha,
+                                       Settings::ParticleStyle::Stars,
+                                       boostedParticleCount,
+                                       boostedParticleSize,
+                                       Settings::ParticleSpeed,
+                                       time,
+                                       slot++,
+                                       enabledStyles});
     }
 }
 
@@ -1781,7 +1781,9 @@ static void DrawOrnaments(ImDrawList* dl,
          (style.specialTitle && style.specialTitle->forceOrnaments && hasOrnaments)) &&
         lodEffectsFactor > .01f;
     auto& ornIo = ImGui::GetIO();
-    ImFont* ornamentFont = (ornIo.Fonts->Fonts.Size >= 4) ? ornIo.Fonts->Fonts[3] : nullptr;
+    ImFont* ornamentFont = (ornIo.Fonts->Fonts.Size > RenderConstants::FONT_INDEX_ORNAMENT)
+                               ? ornIo.Fonts->Fonts[RenderConstants::FONT_INDEX_ORNAMENT]
+                               : nullptr;
     if (!showOrnaments || Settings::OrnamentFontPath.empty() || !ornamentFont)
     {
         return;
@@ -1846,8 +1848,8 @@ static void DrawOrnaments(ImDrawList* dl,
         ImGui::ColorConvertFloat4ToU32(ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha));
     ImU32 ornColR =
         ImGui::ColorConvertFloat4ToU32(ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, style.alpha));
-    ImU32 ornHighlight = ImGui::ColorConvertFloat4ToU32(ImVec4(
-        tier.highlightColor[0], tier.highlightColor[1], tier.highlightColor[2], style.alpha));
+    ImU32 ornHighlight = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.alpha));
     ImU32 ornOutline = IM_COL32(0, 0, 0, (int)(style.alpha * 255.0f));
     float ornOutlineWidth = style.outlineWidth * (ornamentSize / layout.nameFontSize);
 
@@ -2143,78 +2145,54 @@ static void DrawMainLineSegments(ImDrawList* dl,
     }
 }
 
-static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSplitter* splitter)
+// Distance-based fade, LOD, and scale factors for a label.
+struct DistanceFactors
 {
-    auto it = GetState().cache.find(d.formID);
-    if (it == GetState().cache.end())
-    {
-        ActorCache newEntry{};
-        newEntry.lastSeenFrame = GetState().frame;
-        it = GetState().cache.emplace(d.formID, newEntry).first;
-    }
-    auto& entry = it->second;
-    const uint32_t prevLastSeenFrame = entry.lastSeenFrame;
+    float alphaTarget;       // Target alpha from distance fade
+    float textScaleTarget;   // Target font scale from distance
+    float lodTitleFactor;    // LOD multiplier for title visibility [0,1]
+    float lodEffectsFactor;  // LOD multiplier for particles/ornaments [0,1]
+};
 
-    if (entry.cachedName != d.name)
-    {
-        entry.cachedName = d.name;
-        entry.typewriterTime = .0f;
-        entry.typewriterComplete = false;
-    }
-
-    constexpr uint32_t REENTRY_THRESHOLD = 30;
-    if (entry.initialized && entry.typewriterComplete)
-    {
-        uint32_t framesSinceLastSeen = GetState().frame - prevLastSeenFrame;
-        bool becameVisible = entry.wasOccluded && !d.isOccluded;
-        if (framesSinceLastSeen >= REENTRY_THRESHOLD || becameVisible)
-        {
-            entry.typewriterTime = .0f;
-            entry.typewriterComplete = false;
-        }
-    }
-
-    entry.lastSeenFrame = GetState().frame;
-
-    RE::NiPoint3 cameraPos{};
-    bool hasCameraPos = false;
-    if (auto pc = RE::PlayerCamera::GetSingleton(); pc && pc->cameraRoot)
-    {
-        cameraPos = pc->cameraRoot->world.translate;
-        hasCameraPos = true;
-    }
-
+// Compute distance-based visual factors (fade, LOD, scale).
+static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d)
+{
+    DistanceFactors df{};
     const float dist = d.distToPlayer;
-    const float dt = ImGui::GetIO().DeltaTime;
 
+    // Alpha fade using squared smoothstep
     const float fadeRange = std::max(1.0f, Settings::FadeEndDistance - Settings::FadeStartDistance);
     float fadeT = TextEffects::SmoothStep((dist - Settings::FadeStartDistance) / fadeRange);
-    float alphaTarget = 1.0f - fadeT;
-    alphaTarget = alphaTarget * alphaTarget;
+    df.alphaTarget = 1.0f - fadeT;
+    df.alphaTarget = df.alphaTarget * df.alphaTarget;
 
-    float lodTitleFactor = 1.0f;
-    float lodEffectsFactor = 1.0f;
+    // LOD factors
+    df.lodTitleFactor = 1.0f;
+    df.lodEffectsFactor = 1.0f;
 
     if (Settings::Visual().EnableLOD)
     {
         float transRange = std::max(1.0f, Settings::Visual().LODTransitionRange);
         float titleFadeT =
             TextEffects::Saturate((dist - Settings::Visual().LODFarDistance) / transRange);
-        lodTitleFactor = 1.0f - TextEffects::SmoothStep(titleFadeT);
+        df.lodTitleFactor = 1.0f - TextEffects::SmoothStep(titleFadeT);
         float effectsFadeT =
             TextEffects::Saturate((dist - Settings::Visual().LODMidDistance) / transRange);
-        lodEffectsFactor = 1.0f - TextEffects::SmoothStep(effectsFadeT);
+        df.lodEffectsFactor = 1.0f - TextEffects::SmoothStep(effectsFadeT);
     }
 
+    // Font size scale with sqrt falloff
     const float scaleRange =
         std::max(1.0f, Settings::ScaleEndDistance - Settings::ScaleStartDistance);
     float scaleT = TextEffects::Saturate((dist - Settings::ScaleStartDistance) / scaleRange);
     constexpr float SCALE_GAMMA = .5f;
     scaleT = std::pow(scaleT, SCALE_GAMMA);
-    float textScaleTarget = 1.0f + (Settings::MinimumScale - 1.0f) * scaleT;
+    df.textScaleTarget = 1.0f + (Settings::MinimumScale - 1.0f) * scaleT;
 
-    if (hasCameraPos)
+    // Also factor in camera distance for more accurate near-camera scaling
+    if (auto pc = RE::PlayerCamera::GetSingleton(); pc && pc->cameraRoot)
     {
+        RE::NiPoint3 cameraPos = pc->cameraRoot->world.translate;
         const float dx = d.worldPos.x - cameraPos.x;
         const float dy = d.worldPos.y - cameraPos.y;
         const float dz = d.worldPos.z - cameraPos.z;
@@ -2223,28 +2201,37 @@ static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSp
             TextEffects::Saturate((camDist - Settings::ScaleStartDistance) / scaleRange);
         camScaleT = std::pow(camScaleT, SCALE_GAMMA);
         float camTextScale = 1.0f + (Settings::MinimumScale - 1.0f) * camScaleT;
-        textScaleTarget = std::min(textScaleTarget, camTextScale);
+        df.textScaleTarget = std::min(df.textScaleTarget, camTextScale);
     }
 
+    // Enforce minimum readable size
     if (Settings::Visual().MinimumPixelHeight > .0f)
     {
         float minScale = Settings::Visual().MinimumPixelHeight / Settings::NameFontSize;
-        textScaleTarget = std::max(textScaleTarget, minScale);
+        df.textScaleTarget = std::max(df.textScaleTarget, minScale);
     }
 
-    RE::NiPoint3 screenPos;
-    if (!WorldToScreen(d.worldPos, screenPos))
-    {
-        return;
-    }
+    return df;
+}
 
+// Update cache entry smoothing and return whether the label is visible.
+//
+// On first frame, snaps values directly. On subsequent frames, applies
+// framerate-independent exponential smoothing to alpha, scale, position,
+// and occlusion. Returns false if the label should be culled.
+static bool UpdateCacheSmoothing(ActorCache& entry,
+                                 const ActorDrawData& d,
+                                 const DistanceFactors& df,
+                                 const RE::NiPoint3& screenPos,
+                                 float dt)
+{
     float occlusionTarget = d.isOccluded ? .0f : 1.0f;
 
     if (!entry.initialized)
     {
         entry.initialized = true;
-        entry.alphaSmooth = alphaTarget;
-        entry.textSizeScale = textScaleTarget;
+        entry.alphaSmooth = df.alphaTarget;
+        entry.textSizeScale = df.textScaleTarget;
         entry.smooth = ImVec2(screenPos.x, screenPos.y);
 
         ImVec2 initPos(screenPos.x, screenPos.y);
@@ -2266,8 +2253,8 @@ static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSp
                                  : ExpApproachAlpha(dt, Settings::PositionSettleTime);
         float oLerp = ExpApproachAlpha(dt, Settings::OcclusionSettleTime);
 
-        entry.alphaSmooth += (alphaTarget - entry.alphaSmooth) * aLerp;
-        entry.textSizeScale += (textScaleTarget - entry.textSizeScale) * sLerp;
+        entry.alphaSmooth += (df.alphaTarget - entry.alphaSmooth) * aLerp;
+        entry.textSizeScale += (df.textScaleTarget - entry.textSizeScale) * sLerp;
         entry.occlusionSmooth += (occlusionTarget - entry.occlusionSmooth) * oLerp;
 
         ImVec2 targetPos(screenPos.x, screenPos.y);
@@ -2282,9 +2269,9 @@ static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSp
         smoothedPos.x = expSmoothed.x + (maSmoothed.x - expSmoothed.x) * blend;
         smoothedPos.y = expSmoothed.y + (maSmoothed.y - expSmoothed.y) * blend;
 
-        float dx = targetPos.x - entry.smooth.x;
-        float dy = targetPos.y - entry.smooth.y;
-        float moveDist = std::sqrt(dx * dx + dy * dy);
+        float moveDx = targetPos.x - entry.smooth.x;
+        float moveDy = targetPos.y - entry.smooth.y;
+        float moveDist = std::sqrt(moveDx * moveDx + moveDy * moveDy);
 
         if (moveDist > Settings::Visual().LargeMovementThreshold)
         {
@@ -2307,11 +2294,64 @@ static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSp
     entry.wasOccluded = d.isOccluded;
 
     const float alpha = entry.alphaSmooth * entry.occlusionSmooth;
-    if (alpha <= .02f)
+    return alpha > .02f;
+}
+
+static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSplitter* splitter)
+{
+    // Look up or create cache entry
+    auto it = GetState().cache.find(d.formID);
+    if (it == GetState().cache.end())
+    {
+        ActorCache newEntry{};
+        newEntry.lastSeenFrame = GetState().frame;
+        it = GetState().cache.emplace(d.formID, newEntry).first;
+    }
+    auto& entry = it->second;
+    const uint32_t prevLastSeenFrame = entry.lastSeenFrame;
+
+    // Detect name changes and reset typewriter
+    if (entry.cachedName != d.name)
+    {
+        entry.cachedName = d.name;
+        entry.typewriterTime = .0f;
+        entry.typewriterComplete = false;
+    }
+
+    // Reset typewriter on re-entry (actor reappearing or becoming unoccluded)
+    constexpr uint32_t REENTRY_THRESHOLD = 30;
+    if (entry.initialized && entry.typewriterComplete)
+    {
+        uint32_t framesSinceLastSeen = GetState().frame - prevLastSeenFrame;
+        bool becameVisible = entry.wasOccluded && !d.isOccluded;
+        if (framesSinceLastSeen >= REENTRY_THRESHOLD || becameVisible)
+        {
+            entry.typewriterTime = .0f;
+            entry.typewriterComplete = false;
+        }
+    }
+
+    entry.lastSeenFrame = GetState().frame;
+
+    // Compute distance-based visual factors
+    DistanceFactors df = ComputeDistanceFactors(d);
+
+    // Project to screen space
+    RE::NiPoint3 screenPos;
+    if (!WorldToScreen(d.worldPos, screenPos))
     {
         return;
     }
 
+    // Update smoothing and check visibility
+    const float dt = ImGui::GetIO().DeltaTime;
+    if (!UpdateCacheSmoothing(entry, d, df, screenPos, dt))
+    {
+        return;
+    }
+
+    // Cull off-screen labels
+    const float alpha = entry.alphaSmooth * entry.occlusionSmooth;
     const float textSizeScale = entry.textSizeScale;
 
     auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -2327,14 +2367,13 @@ static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSp
         return;
     }
 
+    // Compute style, layout, and dispatch to sub-renderers
     const float time = (float)ImGui::GetTime();
-
     LabelStyle style = ComputeLabelStyle(d, alpha, time);
 
-    // Compute per-font outline widths
-    ImFont* nameFont = GetFontAt(0);
-    ImFont* levelFont = GetFontAt(1);
-    ImFont* titleFont = GetFontAt(2);
+    ImFont* nameFont = GetFontAt(RenderConstants::FONT_INDEX_NAME);
+    ImFont* levelFont = GetFontAt(RenderConstants::FONT_INDEX_LEVEL);
+    ImFont* titleFont = GetFontAt(RenderConstants::FONT_INDEX_TITLE);
     if (!nameFont || !levelFont || !titleFont)
     {
         return;
@@ -2346,9 +2385,9 @@ static void DrawLabel(const ActorDrawData& d, ImDrawList* drawList, ImDrawListSp
 
     LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale);
 
-    DrawParticles(drawList, d, style, layout, lodEffectsFactor, time, splitter);
-    DrawOrnaments(drawList, d, style, layout, lodEffectsFactor, time, splitter);
-    DrawTitleText(drawList, d, style, layout, lodTitleFactor, splitter);
+    DrawParticles(drawList, d, style, layout, df.lodEffectsFactor, time, splitter);
+    DrawOrnaments(drawList, d, style, layout, df.lodEffectsFactor, time, splitter);
+    DrawTitleText(drawList, d, style, layout, df.lodTitleFactor, splitter);
     DrawMainLineSegments(drawList, d, style, layout, splitter);
 }
 
@@ -2382,6 +2421,13 @@ static void DrawDebugOverlay()
     ctx.lastReloadTime = GetState().lastReloadTime;
     ctx.actorCacheEntrySize = sizeof(ActorCache);
     ctx.actorDrawDataSize = sizeof(ActorDrawData);
+    ctx.occlusionEnabled = Settings::EnableOcclusionCulling;
+    ctx.glowEnabled = Settings::EnableGlow;
+    ctx.typewriterEnabled = Settings::EnableTypewriter;
+    ctx.hidePlayer = Settings::HidePlayer;
+    ctx.verticalOffset = Settings::VerticalOffset;
+    ctx.tierCount = Settings::Tiers.size();
+    ctx.reloadKey = Settings::ReloadKey;
 
     DebugOverlay::Render(ctx);
 }
@@ -2555,7 +2601,7 @@ void Draw()
     HandleHotReload();
     const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
 
-    if (!CanDrawOverlay())
+    if (!GameState::CanDrawOverlay())
     {
         GetState().wasInInvalidState = true;
         return;

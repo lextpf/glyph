@@ -94,6 +94,15 @@ struct Context
     float lastReloadTime = -10.0f;   ///< Time of last settings reload
     size_t actorCacheEntrySize = 0;  ///< sizeof(ActorCache) for memory estimate
     size_t actorDrawDataSize = 0;    ///< sizeof(ActorDrawData) for memory estimate
+
+    // Settings snapshot (populated under Settings::Mutex() by caller)
+    bool occlusionEnabled = false;
+    bool glowEnabled = false;
+    bool typewriterEnabled = false;
+    bool hidePlayer = false;
+    float verticalOffset = .0f;
+    size_t tierCount = 0;
+    int reloadKey = 0;
 };
 
 /**

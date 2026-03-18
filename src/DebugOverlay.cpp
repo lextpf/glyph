@@ -1,5 +1,4 @@
 #include "DebugOverlay.h"
-#include "Settings.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -46,8 +45,8 @@ void UpdateFrameStats(Stats& stats,
 // Called from the render thread within an active ImGui frame.
 void Render(const Context& ctx)
 {
-    // Early out if disabled or no stats available
-    if (!Settings::EnableDebugOverlay || !ctx.stats)
+    // Early out if no stats available (caller already checks EnableDebugOverlay)
+    if (!ctx.stats)
     {
         return;
     }
@@ -147,16 +146,16 @@ void Render(const Context& ctx)
 
         // Shows current INI settings state for quick verification
         ImGui::TextColored(ImVec4(1.0f, .8f, .4f, 1.0f), "Settings");
-        ImGui::Text("Occlusion: %s", Settings::EnableOcclusionCulling ? "On" : "Off");
-        ImGui::Text("Glow:      %s", Settings::EnableGlow ? "On" : "Off");
-        ImGui::Text("Typewriter:%s", Settings::EnableTypewriter ? "On" : "Off");
-        ImGui::Text("HidePlayer:%s", Settings::HidePlayer ? "On" : "Off");
-        ImGui::Text("V.Offset:  %.1f", Settings::VerticalOffset);  // Nameplate height offset
-        ImGui::Text("Tiers:     %zu", Settings::Tiers.size());     // Color tier definitions
-        if (Settings::ReloadKey > 0)
+        ImGui::Text("Occlusion: %s", ctx.occlusionEnabled ? "On" : "Off");
+        ImGui::Text("Glow:      %s", ctx.glowEnabled ? "On" : "Off");
+        ImGui::Text("Typewriter:%s", ctx.typewriterEnabled ? "On" : "Off");
+        ImGui::Text("HidePlayer:%s", ctx.hidePlayer ? "On" : "Off");
+        ImGui::Text("V.Offset:  %.1f", ctx.verticalOffset);  // Nameplate height offset
+        ImGui::Text("Tiers:     %zu", ctx.tierCount);        // Color tier definitions
+        if (ctx.reloadKey > 0)
         {
             // Show virtual key code for hot reload (e.g., 0x74 = F5)
-            ImGui::Text("Reload Key: 0x%X", Settings::ReloadKey);
+            ImGui::Text("Reload Key: 0x%X", ctx.reloadKey);
         }
         else
         {

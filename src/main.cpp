@@ -217,7 +217,9 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
     using namespace std::literals;
 
     SKSE::Init(a_skse);
-    SKSE::AllocTrampoline(1 << 8);
+
+    static constexpr std::size_t TRAMPOLINE_SIZE = 256;
+    SKSE::AllocTrampoline(TRAMPOLINE_SIZE);
 
     // Setup logging
     auto path = logger::log_directory();
