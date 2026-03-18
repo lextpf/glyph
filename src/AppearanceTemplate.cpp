@@ -1,4 +1,6 @@
 #include "AppearanceTemplate.h"
+
+#include "PCH.h"
 #include "Settings.h"
 
 #include <SKSE/SKSE.h>
@@ -84,7 +86,22 @@ std::unordered_set<void*>& OwnedTintLayers()
 void ResetAppliedFlag()
 {
     SetAppliedState(false);
-    SKSE::log::info("AppearanceTemplate: Applied flag reset");
+    logger::info("AppearanceTemplate: Applied flag reset");
+}
+
+static void CleanupOwnedAllocations()
+{
+    std::lock_guard<std::mutex> lock(GetOwnedAllocationMutex());
+    for (auto* ptr : OwnedHeadPartArrays())
+    {
+        RE::free(ptr);
+    }
+    OwnedHeadPartArrays().clear();
+    for (auto* ptr : OwnedTintLayers())
+    {
+        RE::free(ptr);
+    }
+    OwnedTintLayers().clear();
 }
 
 // Stubs for overlay interface functions
@@ -96,7 +113,7 @@ void RetryNiOverrideInterface()
 }
 void TestOverlayOnPlayer()
 {
-    SKSE::log::info("Overlay system not implemented");
+    logger::info("Overlay system not implemented");
 }
 
 // Forward declarations
@@ -129,8 +146,8 @@ static RE::Actor* FindActorByBase(RE::TESNPC* npc)
         }
         if (actor->GetActorBase() == npc)
         {
-            SKSE::log::debug("AppearanceTemplate: Found loaded actor for NPC {:08X}",
-                             npc->GetFormID());
+            logger::debug("AppearanceTemplate: Found loaded actor for NPC {:08X}",
+                          npc->GetFormID());
             return actor;
         }
     }
@@ -173,21 +190,21 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
 {
     if (!templateNPC)
     {
-        SKSE::log::error("AppearanceTemplate: ApplyFaceGen called with null template");
+        logger::error("AppearanceTemplate: ApplyFaceGen called with null template");
         return false;
     }
 
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player)
     {
-        SKSE::log::error("AppearanceTemplate: Player not available for FaceGen");
+        logger::error("AppearanceTemplate: Player not available for FaceGen");
         return false;
     }
 
     auto playerBase = player->GetActorBase();
     if (!playerBase)
     {
-        SKSE::log::error("AppearanceTemplate: Player base not available for FaceGen");
+        logger::error("AppearanceTemplate: Player base not available for FaceGen");
         return false;
     }
 
@@ -195,7 +212,7 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
     auto faceGenManager = RE::BSFaceGenManager::GetSingleton();
     if (!faceGenManager)
     {
-        SKSE::log::warn("AppearanceTemplate: BSFaceGenManager not available");
+        logger::warn("AppearanceTemplate: BSFaceGenManager not available");
         return false;
     }
 
@@ -235,8 +252,8 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
         if (auto* f = lookupFile(faceGenPluginOverride))
         {
             candidates.push_back(f);
-            SKSE::log::info("AppearanceTemplate: Using INI override for FaceGen plugin: {}",
-                            f->fileName);
+            logger::info("AppearanceTemplate: Using INI override for FaceGen plugin: {}",
+                         f->fileName);
         }
     }
 
@@ -319,32 +336,32 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
 
         if (meshStream.good())
         {
-            SKSE::log::info("AppearanceTemplate: Found FaceGen mesh: {}", meshPath);
-            SKSE::log::info("AppearanceTemplate: FaceGen lookup - plugin: {}, FormID: {:08X}",
-                            plugin->fileName,
-                            faceID);
+            logger::info("AppearanceTemplate: Found FaceGen mesh: {}", meshPath);
+            logger::info("AppearanceTemplate: FaceGen lookup - plugin: {}, FormID: {:08X}",
+                         plugin->fileName,
+                         faceID);
             meshFound = true;
             break;
         }
         else
         {
-            SKSE::log::debug("AppearanceTemplate: FaceGen not found at: {}", meshPath);
+            logger::debug("AppearanceTemplate: FaceGen not found at: {}", meshPath);
         }
     }
 
     if (!meshFound)
     {
-        SKSE::log::warn("AppearanceTemplate: FaceGen mesh not found!");
+        logger::warn("AppearanceTemplate: FaceGen mesh not found!");
         if (!triedPrimary.empty())
         {
-            SKSE::log::warn("AppearanceTemplate: Tried primary path: {}", triedPrimary);
+            logger::warn("AppearanceTemplate: Tried primary path: {}", triedPrimary);
         }
         if (!triedSecondary.empty() && triedSecondary != triedPrimary)
         {
-            SKSE::log::warn("AppearanceTemplate: Tried fallback path: {}", triedSecondary);
+            logger::warn("AppearanceTemplate: Tried fallback path: {}", triedSecondary);
         }
-        SKSE::log::warn("AppearanceTemplate: Falling back to record-only appearance copy");
-        SKSE::log::warn(
+        logger::warn("AppearanceTemplate: Falling back to record-only appearance copy");
+        logger::warn(
             "AppearanceTemplate: To fix, ensure FaceGen files exist or set TemplateFaceGenPlugin "
             "in INI");
         return false;
@@ -356,16 +373,16 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
         RE::BSResourceNiBinaryStream tintStream(tintPath.c_str());
         tintExists = tintStream.good();
     }
-    SKSE::log::info("AppearanceTemplate: FaceGen tint exists: {}", tintExists ? "yes" : "no");
+    logger::info("AppearanceTemplate: FaceGen tint exists: {}", tintExists ? "yes" : "no");
 
     // Apply FaceGen by setting faceNPC to the template
     // This tells the game where to load FaceGen data from
     playerBase->faceNPC = templateNPC;
-    SKSE::log::info("AppearanceTemplate: Set faceNPC to template ({:08X})", resolvedFormID);
+    logger::info("AppearanceTemplate: Set faceNPC to template ({:08X})", resolvedFormID);
 
     if (tintExists)
     {
-        SKSE::log::info("AppearanceTemplate: FaceGen tint will be loaded from: {}", tintPath);
+        logger::info("AppearanceTemplate: FaceGen tint will be loaded from: {}", tintPath);
     }
 
     return true;
@@ -376,6 +393,10 @@ static RE::FormID ParseHexFormID(const std::string& str)
     if (str.empty())
     {
         throw std::invalid_argument("empty form id");
+    }
+    if (str[0] == '-' || str[0] == '+')
+    {
+        throw std::invalid_argument("form id must not have a sign prefix");
     }
     size_t consumed = 0;
     const unsigned long long parsed = std::stoull(str, &consumed, 16);
@@ -439,43 +460,42 @@ RE::FormID ResolveFormID(const std::string& formIdStr, const std::string& plugin
     }
     catch (const std::exception& e)
     {
-        SKSE::log::error("AppearanceTemplate: Invalid FormID format '{}': {}", formIdStr, e.what());
+        logger::error("AppearanceTemplate: Invalid FormID format '{}': {}", formIdStr, e.what());
         return 0;
     }
 
     auto dataHandler = RE::TESDataHandler::GetSingleton();
     if (!dataHandler)
     {
-        SKSE::log::error("AppearanceTemplate: TESDataHandler not available");
+        logger::error("AppearanceTemplate: TESDataHandler not available");
         return 0;
     }
 
     const RE::TESFile* plugin = FindPluginByName(dataHandler, pluginName);
     if (!plugin)
     {
-        SKSE::log::error("AppearanceTemplate: Plugin not found: {}", pluginName);
+        logger::error("AppearanceTemplate: Plugin not found: {}", pluginName);
         return 0;
     }
 
     RE::FormID resolvedFormID = BuildFormID(plugin, baseFormID);
     if (resolvedFormID == 0)
     {
-        SKSE::log::error(
-            "AppearanceTemplate: Plugin {} has invalid load index for FormID resolution",
-            pluginName);
+        logger::error("AppearanceTemplate: Plugin {} has invalid load index for FormID resolution",
+                      pluginName);
         return 0;
     }
     if (RE::TESForm::LookupByID(resolvedFormID))
     {
-        SKSE::log::info("AppearanceTemplate: Resolved {}|{} to FormID {:08X}",
-                        formIdStr,
-                        pluginName,
-                        resolvedFormID);
+        logger::info("AppearanceTemplate: Resolved {}|{} to FormID {:08X}",
+                     formIdStr,
+                     pluginName,
+                     resolvedFormID);
         return resolvedFormID;
     }
 
     // Do not scan every plugin for fallback resolution: that can silently pick the wrong record.
-    SKSE::log::error(
+    logger::error(
         "AppearanceTemplate: Failed to resolve {} in configured plugin {} (candidate {:08X})",
         formIdStr,
         pluginName,
@@ -518,9 +538,9 @@ bool IsRaceCompatible(RE::TESNPC* templateNPC)
 
     // Check if races are in the same race group (e.g., human races)
     // For safety, we'll just check if they're the same
-    SKSE::log::warn("AppearanceTemplate: Race mismatch - Player: {}, Template: {}",
-                    playerRace->GetFormEditorID() ? playerRace->GetFormEditorID() : "Unknown",
-                    templateRace->GetFormEditorID() ? templateRace->GetFormEditorID() : "Unknown");
+    logger::warn("AppearanceTemplate: Race mismatch - Player: {}, Template: {}",
+                 playerRace->GetFormEditorID() ? playerRace->GetFormEditorID() : "Unknown",
+                 templateRace->GetFormEditorID() ? templateRace->GetFormEditorID() : "Unknown");
 
     return false;
 }
@@ -529,44 +549,47 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
 {
     if (!templateNPC)
     {
-        SKSE::log::error("AppearanceTemplate: Template NPC is null");
+        logger::error("AppearanceTemplate: Template NPC is null");
         return false;
     }
 
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player)
     {
-        SKSE::log::error("AppearanceTemplate: Player not available");
+        logger::error("AppearanceTemplate: Player not available");
         return false;
     }
 
     auto playerBase = player->GetActorBase();
     if (!playerBase)
     {
-        SKSE::log::error("AppearanceTemplate: Player base actor not available");
+        logger::error("AppearanceTemplate: Player base actor not available");
         return false;
     }
-    const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+    bool copySkin = false;
+    {
+        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+        copySkin = Settings::TemplateCopySkin;
+    }
 
-    SKSE::log::info("AppearanceTemplate: Copying appearance from {} to player",
-                    templateNPC->GetName() ? templateNPC->GetName() : "Unknown NPC");
+    logger::info("AppearanceTemplate: Copying appearance from {} to player",
+                 templateNPC->GetName() ? templateNPC->GetName() : "Unknown NPC");
 
     const bool raceCompatible = IsRaceCompatible(templateNPC);
     if (!includeRace && !raceCompatible)
     {
-        SKSE::log::error(
+        logger::error(
             "AppearanceTemplate: Aborting copy due to race mismatch with "
             "TemplateIncludeRace=false");
-        SKSE::log::error(
+        logger::error(
             "AppearanceTemplate: Enable TemplateIncludeRace to safely copy race-specific head "
             "data");
         return false;
     }
     if (templateNPC->numHeadParts > 0 && !templateNPC->headParts)
     {
-        SKSE::log::error(
-            "AppearanceTemplate: Template has numHeadParts={} but null headParts array",
-            templateNPC->numHeadParts);
+        logger::error("AppearanceTemplate: Template has numHeadParts={} but null headParts array",
+                      templateNPC->numHeadParts);
         return false;
     }
 
@@ -579,7 +602,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
             auto playerRace = playerBase->GetRace();
             if (playerRace != templateRace)
             {
-                SKSE::log::info(
+                logger::info(
                     "AppearanceTemplate: Changing race from {} to {}",
                     playerRace ? (playerRace->GetFormEditorID() ? playerRace->GetFormEditorID()
                                                                 : "Unknown")
@@ -592,11 +615,11 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
                 // Mark race as changed
                 playerBase->AddChange(RE::TESNPC::ChangeFlags::ChangeFlag::kRace);
 
-                SKSE::log::info("AppearanceTemplate: Race changed successfully");
+                logger::info("AppearanceTemplate: Race changed successfully");
             }
             else
             {
-                SKSE::log::info("AppearanceTemplate: Race already matches, skipping");
+                logger::info("AppearanceTemplate: Race already matches, skipping");
             }
         }
 
@@ -605,9 +628,9 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
         bool playerIsFemale = playerBase->IsFemale();
         if (templateIsFemale != playerIsFemale)
         {
-            SKSE::log::info("AppearanceTemplate: Changing sex from {} to {}",
-                            playerIsFemale ? "Female" : "Male",
-                            templateIsFemale ? "Female" : "Male");
+            logger::info("AppearanceTemplate: Changing sex from {} to {}",
+                         playerIsFemale ? "Female" : "Male",
+                         templateIsFemale ? "Female" : "Male");
 
             if (templateIsFemale)
             {
@@ -621,7 +644,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
             // Mark gender as changed
             playerBase->AddChange(RE::TESNPC::ChangeFlags::ChangeFlag::kGender);
 
-            SKSE::log::info("AppearanceTemplate: Sex changed successfully");
+            logger::info("AppearanceTemplate: Sex changed successfully");
         }
     }
     else
@@ -636,8 +659,8 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
         auto* newHeadParts = RE::calloc<RE::BGSHeadPart*>(templateNPC->numHeadParts);
         if (!newHeadParts)
         {
-            SKSE::log::error("AppearanceTemplate: Failed to allocate head parts array (count={})",
-                             templateNPC->numHeadParts);
+            logger::error("AppearanceTemplate: Failed to allocate head parts array (count={})",
+                          templateNPC->numHeadParts);
             return false;
         }
         for (uint8_t i = 0; i < templateNPC->numHeadParts; ++i)
@@ -671,7 +694,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
 
         if (oldHeadParts && !oldWasOwned)
         {
-            SKSE::log::warn(
+            logger::warn(
                 "AppearanceTemplate: Replaced engine-owned head parts pointer without freeing old "
                 "memory (safety over potential invalid free)");
         }
@@ -708,15 +731,14 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
                     default:
                         break;
                 }
-                SKSE::log::info(
-                    "AppearanceTemplate:   [{}] {} - {} ({:08X})",
-                    i,
-                    typeName,
-                    part->GetFormEditorID() ? part->GetFormEditorID() : "(no editor ID)",
-                    part->GetFormID());
+                logger::info("AppearanceTemplate:   [{}] {} - {} ({:08X})",
+                             i,
+                             typeName,
+                             part->GetFormEditorID() ? part->GetFormEditorID() : "(no editor ID)",
+                             part->GetFormID());
             }
         }
-        SKSE::log::info("AppearanceTemplate: Copied {} head parts", templateNPC->numHeadParts);
+        logger::info("AppearanceTemplate: Copied {} head parts", templateNPC->numHeadParts);
     }
 
     if (templateNPC->headRelatedData)
@@ -729,13 +751,13 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
             }
             catch (const std::exception& e)
             {
-                SKSE::log::error("AppearanceTemplate: Failed to allocate headRelatedData: {}",
-                                 e.what());
+                logger::error("AppearanceTemplate: Failed to allocate headRelatedData: {}",
+                              e.what());
                 return false;
             }
             catch (...)
             {
-                SKSE::log::error("AppearanceTemplate: Failed to allocate headRelatedData");
+                logger::error("AppearanceTemplate: Failed to allocate headRelatedData");
                 return false;
             }
         }
@@ -744,38 +766,38 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
         if (templateNPC->headRelatedData->hairColor)
         {
             playerBase->headRelatedData->hairColor = templateNPC->headRelatedData->hairColor;
-            SKSE::log::info("AppearanceTemplate: Copied hair color");
+            logger::info("AppearanceTemplate: Copied hair color");
         }
 
         // Face texture set, skin detail textures
         if (templateNPC->headRelatedData->faceDetails)
         {
             playerBase->headRelatedData->faceDetails = templateNPC->headRelatedData->faceDetails;
-            SKSE::log::info("AppearanceTemplate: Copied face texture set");
+            logger::info("AppearanceTemplate: Copied face texture set");
         }
     }
 
     playerBase->bodyTintColor = templateNPC->bodyTintColor;
-    SKSE::log::info("AppearanceTemplate: Copied body tint color");
+    logger::info("AppearanceTemplate: Copied body tint color");
 
-    if (Settings::TemplateCopySkin)
+    if (copySkin)
     {
         if (templateNPC->farSkin)
         {
             playerBase->farSkin = templateNPC->farSkin;
-            SKSE::log::info("AppearanceTemplate: Copied far skin");
+            logger::info("AppearanceTemplate: Copied far skin");
         }
 
         // Copy skin form if available
         if (templateNPC->skin)
         {
             playerBase->skin = templateNPC->skin;
-            SKSE::log::info("AppearanceTemplate: Copied skin form");
+            logger::info("AppearanceTemplate: Copied skin form");
         }
     }
     else
     {
-        SKSE::log::debug("AppearanceTemplate: Skin copy disabled (TemplateCopySkin = false)");
+        logger::debug("AppearanceTemplate: Skin copy disabled (TemplateCopySkin = false)");
     }
 
     // Tint layers include: Skin tone, makeup, war paint, dirt, etc.
@@ -784,7 +806,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
         constexpr std::size_t MAX_TINT_LAYERS_SAFE = 1024;
         if (templateTints->size() > MAX_TINT_LAYERS_SAFE)
         {
-            SKSE::log::error(
+            logger::error(
                 "AppearanceTemplate: Template tint layer count {} exceeds safety limit {}",
                 templateTints->size(),
                 MAX_TINT_LAYERS_SAFE);
@@ -809,7 +831,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
                         RE::free(layer);
                     }
                 }
-                SKSE::log::error(
+                logger::error(
                     "AppearanceTemplate: Failed to allocate tint layer; aborting copy to avoid "
                     "partial state");
                 return false;
@@ -836,8 +858,8 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
                         RE::free(layer);
                     }
                 }
-                SKSE::log::error(
-                    "AppearanceTemplate: Failed to allocate player tint layer array: {}", e.what());
+                logger::error("AppearanceTemplate: Failed to allocate player tint layer array: {}",
+                              e.what());
                 return false;
             }
             catch (...)
@@ -849,7 +871,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
                         RE::free(layer);
                     }
                 }
-                SKSE::log::error("AppearanceTemplate: Failed to allocate player tint layer array");
+                logger::error("AppearanceTemplate: Failed to allocate player tint layer array");
                 return false;
             }
             if (!playerBase->tintLayers)
@@ -861,7 +883,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
                         RE::free(layer);
                     }
                 }
-                SKSE::log::error("AppearanceTemplate: Failed to allocate player tint layer array");
+                logger::error("AppearanceTemplate: Failed to allocate player tint layer array");
                 return false;
             }
         }
@@ -897,22 +919,21 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
 
         if (preservedForeignLayers)
         {
-            SKSE::log::warn(
+            logger::warn(
                 "AppearanceTemplate: Existing non-plugin tint layers were replaced without "
                 "explicit free (safety mode)");
         }
-        SKSE::log::info("AppearanceTemplate: Copied {} tint layers",
-                        playerBase->tintLayers->size());
+        logger::info("AppearanceTemplate: Copied {} tint layers", playerBase->tintLayers->size());
     }
 
     playerBase->weight = templateNPC->weight;
-    SKSE::log::info("AppearanceTemplate: Copied weight: {}", templateNPC->weight);
+    logger::info("AppearanceTemplate: Copied weight: {}", templateNPC->weight);
 
     // Face morphs control the facial structure
     if (templateNPC->faceNPC)
     {
         playerBase->faceNPC = templateNPC->faceNPC;
-        SKSE::log::info("AppearanceTemplate: Copied face NPC reference");
+        logger::info("AppearanceTemplate: Copied face NPC reference");
     }
 
     // Copy face data if present
@@ -929,7 +950,7 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
         {
             playerBase->faceData->parts[i] = templateNPC->faceData->parts[i];
         }
-        SKSE::log::info("AppearanceTemplate: Copied face morphs and parts");
+        logger::info("AppearanceTemplate: Copied face morphs and parts");
     }
     else if (templateNPC->faceData && !playerBase->faceData)
     {
@@ -940,12 +961,12 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
         }
         catch (const std::exception& e)
         {
-            SKSE::log::error("AppearanceTemplate: Failed to allocate faceData: {}", e.what());
+            logger::error("AppearanceTemplate: Failed to allocate faceData: {}", e.what());
             return false;
         }
         catch (...)
         {
-            SKSE::log::error("AppearanceTemplate: Failed to allocate faceData");
+            logger::error("AppearanceTemplate: Failed to allocate faceData");
             return false;
         }
         for (int i = 0; i < RE::TESNPC::FaceData::Morphs::kTotal; ++i)
@@ -956,14 +977,14 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
         {
             playerBase->faceData->parts[i] = templateNPC->faceData->parts[i];
         }
-        SKSE::log::info("AppearanceTemplate: Created and copied face morphs");
+        logger::info("AppearanceTemplate: Created and copied face morphs");
     }
 
     if (includeBody)
     {
         // Copy height
         playerBase->height = templateNPC->height;
-        SKSE::log::info("AppearanceTemplate: Copied height: {}", templateNPC->height);
+        logger::info("AppearanceTemplate: Copied height: {}", templateNPC->height);
 
         // Note: Skin is race-dependent and copying it can cause crashes
         // Only height is safe to copy across different setups
@@ -988,7 +1009,7 @@ static void RegenerateHead(RE::Actor* a_actor)
     auto faceGenManager = RE::BSFaceGenManager::GetSingleton();
     if (!faceGenManager)
     {
-        SKSE::log::warn("AppearanceTemplate: BSFaceGenManager not available for RegenerateHead");
+        logger::warn("AppearanceTemplate: BSFaceGenManager not available for RegenerateHead");
         return;
     }
 
@@ -998,7 +1019,7 @@ static void RegenerateHead(RE::Actor* a_actor)
     REL::Relocation<RegenerateHead_t> RegenerateHeadFunc{RELOCATION_ID(26257, 26836)};
 
     RegenerateHeadFunc(faceGenManager, a_actor);
-    SKSE::log::info("AppearanceTemplate: Called RegenerateHead for full FaceGen reload");
+    logger::info("AppearanceTemplate: Called RegenerateHead for full FaceGen reload");
 }
 
 void UpdatePlayerAppearance()
@@ -1034,11 +1055,11 @@ void UpdatePlayerAppearance()
                 if (faceNode)
                 {
                     playerBase->UpdateNeck(faceNode);
-                    SKSE::log::debug("AppearanceTemplate: Updated neck seam");
+                    logger::debug("AppearanceTemplate: Updated neck seam");
                 }
             }
 
-            SKSE::log::info("AppearanceTemplate: Player appearance update completed");
+            logger::info("AppearanceTemplate: Player appearance update completed");
         }
     };
 
@@ -1072,7 +1093,7 @@ static void ProcessSpawnedActor(RE::ObjectRefHandle handle, int framesRemaining)
     auto spawnedRef = handle.get();
     if (!spawnedRef)
     {
-        SKSE::log::warn("AppearanceTemplate: Spawned actor no longer valid");
+        logger::warn("AppearanceTemplate: Spawned actor no longer valid");
         return;
     }
 
@@ -1087,13 +1108,13 @@ static void ProcessSpawnedActor(RE::ObjectRefHandle handle, int framesRemaining)
 
     if (tempActor && player && copyOutfit)
     {
-        SKSE::log::info("AppearanceTemplate: Copying outfit from temporary actor...");
+        logger::info("AppearanceTemplate: Copying outfit from temporary actor...");
         CopyOutfitFromActor(tempActor, player);
     }
 
     spawnedRef->Disable();
     spawnedRef->SetDelete(true);
-    SKSE::log::info("AppearanceTemplate: Temporary actor disabled");
+    logger::info("AppearanceTemplate: Temporary actor disabled");
 }
 
 bool ApplyIfConfigured()
@@ -1101,14 +1122,14 @@ bool ApplyIfConfigured()
     // Only apply once per session
     if (IsAppliedState())
     {
-        SKSE::log::debug("AppearanceTemplate: Already applied this session");
+        logger::debug("AppearanceTemplate: Already applied this session");
         return true;
     }
 
     bool expected = false;
     if (!s_applyInProgress.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
     {
-        SKSE::log::debug("AppearanceTemplate: Apply already in progress");
+        logger::debug("AppearanceTemplate: Apply already in progress");
         return false;
     }
     struct ApplyScope
@@ -1140,25 +1161,25 @@ bool ApplyIfConfigured()
     // Check if feature is enabled
     if (!cfg.useTemplateAppearance)
     {
-        SKSE::log::debug("AppearanceTemplate: Feature disabled in settings");
+        logger::debug("AppearanceTemplate: Feature disabled in settings");
         return false;
     }
 
     // Check if template is configured
     if (cfg.templateFormID.empty() || cfg.templatePlugin.empty())
     {
-        SKSE::log::warn("AppearanceTemplate: Enabled but no template configured");
+        logger::warn("AppearanceTemplate: Enabled but no template configured");
         return false;
     }
 
-    SKSE::log::info(
+    logger::info(
         "AppearanceTemplate: Applying template {}|{}", cfg.templateFormID, cfg.templatePlugin);
 
     // Resolve the FormID
     RE::FormID resolvedID = ResolveFormID(cfg.templateFormID, cfg.templatePlugin);
     if (resolvedID == 0)
     {
-        SKSE::log::error("AppearanceTemplate: Failed to resolve FormID");
+        logger::error("AppearanceTemplate: Failed to resolve FormID");
         return false;
     }
 
@@ -1169,16 +1190,16 @@ bool ApplyIfConfigured()
     auto form = RE::TESForm::LookupByID(resolvedID);
     if (!form)
     {
-        SKSE::log::error("AppearanceTemplate: Form not found for ID {:08X}", resolvedID);
+        logger::error("AppearanceTemplate: Form not found for ID {:08X}", resolvedID);
         return false;
     }
 
     auto templateNPC = form->As<RE::TESNPC>();
     if (!templateNPC)
     {
-        SKSE::log::error("AppearanceTemplate: Form {:08X} is not an NPC (type: {})",
-                         resolvedID,
-                         static_cast<int>(form->GetFormType()));
+        logger::error("AppearanceTemplate: Form {:08X} is not an NPC (type: {})",
+                      resolvedID,
+                      static_cast<int>(form->GetFormType()));
         return false;
     }
 
@@ -1186,8 +1207,8 @@ bool ApplyIfConfigured()
     bool racesCompatible = IsRaceCompatible(templateNPC);
     if (!racesCompatible && !cfg.templateIncludeRace)
     {
-        SKSE::log::warn("AppearanceTemplate: Race mismatch detected!");
-        SKSE::log::warn(
+        logger::warn("AppearanceTemplate: Race mismatch detected!");
+        logger::warn(
             "AppearanceTemplate: FaceGen may not work correctly without TemplateIncludeRace = "
             "true");
     }
@@ -1195,7 +1216,7 @@ bool ApplyIfConfigured()
     // Apply the record-based appearance
     if (!CopyAppearanceToPlayer(templateNPC, cfg.templateIncludeRace, cfg.templateIncludeBody))
     {
-        SKSE::log::error("AppearanceTemplate: Failed to copy appearance");
+        logger::error("AppearanceTemplate: Failed to copy appearance");
         return false;
     }
 
@@ -1208,21 +1229,21 @@ bool ApplyIfConfigured()
             bool faceGenApplied = ApplyFaceGen(templateNPC);
             if (!faceGenApplied)
             {
-                SKSE::log::warn(
+                logger::warn(
                     "AppearanceTemplate: FaceGen not applied - falling back to record data only");
                 // This is not a failure - we still have the record-based appearance
             }
         }
         else
         {
-            SKSE::log::warn("AppearanceTemplate: Skipping FaceGen due to race mismatch");
-            SKSE::log::warn(
+            logger::warn("AppearanceTemplate: Skipping FaceGen due to race mismatch");
+            logger::warn(
                 "AppearanceTemplate: Enable TemplateIncludeRace to copy FaceGen across races");
         }
     }
     else
     {
-        SKSE::log::info("AppearanceTemplate: FaceGen copy disabled in settings");
+        logger::info("AppearanceTemplate: FaceGen copy disabled in settings");
     }
 
     // Copy outfit if a loaded actor is available
@@ -1231,7 +1252,7 @@ bool ApplyIfConfigured()
 
     if (templateActor && cfg.templateCopyOutfit && player)
     {
-        SKSE::log::info("AppearanceTemplate: Found loaded actor for template NPC, copying outfit");
+        logger::info("AppearanceTemplate: Found loaded actor for template NPC, copying outfit");
         CopyOutfitFromActor(templateActor, player);
     }
     else if (cfg.templateCopyOutfit && player)
@@ -1239,24 +1260,23 @@ bool ApplyIfConfigured()
         // No actor loaded - spawn a temporary one to copy outfit from
         if (player->IsInCombat())
         {
-            SKSE::log::warn(
-                "AppearanceTemplate: Skipping temporary outfit actor spawn during combat");
+            logger::warn("AppearanceTemplate: Skipping temporary outfit actor spawn during combat");
         }
         else if (!player->GetParentCell() || !player->GetParentCell()->IsAttached())
         {
-            SKSE::log::warn(
+            logger::warn(
                 "AppearanceTemplate: Skipping temporary outfit actor spawn while player cell is "
                 "not attached");
         }
         else if (templateNPC == player->GetActorBase())
         {
-            SKSE::log::warn(
+            logger::warn(
                 "AppearanceTemplate: Skipping temporary outfit actor spawn because template is "
                 "player base");
         }
         else
         {
-            SKSE::log::info(
+            logger::info(
                 "AppearanceTemplate: No loaded actor found, spawning temporary actor for "
                 "outfit...");
             auto spawned = player->PlaceObjectAtMe(templateNPC, false);
@@ -1265,8 +1285,8 @@ bool ApplyIfConfigured()
                 auto* spawnedActor = spawned->As<RE::Actor>();
                 if (spawnedActor)
                 {
-                    SKSE::log::info("AppearanceTemplate: Spawned temporary actor {:08X}",
-                                    spawnedActor->GetFormID());
+                    logger::info("AppearanceTemplate: Spawned temporary actor {:08X}",
+                                 spawnedActor->GetFormID());
 
                     RE::ObjectRefHandle spawnedHandle = spawnedActor->GetHandle();
 
@@ -1275,14 +1295,14 @@ bool ApplyIfConfigured()
                 }
                 else
                 {
-                    SKSE::log::warn("AppearanceTemplate: Spawned reference is not an actor");
+                    logger::warn("AppearanceTemplate: Spawned reference is not an actor");
                     spawned->Disable();
                     spawned->SetDelete(true);
                 }
             }
             else
             {
-                SKSE::log::warn("AppearanceTemplate: Failed to spawn temporary actor");
+                logger::warn("AppearanceTemplate: Failed to spawn temporary actor");
             }
         }
     }
@@ -1291,7 +1311,7 @@ bool ApplyIfConfigured()
     UpdatePlayerAppearance();
 
     SetAppliedState(true);
-    SKSE::log::info("AppearanceTemplate: Successfully applied template appearance");
+    logger::info("AppearanceTemplate: Successfully applied template appearance");
 
     return true;
 }
@@ -1308,7 +1328,7 @@ static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player)
     auto* equipManager = RE::ActorEquipManager::GetSingleton();
     if (!equipManager)
     {
-        SKSE::log::warn("glyph: ActorEquipManager unavailable, cannot copy outfit");
+        logger::warn("AppearanceTemplate: ActorEquipManager unavailable, cannot copy outfit");
         return false;
     }
 
@@ -1342,7 +1362,7 @@ static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player)
     int equippedCount = 0;
     int skippedConflicts = 0;
 
-    SKSE::log::info("glyph: Copying outfit from source actor...");
+    logger::info("AppearanceTemplate: Copying outfit from source actor...");
 
     auto hasSlotConflict = [&](RE::TESObjectARMO* armor) -> bool
     {
@@ -1385,8 +1405,8 @@ static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player)
         if (!alreadyWorn && hasSlotConflict(armor))
         {
             ++skippedConflicts;
-            SKSE::log::debug("glyph: Skipping equip of {} due to biped slot conflict",
-                             armor->GetName());
+            logger::debug("AppearanceTemplate: Skipping equip of {} due to biped slot conflict",
+                          armor->GetName());
             continue;
         }
 
@@ -1400,7 +1420,7 @@ static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player)
             playerWornSlotMasks.push_back(static_cast<std::uint32_t>(armor->GetSlotMask()));
             copiedCount++;
             equippedCount++;
-            SKSE::log::debug("glyph: Added and equipped {}", armor->GetName());
+            logger::debug("AppearanceTemplate: Added and equipped {}", armor->GetName());
         }
         else if (playerWornForms.find(form) == playerWornForms.end())
         {
@@ -1413,16 +1433,18 @@ static bool CopyOutfitFromActor(RE::Actor* sourceActor, RE::Actor* player)
 
     if (copiedCount > 0)
     {
-        SKSE::log::info("glyph: Copied {} armor items from source", copiedCount);
+        logger::info("AppearanceTemplate: Copied {} armor items from source", copiedCount);
     }
     else
     {
-        SKSE::log::info(
-            "glyph: No new armor items to copy (player already has them or source has none)");
+        logger::info(
+            "AppearanceTemplate: No new armor items to copy (player already has them or source has "
+            "none)");
     }
     if (skippedConflicts > 0)
     {
-        SKSE::log::info("glyph: Skipped {} armor equips due to slot conflicts", skippedConflicts);
+        logger::info("AppearanceTemplate: Skipped {} armor equips due to slot conflicts",
+                     skippedConflicts);
     }
 
     return equippedCount > 0;
@@ -1441,7 +1463,7 @@ void CheckPendingAppearanceTemplate()
     static bool loggedOnce = false;
     if (!loggedOnce)
     {
-        SKSE::log::info("CheckPendingAppearanceTemplate called for first time");
+        logger::info("CheckPendingAppearanceTemplate called for first time");
         loggedOnce = true;
     }
 
@@ -1459,16 +1481,16 @@ void CheckPendingAppearanceTemplate()
 
     if (shouldLog)
     {
-        SKSE::log::debug("Appearance check #{}: player={}, base={}, 3D={}",
-                         count,
-                         player != nullptr,
-                         playerBase != nullptr,
-                         is3DLoaded);
+        logger::debug("Appearance check #{}: player={}, base={}, 3D={}",
+                      count,
+                      player != nullptr,
+                      playerBase != nullptr,
+                      is3DLoaded);
     }
 
     if (player && playerBase && is3DLoaded)
     {
-        SKSE::log::info("Player ready after {} checks, applying appearance template", count);
+        logger::info("Player ready after {} checks, applying appearance template", count);
         s_pendingAppearanceApply.store(false);
         s_checkCount.store(0);
         if (auto* task = SKSE::GetTaskInterface())

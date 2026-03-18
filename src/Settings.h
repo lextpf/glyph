@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -73,6 +74,39 @@
  */
 namespace Settings
 {
+/**
+ * RGB color triplet with channel values in [0.0, 1.0].
+ *
+ * Replaces raw `float[3]` arrays for color fields, providing named access,
+ * clamping, and conversion helpers.
+ */
+struct Color3
+{
+    float r = 1.f, g = 1.f, b = 1.f;
+
+    constexpr Color3() = default;
+    constexpr Color3(float r_, float g_, float b_)
+        : r(r_),
+          g(g_),
+          b(b_)
+    {
+    }
+
+    constexpr Color3& clamp01()
+    {
+        r = std::clamp(r, 0.f, 1.f);
+        g = std::clamp(g, 0.f, 1.f);
+        b = std::clamp(b, 0.f, 1.f);
+        return *this;
+    }
+
+    float* data() { return &r; }
+    const float* data() const { return &r; }
+
+    static constexpr Color3 White() { return {1.f, 1.f, 1.f}; }
+    constexpr bool operator==(const Color3&) const = default;
+};
+
 /**
  * Display format segment for nameplate composition.
  *
@@ -193,12 +227,12 @@ struct EffectParams
  */
 struct TierDefinition
 {
-    uint16_t minLevel;        ///< Minimum level for this tier (inclusive)
-    uint16_t maxLevel;        ///< Maximum level for this tier (inclusive)
-    std::string title;        ///< Title text (e.g., "Novice", "Legend of Tamriel")
-    float leftColor[3];       ///< RGB color for left/top of gradients
-    float rightColor[3];      ///< RGB color for right/bottom of gradients
-    float highlightColor[3];  ///< RGB color for shimmer/sparkle highlights
+    uint16_t minLevel = 1;          ///< Minimum level for this tier (inclusive)
+    uint16_t maxLevel = 250;        ///< Maximum level for this tier (inclusive)
+    std::string title = "Unknown";  ///< Title text (e.g., "Novice", "Legend of Tamriel")
+    Color3 leftColor;               ///< RGB color for left/top of gradients
+    Color3 rightColor;              ///< RGB color for right/bottom of gradients
+    Color3 highlightColor;          ///< RGB color for shimmer/sparkle highlights
 
     EffectParams titleEffect;  ///< Visual effect for title text (player only)
     EffectParams nameEffect;   ///< Visual effect for name text (player only)
@@ -211,8 +245,8 @@ struct TierDefinition
 
     // Per-tier particle settings (empty = use global, "None" = disabled)
     std::string
-        particleTypes;  ///< Particle types: "Stars,Wisps,Orbs,Sparks,Runes" (comma-separated)
-    int particleCount;  ///< Number of particles (0 = use global setting)
+        particleTypes;      ///< Particle types: "Stars,Wisps,Orbs,Sparks,Runes" (comma-separated)
+    int particleCount = 0;  ///< Number of particles (0 = use global setting)
 };
 
 /**
@@ -236,8 +270,8 @@ struct SpecialTitleDefinition
     std::string keyword;         ///< Keyword to match in name (case-insensitive)
     std::string keywordLower;    ///< Cached lowercase keyword for fast runtime matching
     std::string displayTitle;    ///< Title to display
-    float color[3];              ///< RGB color for name/title
-    float glowColor[3];          ///< RGB glow color (more saturated)
+    Color3 color;                ///< RGB color for name/title
+    Color3 glowColor;            ///< RGB glow color (more saturated)
     bool forceOrnaments;         ///< Always show ornaments
     bool forceParticles;         ///< Always show particle aura
     int priority;                ///< Higher = checked first

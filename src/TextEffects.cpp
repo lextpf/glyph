@@ -5,29 +5,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <string>
 #include <utility>
 #include <vector>
 
-static constexpr float TWO_PI = 6.28318530718f;
-static constexpr float PI = 3.14159265359f;
-static constexpr float INV_TWO_PI = 1.0f / TWO_PI;
+static constexpr float PI = std::numbers::pi_v<float>;
+static constexpr float TWO_PI = 2.0f * PI;
+static constexpr float INV_TWO_PI = std::numbers::inv_pi_v<float> * 0.5f;
 
 namespace TextEffects
 {
 using Utf8Utils::Utf8ToChars;
-
-float Saturate(float x)
-{
-    // Clamp to [0, 1] range
-    return std::clamp(x, .0f, 1.0f);
-}
-
-float SmoothStep(float t)
-{
-    t = Saturate(t);
-    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
-}
 
 ImU32 LerpColorU32(ImU32 a, ImU32 b, float t)
 {
@@ -115,6 +104,17 @@ static inline void DrawOutlineInternal(ImDrawList* list,
     }
 }
 
+void DrawOutline(ImDrawList* list,
+                 ImFont* font,
+                 float size,
+                 const ImVec2& pos,
+                 const char* text,
+                 ImU32 outline,
+                 float w)
+{
+    DrawOutlineInternal(list, font, size, pos, text, outline, w);
+}
+
 void AddTextOutline4(ImDrawList* list,
                      ImFont* font,
                      float size,
@@ -190,22 +190,6 @@ void AddTextHorizontalGradient(ImDrawList* list,
     }
 }
 
-void AddTextOutline4Gradient(ImDrawList* list,
-                             ImFont* font,
-                             float size,
-                             const ImVec2& pos,
-                             const char* text,
-                             ImU32 colLeft,
-                             ImU32 colRight,
-                             ImU32 outline,
-                             float w)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    // Fill pass, add text once, then rewrite its vertices to a gradient
-    AddTextHorizontalGradient(list, font, size, pos, text, colLeft, colRight);
-}
-
 // Helper struct for text vertex manipulation
 struct TextVertexSetup
 {
@@ -258,25 +242,6 @@ struct TextVertexSetup
         return true;
     }
 };
-
-// Calculate AABB of vertex buffer range [vtxStart, vtxEnd)
-static inline void GetVtxBounds(
-    ImDrawList* list, int vtxStart, int vtxEnd, ImVec2& outMin, ImVec2& outMax)
-{
-    // Initialize to extremes so first vertex will replace them
-    outMin = ImVec2(FLT_MAX, FLT_MAX);
-    outMax = ImVec2(-FLT_MAX, -FLT_MAX);
-
-    // Find the axis-aligned bounding box (AABB) of all vertices
-    for (int i = vtxStart; i < vtxEnd; ++i)
-    {
-        const ImVec2 p = list->VtxBuffer[i].pos;
-        outMin.x = (std::min)(outMin.x, p.x);  // Leftmost point
-        outMin.y = (std::min)(outMin.y, p.y);  // Topmost point
-        outMax.x = (std::max)(outMax.x, p.x);  // Rightmost point
-        outMax.y = (std::max)(outMax.y, p.y);  // Bottommost point
-    }
-}
 
 // Get fractional part of float
 static inline float Frac(float x)
@@ -440,26 +405,6 @@ void AddTextShimmer(ImDrawList* list,
     }
 }
 
-void AddTextOutline4Shimmer(ImDrawList* list,
-                            ImFont* font,
-                            float size,
-                            const ImVec2& pos,
-                            const char* text,
-                            ImU32 baseL,
-                            ImU32 baseR,
-                            ImU32 highlight,
-                            ImU32 outline,
-                            float w,
-                            float phase01,
-                            float bandWidth01,
-                            float strength01)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextShimmer(
-        list, font, size, pos, text, baseL, baseR, highlight, phase01, bandWidth01, strength01);
-}
-
 void AddTextRadialGradient(ImDrawList* list,
                            ImFont* font,
                            float size,
@@ -504,22 +449,6 @@ void AddTextRadialGradient(ImDrawList* list,
     }
 }
 
-void AddTextOutline4RadialGradient(ImDrawList* list,
-                                   ImFont* font,
-                                   float size,
-                                   const ImVec2& pos,
-                                   const char* text,
-                                   ImU32 colCenter,
-                                   ImU32 colEdge,
-                                   ImU32 outline,
-                                   float w,
-                                   float gamma)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextRadialGradient(list, font, size, pos, text, colCenter, colEdge, gamma);
-}
-
 // Extract alpha channel [0-255] from packed color
 static inline int GetA(ImU32 c)
 {
@@ -542,17 +471,17 @@ static inline ImU32 WithAlpha(ImU32 c, float mul)
     return IM_COL32(r, g, b, na);
 }
 
-void AddTextGradientShimmer(ImDrawList* list,
-                            ImFont* font,
-                            float size,
-                            const ImVec2& pos,
-                            const char* text,
-                            ImU32 baseL,
-                            ImU32 baseR,
-                            ImU32 highlight,
-                            float phase01,
-                            float bandWidth01,
-                            float strength01)
+static void AddTextGradientShimmer(ImDrawList* list,
+                                   ImFont* font,
+                                   float size,
+                                   const ImVec2& pos,
+                                   const char* text,
+                                   ImU32 baseL,
+                                   ImU32 baseR,
+                                   ImU32 highlight,
+                                   float phase01,
+                                   float bandWidth01,
+                                   float strength01)
 {
     TextVertexSetup s;
     if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
@@ -575,16 +504,16 @@ void AddTextGradientShimmer(ImDrawList* list,
     }
 }
 
-void AddTextSolidShimmer(ImDrawList* list,
-                         ImFont* font,
-                         float size,
-                         const ImVec2& pos,
-                         const char* text,
-                         ImU32 base,
-                         ImU32 highlight,
-                         float phase01,
-                         float bandWidth01,
-                         float strength01)
+static void AddTextSolidShimmer(ImDrawList* list,
+                                ImFont* font,
+                                float size,
+                                const ImVec2& pos,
+                                const char* text,
+                                ImU32 base,
+                                ImU32 highlight,
+                                float phase01,
+                                float bandWidth01,
+                                float strength01)
 {
     TextVertexSetup s;
     if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
@@ -689,21 +618,6 @@ void TextEffects::AddTextVerticalGradient(ImDrawList* list,
     }
 }
 
-void TextEffects::AddTextOutline4VerticalGradient(ImDrawList* list,
-                                                  ImFont* font,
-                                                  float size,
-                                                  const ImVec2& pos,
-                                                  const char* text,
-                                                  ImU32 colTop,
-                                                  ImU32 colBottom,
-                                                  ImU32 outline,
-                                                  float w)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextVerticalGradient(list, font, size, pos, text, colTop, colBottom);
-}
-
 // Scale RGB channels by multiplier
 static inline ImU32 ScaleRGB(ImU32 c, float mul)
 {
@@ -771,22 +685,6 @@ void TextEffects::AddTextDiagonalGradient(ImDrawList* list,
     }
 }
 
-void TextEffects::AddTextOutline4DiagonalGradient(ImDrawList* list,
-                                                  ImFont* font,
-                                                  float size,
-                                                  const ImVec2& pos,
-                                                  const char* text,
-                                                  ImU32 a,
-                                                  ImU32 b,
-                                                  ImVec2 dir,
-                                                  ImU32 outline,
-                                                  float w)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextDiagonalGradient(list, font, size, pos, text, a, b, dir);
-}
-
 void TextEffects::AddTextPulseGradient(ImDrawList* list,
                                        ImFont* font,
                                        float size,
@@ -812,24 +710,6 @@ void TextEffects::AddTextPulseGradient(ImDrawList* list,
         ImU32 base = LerpColorU32(a, b, t);
         list->VtxBuffer[i].col = ScaleRGB(base, pulse);
     }
-}
-
-void TextEffects::AddTextOutline4PulseGradient(ImDrawList* list,
-                                               ImFont* font,
-                                               float size,
-                                               const ImVec2& pos,
-                                               const char* text,
-                                               ImU32 a,
-                                               ImU32 b,
-                                               float time,
-                                               float freqHz,
-                                               float amp,
-                                               ImU32 outline,
-                                               float w)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextPulseGradient(list, font, size, pos, text, a, b, time, freqHz, amp);
 }
 
 void TextEffects::AddTextConicRainbow(ImDrawList* list,
@@ -1085,25 +965,6 @@ void TextEffects::AddTextAurora(ImDrawList* list,
     }
 }
 
-void TextEffects::AddTextOutline4Aurora(ImDrawList* list,
-                                        ImFont* font,
-                                        float size,
-                                        const ImVec2& pos,
-                                        const char* text,
-                                        ImU32 colA,
-                                        ImU32 colB,
-                                        ImU32 outline,
-                                        float w,
-                                        float speed,
-                                        float waves,
-                                        float intensity,
-                                        float sway)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextAurora(list, font, size, pos, text, colA, colB, speed, waves, intensity, sway);
-}
-
 void TextEffects::AddTextSparkle(ImDrawList* list,
                                  ImFont* font,
                                  float size,
@@ -1203,26 +1064,6 @@ void TextEffects::AddTextSparkle(ImDrawList* list,
     }
 }
 
-void TextEffects::AddTextOutline4Sparkle(ImDrawList* list,
-                                         ImFont* font,
-                                         float size,
-                                         const ImVec2& pos,
-                                         const char* text,
-                                         ImU32 baseL,
-                                         ImU32 baseR,
-                                         ImU32 sparkleColor,
-                                         ImU32 outline,
-                                         float w,
-                                         float density,
-                                         float speed,
-                                         float intensity)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextSparkle(
-        list, font, size, pos, text, baseL, baseR, sparkleColor, density, speed, intensity);
-}
-
 void TextEffects::AddTextPlasma(ImDrawList* list,
                                 ImFont* font,
                                 float size,
@@ -1290,24 +1131,6 @@ void TextEffects::AddTextPlasma(ImDrawList* list,
     }
 }
 
-void TextEffects::AddTextOutline4Plasma(ImDrawList* list,
-                                        ImFont* font,
-                                        float size,
-                                        const ImVec2& pos,
-                                        const char* text,
-                                        ImU32 colA,
-                                        ImU32 colB,
-                                        ImU32 outline,
-                                        float w,
-                                        float freq1,
-                                        float freq2,
-                                        float speed)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextPlasma(list, font, size, pos, text, colA, colB, freq1, freq2, speed);
-}
-
 void TextEffects::AddTextScanline(ImDrawList* list,
                                   ImFont* font,
                                   float size,
@@ -1371,25 +1194,6 @@ void TextEffects::AddTextScanline(ImDrawList* list,
 
         list->VtxBuffer[i].col = LerpColorU32(base, scanColor, totalScan);
     }
-}
-
-void TextEffects::AddTextOutline4Scanline(ImDrawList* list,
-                                          ImFont* font,
-                                          float size,
-                                          const ImVec2& pos,
-                                          const char* text,
-                                          ImU32 baseL,
-                                          ImU32 baseR,
-                                          ImU32 scanColor,
-                                          ImU32 outline,
-                                          float w,
-                                          float speed,
-                                          float width,
-                                          float intensity)
-{
-    DrawOutlineInternal(list, font, size, pos, text, outline, w);
-
-    AddTextScanline(list, font, size, pos, text, baseL, baseR, scanColor, speed, width, intensity);
 }
 
 // Perf: draws up to 3 layers x 8 samples = 24 AddText calls per string.
@@ -1467,173 +1271,6 @@ void TextEffects::AddTextGlow(ImDrawList* list,
         {
             list->AddText(
                 font, size, ImVec2(pos.x + offsets[i][0], pos.y + offsets[i][1]), col, text);
-        }
-    }
-}
-
-void DrawSideOrnaments(ImDrawList* list,
-                       const ImVec2& center,
-                       float textWidth,
-                       float textHeight,
-                       ImU32 color,
-                       float alpha,
-                       float scale,
-                       float spacing,
-                       bool animated,
-                       float time,
-                       float outlineWidth,
-                       bool enableGlow,
-                       float glowRadius,
-                       float glowIntensity,
-                       int glowSamples,
-                       const std::string& leftOrnaments,
-                       const std::string& rightOrnaments,
-                       float ornamentScale,
-                       bool isSpecialTitle)
-{
-    if (!list || alpha <= .01f)
-    {
-        return;
-    }
-    if (leftOrnaments.empty() && rightOrnaments.empty())
-    {
-        return;
-    }
-
-    // Check if ornament font is configured
-    if (Settings::OrnamentFontPath.empty())
-    {
-        return;
-    }
-
-    // Get ornament font (index 3)
-    auto& io = ImGui::GetIO();
-    if (io.Fonts->Fonts.Size < 4)
-    {
-        return;
-    }
-    ImFont* ornamentFont = io.Fonts->Fonts[3];
-    if (!ornamentFont)
-    {
-        return;
-    }
-
-    // Extract color components
-    int r = (color >> 0) & 0xFF;
-    int g = (color >> 8) & 0xFF;
-    int b = (color >> 16) & 0xFF;
-
-    // Subtle animation
-    float pulse = animated ? (.92f + .08f * std::sin(time * 1.5f)) : 1.0f;
-
-    // Alpha with pulse
-    int baseAlpha = std::clamp((int)(alpha * pulse * 255.0f), 0, 255);
-    int outlineAlpha = std::clamp((int)(alpha * 255.0f), 0, 255);
-
-    ImU32 col = IM_COL32(r, g, b, baseAlpha);
-    ImU32 colOutline = IM_COL32(0, 0, 0, outlineAlpha);
-
-    // Calculate ornament size
-    float sizeMultiplier = isSpecialTitle ? ornamentScale * 1.3f : ornamentScale;
-    float ornamentSize = Settings::OrnamentFontSize * scale * sizeMultiplier;
-
-    // Extra padding between ornaments and text
-    float extraPadding = ornamentSize * .15f;
-    float totalSpacing = spacing + extraPadding;
-
-    // Outline offsets
-    const float d = outlineWidth * .707f;
-    const float outlineOffsets[8][2] = {{-outlineWidth, 0},
-                                        {outlineWidth, 0},
-                                        {0, -outlineWidth},
-                                        {0, outlineWidth},
-                                        {-d, -d},
-                                        {d, -d},
-                                        {-d, d},
-                                        {d, d}};
-
-    // Helper lambda to draw a single ornament character (UTF-8 string) with glow and outline
-    auto drawOrnamentChar = [&](const ImVec2& pos, const std::string& ch)
-    {
-        const char* charStr = ch.c_str();
-
-        // Glow pass
-        if (enableGlow && glowRadius > .0f && glowIntensity > .0f)
-        {
-            int glowAlpha = std::clamp((int)(alpha * glowIntensity * 255.0f), 0, 255);
-            const float layers[] = {1.5f, 1.0f, .6f};
-            const float alphaMulti[] = {.15f, .25f, .35f};
-
-            for (int layer = 0; layer < 3; ++layer)
-            {
-                float layerRadius = glowRadius * layers[layer];
-                int layerAlpha = std::clamp((int)(glowAlpha * alphaMulti[layer]), 0, 255);
-                if (layerAlpha < 3)
-                {
-                    continue;
-                }
-                ImU32 layerCol = IM_COL32(r, g, b, layerAlpha);
-
-                const float glowOffsets[8][2] = {
-                    {layerRadius, .0f},
-                    {-layerRadius, .0f},
-                    {.0f, layerRadius},
-                    {.0f, -layerRadius},
-                    {layerRadius * .707f, layerRadius * .707f},
-                    {-layerRadius * .707f, layerRadius * .707f},
-                    {layerRadius * .707f, -layerRadius * .707f},
-                    {-layerRadius * .707f, -layerRadius * .707f},
-                };
-                for (int i = 0; i < 8; ++i)
-                {
-                    list->AddText(ornamentFont,
-                                  ornamentSize,
-                                  ImVec2(pos.x + glowOffsets[i][0], pos.y + glowOffsets[i][1]),
-                                  layerCol,
-                                  charStr);
-                }
-            }
-        }
-
-        // Outline pass
-        for (int i = 0; i < 8; ++i)
-        {
-            list->AddText(ornamentFont,
-                          ornamentSize,
-                          ImVec2(pos.x + outlineOffsets[i][0], pos.y + outlineOffsets[i][1]),
-                          colOutline,
-                          charStr);
-        }
-
-        // Main character
-        list->AddText(ornamentFont, ornamentSize, pos, col, charStr);
-    };
-
-    if (!leftOrnaments.empty())
-    {
-        auto leftChars = Utf8ToChars(leftOrnaments);
-        float cursorX = center.x - textWidth * .5f - totalSpacing;
-        for (int i = static_cast<int>(leftChars.size()) - 1; i >= 0; --i)
-        {
-            const std::string& ch = leftChars[i];
-            ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, .0f, ch.c_str());
-            cursorX -= charSize.x;
-            ImVec2 charPos(cursorX, center.y - charSize.y * .5f);
-            drawOrnamentChar(charPos, ch);
-        }
-    }
-
-    if (!rightOrnaments.empty())
-    {
-        auto rightChars = Utf8ToChars(rightOrnaments);
-        float cursorX = center.x + textWidth * .5f + totalSpacing;
-        for (size_t i = 0; i < rightChars.size(); ++i)
-        {
-            const std::string& ch = rightChars[i];
-            ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, .0f, ch.c_str());
-            ImVec2 charPos(cursorX, center.y - charSize.y * .5f);
-            drawOrnamentChar(charPos, ch);
-            cursorX += charSize.x;
         }
     }
 }
@@ -1876,20 +1513,22 @@ static void DrawSpark(ImDrawList* list,
     list->AddCircleFilled(pos, size * .4f, IM_COL32(255, 255, 220, baseAlpha), 8);
 }
 
-void DrawParticleAura(ImDrawList* list,
-                      const ImVec2& center,
-                      float radiusX,
-                      float radiusY,
-                      ImU32 color,
-                      float alpha,
-                      Settings::ParticleStyle style,
-                      int particleCount,
-                      float particleSize,
-                      float speed,
-                      float time,
-                      int styleIndex,
-                      int enabledStyleCount)
+void DrawParticleAura(const ParticleAuraParams& params)
 {
+    ImDrawList* list = params.list;
+    ImVec2 center = params.center;
+    float radiusX = params.radiusX;
+    float radiusY = params.radiusY;
+    ImU32 color = params.color;
+    float alpha = params.alpha;
+    Settings::ParticleStyle style = params.style;
+    int particleCount = params.particleCount;
+    float particleSize = params.particleSize;
+    float speed = params.speed;
+    float time = params.time;
+    int styleIndex = params.styleIndex;
+    int enabledStyleCount = params.enabledStyleCount;
+
     if (!list || alpha <= .05f || particleCount <= 0)
     {
         return;
