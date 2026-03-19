@@ -100,9 +100,6 @@ struct Color3
         return *this;
     }
 
-    float* data() { return &r; }
-    const float* data() const { return &r; }
-
     static constexpr Color3 White() { return {1.f, 1.f, 1.f}; }
     constexpr bool operator==(const Color3&) const = default;
 };

@@ -619,11 +619,12 @@ static void ParseColor3(const std::string& str, Color3& out)
     std::istringstream ss(str);
     std::string token;
     int idx = 0;
-    float* data = out.data();
+    float rgb[3] = {out.r, out.g, out.b};
     while (std::getline(ss, token, ',') && idx < 3)
     {
-        data[idx++] = ParseFloat(Trim(token), 1.0f);
+        rgb[idx++] = ParseFloat(Trim(token), 1.0f);
     }
+    out = Color3(rgb[0], rgb[1], rgb[2]);
 }
 
 // Helper function: Parse effect type name to enum
