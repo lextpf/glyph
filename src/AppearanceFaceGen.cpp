@@ -10,10 +10,10 @@ namespace
 {
 // Build candidate FaceGen file IDs for a plugin.
 //
-// Most regular plugins use the lower 24 bits. Light plugins usually use the
-// lower 12 bits, but AE runtimes can resolve some ESL-flagged plugins into a
-// non-FE runtime slot for records whose local ID exceeds 0xFFF. In that case
-// the on-disk FaceGen may still exist using the 24-bit object ID, so try both.
+// Regular plugins use the lower 24 bits; light plugins usually the lower 12.
+// AE can resolve some ESL-flagged plugins into a non-FE slot for records whose
+// local ID exceeds 0xFFF, in which case the on-disk FaceGen may still exist
+// under the 24-bit ID -- try both.
 std::vector<RE::FormID> FaceGenFileIDs(RE::FormID resolvedFormID, const RE::TESFile* plugin)
 {
     std::vector<RE::FormID> ids;
