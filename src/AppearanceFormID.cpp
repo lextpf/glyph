@@ -32,15 +32,12 @@ RE::FormID ParseHexFormID(const std::string& str)
     return static_cast<RE::FormID>(parsed);
 }
 
-// Construct a runtime FormID from a plugin file and a base (local) FormID.
+// Build a runtime FormID from a plugin file and a base (local) FormID.
 //
-// Light plugins (ESL/ESPFE): 0xFE | lightIndex(12 bits) | localID(12 bits)
-//   - lightIndex from GetSmallFileCompileIndex(); 0xFFFF = not loaded
-//   - localID is the lower 12 bits of the base FormID
-//
-// Regular plugins (ESP/ESM): compileIndex(8 bits) | localID(24 bits)
-//   - compileIndex from GetCompileIndex(); 0xFF = not loaded
-//   - localID is the lower 24 bits of the base FormID
+// Light (ESL/ESPFE): 0xFE | lightIndex(12b) | localID(12b)
+//                    lightIndex via GetSmallFileCompileIndex(); 0xFFFF = not loaded.
+// Regular (ESP/ESM): compileIndex(8b) | localID(24b)
+//                    compileIndex via GetCompileIndex(); 0xFF = not loaded.
 RE::FormID BuildFormID(const RE::TESFile* file, RE::FormID baseFormID)
 {
     if (!file)
