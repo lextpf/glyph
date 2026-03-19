@@ -5,11 +5,32 @@
 /**
  * @namespace OutfitCopy
  * @brief Outfit copying between actors.
+ * @author Alex (https://github.com/lextpf)
  * @ingroup AppearanceTemplate
  *
- * Extracts the outfit-copy logic from AppearanceTemplate so that the
- * core appearance system and the equipment transfer are independently
- * readable and testable.
+ * Extracted from AppearanceTemplate so the core appearance system and
+ * the equipment transfer are independently readable and testable.
+ *
+ * ## :material-link-variant: Integration
+ *
+ * Called from `AppearanceTemplate::ApplyIfConfigured()` (and the console
+ * `glyph appearance on` path) when `TemplateCopyOutfit = true` in
+ * `[Appearance]`. Typical sequence:
+ *
+ * ```cpp
+ * RE::Actor* source = OutfitCopy::FindLoadedActorByBase(templateNPC);
+ * if (source)
+ * {
+ *     OutfitCopy::CopyOutfitBetweenActors(source, player);
+ * }
+ * ```
+ *
+ * `FindLoadedActorByBase` returns `nullptr` if no loaded actor uses the
+ * template NPC as its base -- common for followers that have not been
+ * encountered yet -- in which case the outfit copy step is skipped and
+ * the rest of the template apply continues normally.
+ *
+ * @see AppearanceTemplate::ApplyIfConfigured
  */
 namespace OutfitCopy
 {
