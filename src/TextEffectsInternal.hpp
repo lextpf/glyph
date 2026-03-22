@@ -14,6 +14,44 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @namespace TextEffects
+ * @brief Internal helpers shared by the TextEffects implementation files.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup TextEffects
+ *
+ * Companion to TextEffects.hpp. Public effect functions live in the main
+ * header; this file declares the building blocks they share -- color math,
+ * vertex-capture state, and internal outline variants.
+ *
+ * ## :material-palette-outline: Vertex-Recolor Pattern
+ *
+ * Most animated effects work by rendering text in pure white, capturing
+ * the resulting vertex range from the ImDrawList, and then rewriting
+ * those vertices' colors per effect. TextVertexSetup::Begin() drives the
+ * capture step and records the vertex range plus the bounding box; the
+ * caller iterates `[vtxStart, vtxEnd)` and modifies colors directly.
+ *
+ * ```cpp
+ * TextVertexSetup vs;
+ * if (!TextVertexSetup::Begin(vs, list, font, size, pos, text)) return;
+ * for (int i = vs.vtxStart; i < vs.vtxEnd; ++i)
+ * {
+ *     auto& v = list->VtxBuffer[i];
+ *     v.col = ScaleRGB(v.col, brightness);  // or HSV shift, gradient, ...
+ * }
+ * ```
+ *
+ * ## :material-vector-square: Outline Variants
+ *
+ * |               Helper | Directions | Use when                                 |
+ * |----------------------|------------|------------------------------------------|
+ * | DrawOutline4Internal |          4 | FastOutlines = true (lower draw cost)    |
+ * | DrawOutline8Internal |          8 | Smoother edges, default                  |
+ * |  DrawOutlineInternal |    4 or 8  | Caller passes `fastOutlines` as argument |
+ *
+ * @see TextEffects::DrawOutline (public wrapper)
+ */
 namespace TextEffects
 {
 using Utf8Utils::Utf8ToChars;
