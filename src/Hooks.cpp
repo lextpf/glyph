@@ -23,25 +23,12 @@
 namespace Hooks
 {
 
-// State is organized into three flag structs accessed via static functions:
-//
-//   Init()  -- Initialization lifecycle flags
-//     initialized, initializing                         (UNINITIALIZED)
-//     -> CreateD3DAndSwapChain::thunk CAS initializing=true  (INITIALIZING)
-//     -> On success: initialized=true, initializing=false    (INITIALIZED)
-//     -> On failure: initializing=false                      (UNINITIALIZED)
-//     backendReinitRequested  -- triggers DX11 backend re-init
-//     mipmapsGenerated        -- reset to force font atlas rebuild
-//     particleTexturesLoaded  -- reset to force texture reload
-//
-//   Frame() -- Per-frame flags (reset at start of each PostDisplay::thunk call)
-//     shouldRenderOverlay      -- set if overlay is allowed this frame
-//     overlayRenderedThisFrame -- set after RenderOverlayNow completes
-//
-//   Diag()  -- Diagnostics
-//     renderExceptionCount     -- throttled error logging
-//     missingPresentLogged     -- one-shot warning for missing Present
-//     deviceChangeLogged       -- one-shot warning for device change
+// State is partitioned into three flag structs reached via static accessors:
+//   Init()  -- initialization lifecycle; reset individual flags to force
+//              rebuilds (mipmapsGenerated, particleTexturesLoaded,
+//              backendReinitRequested).
+//   Frame() -- per-frame flags, reset at the start of each PostDisplay thunk.
+//   Diag()  -- exception counters and one-shot log gates.
 
 struct InitFlags
 {
@@ -203,11 +190,9 @@ static void HandleDeviceChange()
     }
 }
 
-// Perform first-time ImGui initialization: create context, load fonts,
-// initialize Win32/DX11 backends, and install the Present hook.
-//
-// Returns true when initialization completed successfully. Failures are
-// expected during some load-order transitions, so callers may retry later.
+// First-time ImGui init: create context, load fonts, init Win32/DX11 backends,
+// install the Present hook. Returns false during load-order transitions where
+// the swapchain isn't ready yet; callers may retry later.
 static bool InitializeImGui()
 {
     auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -289,12 +274,10 @@ static bool InitializeImGui()
     io.MouseDrawCursor = false;
     io.IniFilename = nullptr;
 
-    // Load custom fonts for different text elements
-    // Character range: Basic Latin + Latin-1 Supplement (0x0020-0x00FF).
-    // This covers Western European languages but excludes Cyrillic (0x0400+),
-    // CJK (0x4E00+), and other non-Latin scripts.  Actors with localized
-    // names in unsupported scripts will display ImGui fallback glyphs.
-    // TODO: Consider configurable glyph ranges for broader locale support.
+    // Glyph range: Basic Latin + Latin-1 Supplement (0x0020-0x00FF). Western
+    // European only -- Cyrillic (0x0400+) and CJK (0x4E00+) fall back to
+    // ImGui's default glyph.
+    // TODO: configurable glyph ranges for broader locale support.
     static const ImWchar ranges[] = {
         0x0020,
         0x00FF,
@@ -390,29 +373,16 @@ static bool InitializeImGui()
 }
 
 // @author Codex (https://github.com/codex)
-// Late bootstrap path for sessions where the D3D creation hook fires before
-// glyph is loaded, or when renderer startup ordering changes.
-//
-// Three independent guards must all be coordinated to make this safe under
-// concurrent calls from PostDisplay and PresentHook on the render thread:
-//
-//   1. `initialized`       - fast acquire-load early-out. Once true, this
-//                            function is a no-op forever (cheap path).
-//   2. `nextInitRetryAtMs` - throttle. A previous attempt that returned
-//                            false from `InitializeImGui` is normal (swap
-//                            chain not yet created, fonts not on disk, ...).
-//                            Spinning every frame burns CPU and floods logs,
-//                            so we back off for INIT_RETRY_INTERVAL_MS (5s).
-//   3. `initializing`      - re-entry guard. `InitializeImGui` touches global
-//                            D3D state and the ImGui context; two threads
-//                            inside it simultaneously would race on those
-//                            singletons. The CAS makes the second caller
-//                            return early without blocking the render thread.
-//
-// The CAS + RAII pair is deliberate: a `std::lock_guard` on a mutex would
-// serialize render-thread frames against any thread that happens to be
-// running InitializeImGui. The CAS lets the non-winners give up
-// immediately, which is the correct behavior here.
+// Late-bootstrap path: D3D creation hook may have fired before glyph loaded,
+// or renderer startup order may have shifted. Three guards coordinate safe
+// concurrent calls from PostDisplay + PresentHook on the render thread:
+//   1. initialized       - acquire-load early-out; no-op forever once true.
+//   2. nextInitRetryAtMs - back off INIT_RETRY_INTERVAL_MS (5s) after a
+//                          failed attempt; spinning every frame floods logs.
+//   3. initializing      - CAS re-entry guard. InitializeImGui touches the
+//                          ImGui/D3D singletons; concurrent entry would race.
+// CAS + RAII is deliberate: a mutex would serialize render-thread frames
+// against any in-flight init. The CAS lets non-winners give up immediately.
 static void EnsureOverlayInitialized()
 {
     static constexpr std::uint64_t INIT_RETRY_INTERVAL_MS = 5000;
@@ -660,22 +630,19 @@ void RenderOverlayNow()
     }
 }
 
-// Present hook, safety net for overlay rendering.
-// Some upscalers (DLSS, FSR, etc.) restructure the rendering pipeline in
-// ways that can cause PostDisplay to be skipped or deferred.
-// This hook catches that case, we render it here as a last resort,
-// right before the original Present flips the backbuffer to screen.
+// Present hook: safety net for overlay rendering. Some upscalers (DLSS, FSR)
+// restructure the pipeline so PostDisplay is skipped/deferred; we render
+// here as a last resort, just before the original Present flips the backbuffer.
 //
-// Recovery limitation: if D3D().originalPresent is null (should not happen in
-// normal operation), the recovery path reads vtable[8] from the swapchain.
-// Because we already replaced vtable[8] with PresentHook, the candidate
-// will equal PresentHook and be rejected.  Recovery can only succeed if a
-// *third-party* hook has since overwritten vtable[8] with its own function,
-// in which case we adopt that function as "original".  This is correct for
-// linear hook chains but would produce incorrect call ordering if the
-// third-party hook also saved our PresentHook as *its* original.  In
-// practice this edge case is unreachable: D3D().originalPresent is always set
-// during TryInstallPresentHook before any Present call can occur.
+// Recovery limitation: if D3D().originalPresent is null (shouldn't happen in
+// normal operation), the fallback reads vtable[8] from the swapchain. Since
+// we already replaced vtable[8] with PresentHook, that candidate is rejected.
+// Recovery only succeeds if a *third-party* hook has since overwritten
+// vtable[8] with its own function, which we then adopt as "original" --
+// correct for linear hook chains but would produce wrong call ordering if
+// that third-party hook saved our PresentHook as *its* original. Unreachable
+// in practice because TryInstallPresentHook always sets originalPresent
+// before any Present call can occur.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
     AppearanceTemplate::CheckPendingAppearanceTemplate();
@@ -750,27 +717,12 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
     return originalPresent(swapChain, syncInterval, flags);
 }
 
-// VTable hook for `HUDMenu::PostDisplay` (vtable index 6).
-//
-// Intercepts the game's HUD post-display call each frame to inject
-// overlay rendering. The hook executes on the render thread and
-// performs the following sequence:
-//
-// 1. Resets per-frame render flags
-// 2. Validates ImGui initialization and menu state
-// 3. Updates render-thread state via Renderer::TickRT()
-// 4. Checks for pending appearance template changes
-// 5. Calls the original `PostDisplay` so the game HUD renders first
-// 6. Renders the overlay on top (if allowed)
-//
-// Rendering after the original function ensures the overlay appears
-// above the HUD and is captured in screenshots.
-//
-// Executes on the render thread every frame.
-// Installed via `Stl::WriteVfunc<RE::HUDMenu, PostDisplay>()`.
-//
-// See: Renderer::TickRT, Renderer::IsOverlayAllowedRT, Renderer::Draw
-// See: PresentHook for the fallback path when upscalers skip PostDisplay
+// VTable hook for HUDMenu::PostDisplay (vtable index 6).
+// Render-thread, every frame. Calls the original PostDisplay first so the
+// game HUD renders before our overlay (puts overlay on top + into
+// screenshots). Installed via Stl::WriteVfunc<RE::HUDMenu, PostDisplay>().
+// See: Renderer::TickRT / IsOverlayAllowedRT / Draw, PresentHook (fallback
+// path when upscalers skip PostDisplay).
 struct PostDisplay
 {
     // Hook thunk called in place of the original `HUDMenu::PostDisplay`.
