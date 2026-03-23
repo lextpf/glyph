@@ -669,11 +669,11 @@ void DrawParticleAura(const ParticleAuraParams& params)
 
     for (int i = 0; i < params.particleCount; ++i)
     {
-        // Per-particle distribution uses the golden angle (~137.508 deg = pi(3-sqrt(5)) ~ 2.39996
-        // rad) for quasi-random angular placement with minimal clustering. Constants:
-        //   2.399963f  = golden angle in radians
-        //   0.618034f  = 1/phi (golden ratio conjugate), low-discrepancy sequence for jitter
-        //   97, 13, 31 = prime multipliers for per-style offset to avoid pattern repetition
+        // Quasi-random angular placement via the golden angle (~137.508 deg),
+        // minimal clustering. Constants:
+        //   2.399963f  = golden angle in radians (~ pi(3-sqrt(5)))
+        //   0.618034f  = 1/phi (golden ratio conjugate), low-discrepancy jitter
+        //   97, 13, 31 = primes for per-style offset, prevent pattern repetition
         float golden = (float)(i + params.styleIndex * 97) * 2.399963f;
         float hashJitter = std::fmod((float)(i * 7 + params.styleIndex * 13) * .6180339887f, 1.0f);
         float phase = golden + hashJitter * 1.2f;
