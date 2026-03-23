@@ -27,6 +27,34 @@
  * ```
  * Snapshot backbuffer -> nametag draws to offscreen RT -> Photoshop-style Color Divide composite
  * ```
+ *
+ * ## :material-cogs: Settings
+ *
+ * Configure in glyph.ini under `[Effects]`:
+ *
+ * |            Setting | Type  | Default | Description                                          |
+ * |--------------------|-------|---------|------------------------------------------------------|
+ * |         EnableGlow | bool  | false   | Master toggle for the GPU glow pipeline              |
+ * |         GlowRadius | float | 4.0     | Gaussian blur radius in pixels (sigma proxy)         |
+ * |      GlowIntensity | float | 0.5     | Brightness multiplier on the additive composite      |
+ * |        GlowSamples | int   | 8       | Blur sample count (1-64, higher = smoother / slower) |
+ * | GlowDivideStrength | float | 0.0     | Color Divide blend: 0 = additive glow, 1 = full divide |
+ *
+ * ## :material-code-tags: Callback Bracket Pattern
+ *
+ * Each pass is a pair of ImDrawCallbacks placed around the affected draws.
+ * The render code adds them through `ImDrawList::AddCallback`:
+ *
+ * ```cpp
+ * TextPostProcess::SetGlowParams(radius, intensity);
+ * drawList->AddCallback(TextPostProcess::BeginGlowCapture, nullptr);
+ *     // ... AddText / AddTextHorizontalGradient / etc. for glow targets ...
+ * drawList->AddCallback(TextPostProcess::EndGlowAndComposite, nullptr);
+ * ```
+ *
+ * The Color Divide pass uses the same shape with
+ * `BeginDivideCapture` / `EndDivideAndComposite`, and brackets ALL
+ * nametag draws (outermost).
  */
 namespace TextPostProcess
 {
