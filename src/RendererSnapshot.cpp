@@ -85,75 +85,6 @@ std::string Capitalize(const char* text)
     return result;
 }
 
-// Get actor's fight reaction towards player
-static RE::FIGHT_REACTION GetReactionToPlayer(RE::Actor* a_actor, RE::Actor* a_player)
-{
-    if (!a_actor || !a_player)
-    {
-        return RE::FIGHT_REACTION::kNeutral;
-    }
-    if (a_actor == a_player)
-    {
-        return RE::FIGHT_REACTION::kFriend;
-    }
-
-    // Hostility
-    if (a_actor->IsHostileToActor(a_player) || a_player->IsHostileToActor(a_actor))
-    {
-        return RE::FIGHT_REACTION::kEnemy;
-    }
-
-    // Followers / teammates
-    if (a_actor->IsPlayerTeammate())
-    {
-        return RE::FIGHT_REACTION::kAlly;
-    }
-
-    // Optional heuristic: "friendly" if they can do normal player dialogue
-    if (a_actor->CanTalkToPlayer())
-    {
-        return RE::FIGHT_REACTION::kFriend;
-    }
-
-    return RE::FIGHT_REACTION::kNeutral;
-}
-
-// Determine actor's disposition for nameplate color
-static Disposition GetDisposition(RE::Actor* a, RE::Actor* player)
-{
-    if (!a || !player)
-    {
-        return Disposition::Neutral;
-    }
-
-    // Hard override: Currently hostile (combat/crime/aggro/etc.)
-    if (a->IsHostileToActor(player))
-    {
-        return Disposition::Enemy;
-    }
-
-    // Teammate is always "friendly enough" for UI
-    if (a->IsPlayerTeammate())
-    {
-        return Disposition::AllyOrFriend;
-    }
-
-    // Baseline faction/relationship reaction
-    switch (GetReactionToPlayer(a, player))
-    {
-        case RE::FIGHT_REACTION::kEnemy:
-            return Disposition::Enemy;
-
-        case RE::FIGHT_REACTION::kAlly:
-        case RE::FIGHT_REACTION::kFriend:
-            return Disposition::AllyOrFriend;
-
-        case RE::FIGHT_REACTION::kNeutral:
-        default:
-            return Disposition::Neutral;
-    }
-}
-
 // @author Claude (https://github.com/claude)
 // Check whether an actor is a humanoid NPC (vs creature / animal).
 //
@@ -267,6 +198,93 @@ static CreatureKind ClassifyCreature(RE::Actor* actor)
     return CreatureKind::NPC;
 }
 
+// Invulnerability classification for the protection badge.  Essential
+// overrides Protected when both flags are set.
+static ProtectionKind ClassifyProtection(RE::Actor* actor)
+{
+    if (!actor)
+    {
+        return ProtectionKind::Mortal;
+    }
+    if (actor->IsEssential())
+    {
+        return ProtectionKind::Essential;
+    }
+    if (actor->IsProtected())
+    {
+        return ProtectionKind::Protected;
+    }
+    return ProtectionKind::Mortal;
+}
+
+// Social-role classification for the role badge.  Guard takes priority over
+// merchant; "merchant" is membership in any vendor-flagged faction.
+static RoleKind ClassifyRole(RE::Actor* actor)
+{
+    if (!actor)
+    {
+        return RoleKind::Commoner;
+    }
+    if (actor->IsGuard())
+    {
+        return RoleKind::Guard;
+    }
+    bool vendor = false;
+    actor->VisitFactions(
+        [&vendor](RE::TESFaction* faction, std::int8_t rank)
+        {
+            if (faction && rank >= 0 && faction->IsVendor())
+            {
+                vendor = true;
+                return true;  // stop visiting
+            }
+            return false;
+        });
+    return vendor ? RoleKind::Merchant : RoleKind::Commoner;
+}
+
+// Awareness/engagement classification for the engagement badge.  Combat
+// supersedes alert.  "Alert" is a proxy (weapon drawn while detecting the
+// player) because no clean "aware of the player" API exists -- tune in-game.
+static EngagementKind ClassifyEngagement(RE::Actor* actor, RE::Actor* player)
+{
+    if (!actor)
+    {
+        return EngagementKind::Idle;
+    }
+    if (actor->IsInCombat())
+    {
+        return EngagementKind::Combat;
+    }
+    // IsWeaponDrawn lives on ActorState (not re-exposed on Actor in NG) --
+    // reach it through AsActorState().
+    if (player && actor->AsActorState()->IsWeaponDrawn() &&
+        actor->RequestDetectionLevel(player) > 0)
+    {
+        return EngagementKind::Alert;
+    }
+    return EngagementKind::Idle;
+}
+
+// True when the player owes a current bounty (crime gold) to any faction.
+// Reads PlayerCharacter::crimeGoldMap; "current" excludes infamy.
+static bool PlayerHasBounty()
+{
+    auto* pc = RE::PlayerCharacter::GetSingleton();
+    if (!pc)
+    {
+        return false;
+    }
+    for (const auto& entry : pc->GetCrimeValue().crimeGoldMap)
+    {
+        if (entry.second.violentCur + entry.second.nonViolentCur > .0f)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Check occlusion for an actor, using game-thread-local cached results.
 static void UpdateOcclusionForActor(ActorDrawData& d,
                                     RE::Actor* a,
@@ -298,7 +316,7 @@ static void UpdateOcclusionForActor(ActorDrawData& d,
 //
 // The render thread never touches RE::* directly; it reads a plain-old-data
 // std::vector<ActorDrawData> snapshot under snapshotLock. Everything the
-// renderer needs (FormID, name, world position, level, disposition,
+// renderer needs (FormID, name, world position, level, relationship,
 // occlusion result) is precomputed here so the render-thread copy needs no
 // further game-thread trips.
 void UpdateSnapshot_GameThread()
@@ -391,9 +409,38 @@ void UpdateSnapshot_GameThread()
         d.distToPlayer = .0f;
         d.isPlayer = true;
         // Player has no meaningful "relation to self" -- pick stable defaults.
+        // These still feed the %r/%d/%c text tokens; the player's BADGE set is
+        // a separate branch in ComposeBadges driven by the facts below.
         d.relationship = RelationshipKind::Follower;
         d.levelDelta = LevelDelta::Even;
         d.creatureKind = CreatureKind::NPC;
+
+        // Player status badge facts (always-on player slots).  The detection
+        // scan only runs while sneaking, so its cost is near-zero otherwise.
+        const bool sneaking = player->IsSneaking();
+        bool detected = false;
+        if (sneaking)
+        {
+            for (auto& handle : pl->highActorHandles)
+            {
+                auto otherSP = handle.get();
+                auto* other = otherSP.get();
+                if (!other || other == player || other->IsDead())
+                {
+                    continue;
+                }
+                if (other->IsHostileToActor(player) && other->RequestDetectionLevel(player) > 0)
+                {
+                    detected = true;
+                    break;
+                }
+            }
+        }
+        d.sneak = sneaking ? (detected ? SneakKind::Detected : SneakKind::Hidden) : SneakKind::Off;
+        d.playerInCombat = player->IsInCombat();
+        d.encumbered = player->IsOverEncumbered();
+        d.wanted = PlayerHasBounty();
+
         tempBuf.push_back(std::move(d));
         seenFormIDs.insert(player->GetFormID());
     }
@@ -440,14 +487,10 @@ void UpdateSnapshot_GameThread()
         d.distToPlayer = std::sqrt(distSq);
         d.isPlayer = false;
 
-        // Consolidated disposition + relationship derivation -- share the underlying
-        // RE:: calls so each fires once per actor instead of twice.
+        // Relationship derivation -- drives the %r token, badges, and NPC text color.
         const bool hostile = a->IsHostileToActor(player);
         const bool teammate = a->IsPlayerTeammate();
         const bool canTalk = !hostile && !teammate && a->CanTalkToPlayer();
-        d.dispo = hostile                 ? Disposition::Enemy
-                  : (teammate || canTalk) ? Disposition::AllyOrFriend
-                                          : Disposition::Neutral;
         d.relationship = hostile    ? RelationshipKind::Hostile
                          : teammate ? RelationshipKind::Follower
                          : canTalk  ? RelationshipKind::Ally
@@ -455,6 +498,11 @@ void UpdateSnapshot_GameThread()
         d.levelDelta = ClassifyDelta(
             static_cast<int>(d.level), playerLevel, weakBelow, strongAbove, deadlyAbove);
         d.creatureKind = ClassifyCreature(a);
+
+        // Status badge facts (always-on NPC slots).
+        d.protection = ClassifyProtection(a);
+        d.role = ClassifyRole(a);
+        d.engagement = ClassifyEngagement(a, player);
 
         candidates.push_back(std::move(candidate));
     }
