@@ -48,6 +48,7 @@ endif()
 find_package(imgui CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(xbyak CONFIG REQUIRED)
+find_package(NanoSVG CONFIG REQUIRED)
 find_path(RAPIDCSV_INCLUDE_DIRS "rapidcsv.h") # Added for CommonLibSSE-NG dependency
 
 # boost-unordered is header-only, find the include directory
@@ -142,6 +143,8 @@ add_library(glyph SHARED
     src/OutfitCopy.cpp
     src/ParticleTextures.hpp
     src/ParticleTextures.cpp
+    src/BadgeTextures.hpp
+    src/BadgeTextures.cpp
     src/TextPostProcess.hpp
     src/TextPostProcess.cpp
     src/Utf8Utils.hpp
@@ -180,6 +183,8 @@ target_link_libraries(glyph PRIVATE
     imgui::imgui
     spdlog::spdlog
     xbyak::xbyak
+    NanoSVG::nanosvg
+    NanoSVG::nanosvgrast
 )
 # Note: boost-unordered and srell are header-only, no linking needed
 
