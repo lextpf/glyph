@@ -80,6 +80,14 @@ struct RenderSettingsSnapshot
     float outlineColorTint = .0f;
     float shadowColorTint = .0f;
 
+    // Soft directional drop-shadow
+    bool softShadowEnabled = false;
+    float softShadowDistance = 4.0f;
+    float softShadowSoftness = 3.0f;
+    float softShadowOpacity = .8f;
+    float softShadowAngle = 45.0f;
+    int softShadowSamples = 12;
+
     // Shine Overlay
     bool enableShine = false;
     float shineIntensity = .35f;
@@ -108,13 +116,26 @@ struct RenderSettingsSnapshot
     float particleSpread = .0f;
     float particleAlpha = .0f;
     int particleBlendMode = 0;
+    float particleDepthStrength = .7f;    ///< Scales the 3D depth read (F1/F2/F6)
+    float particleColorWarmth = .5f;      ///< Warm/cool depth temperature mix (C1/C4)
+    float particleGlowStrength = .35f;    ///< Additive backlight halo alpha (G1/G5)
+    float particleGlowSize = 2.2f;        ///< Halo radius vs. crisp sprite (G1/G5)
+    float particleShineThreshold = .84f;  ///< Rare specular glint threshold (G3/G5)
 
     // Animation & Color
-    float nameColorMix = .0f;
-    float tierVibrancyBoost = .0f;
     float innerTextAlpha = 1.0f;
     float outlineAlpha = 1.0f;
-    float textSaturationBoost = .0f;
+
+    /// NPC nameplate text colors (flat, white-leaning; see Settings::NpcColorSettings).
+    struct NpcColors
+    {
+        Settings::Color3 neutral{};   ///< Neutral + talkable civilians
+        Settings::Color3 hostile{};   ///< Slight warm lean for hostiles
+        Settings::Color3 follower{};  ///< Slight cool lean for teammates
+        Settings::Color3 level{};     ///< Dimmed silver level readout
+        Settings::Color3 title{};     ///< Soft white title text
+    };
+    NpcColors npcColors = {};
 
     // Smoothing
     float alphaSettleTime = .0f;
@@ -177,6 +198,96 @@ struct RenderSettingsSnapshot
         int deltaDeadlyAbove = 10;
     };
     LabelTokens labels = {};
+
+    /// Resolved status-icon badge configuration.  Colors are pre-derived in
+    /// Settings::ClampAndValidate(); icon names map to duotone SVG textures
+    /// loaded by BadgeTextures (an unloaded name simply drops that badge at
+    /// layout time).  `enabled` is false when badges are master-toggled off
+    /// or no icon folder is configured.
+    struct IconTokens
+    {
+        bool enabled = false;
+        float scale = 1.0f;
+        bool deadlyPulse = true;
+        std::string icoFollower;
+        std::string icoAlly;
+        std::string icoHostile;
+        std::string icoWeak;
+        std::string icoStrong;
+        std::string icoDeadly;
+        std::string icoBeast;
+        std::string icoUndead;
+        std::string icoDaedra;
+        std::string icoDragon;
+        Settings::Color3 colFollower{};
+        Settings::Color3 colAlly{};
+        Settings::Color3 colHostile{};
+        Settings::Color3 colWeak{};
+        Settings::Color3 colStrong{};
+        Settings::Color3 colDeadly{};
+        Settings::Color3 colCreature{};
+
+        // Always-on neutral states (previously blank) + new NPC categories.
+        std::string icoNeutral;   // muted relationship
+        std::string icoHumanoid;  // muted creature
+        std::string icoEven;      // muted threat
+        std::string icoGuard;
+        std::string icoMerchant;
+        std::string icoCommoner;  // muted role
+        std::string icoEssential;
+        std::string icoProtected;
+        std::string icoMortal;  // muted protection
+        std::string icoCombat;
+        std::string icoAlert;
+        std::string icoIdle;  // muted engagement
+        // Player slot icons.
+        std::string icoSneakHidden;
+        std::string icoSneakDetected;
+        std::string icoSneakOff;  // muted
+        std::string icoEncumbered;
+        std::string icoNormalWeight;  // muted
+        std::string icoWanted;
+        std::string icoBountyClear;  // muted
+        // Lit colors for the active states.
+        Settings::Color3 colGuard{};
+        Settings::Color3 colMerchant{};
+        Settings::Color3 colEssential{};
+        Settings::Color3 colProtected{};
+        Settings::Color3 colCombat{};
+        Settings::Color3 colAlert{};
+        Settings::Color3 colSneakHidden{};
+        Settings::Color3 colSneakDetected{};
+        Settings::Color3 colEncumbered{};
+        Settings::Color3 colWanted{};
+        // Per-slot resting colors (each "muted" slot carries its own calm hue).
+        Settings::Color3 colNeutral{};
+        Settings::Color3 colHumanoid{};
+        Settings::Color3 colCommoner{};
+        Settings::Color3 colMortal{};
+        Settings::Color3 colEven{};
+        Settings::Color3 colIdle{};
+        Settings::Color3 colSneakOff{};
+        Settings::Color3 colNormalWeight{};
+        Settings::Color3 colBountyClear{};
+        Settings::Color3 colMuted{};  // deprecated shared tint (unused)
+        // Per-slot enables (a disabled active state drops that actor's badge).
+        bool relationshipEnabled = true;
+        bool creatureEnabled = true;
+        bool threatEnabled = true;
+        bool roleEnabled = true;
+        bool protectionEnabled = true;
+        bool engagementEnabled = true;  // master for the NPC engagement slot
+        bool combatStateEnabled = true;
+        bool alertStateEnabled = true;
+        bool sneakEnabled = true;
+        bool playerCombatEnabled = true;
+        bool encumberedEnabled = true;
+        bool bountyEnabled = true;
+        // Muted styling: alpha multiplier and desaturation strength [0,1].
+        float mutedAlpha = 0.45f;
+        float mutedDesat = 0.18f;
+    };
+    IconTokens icons = {};
 
     /// Focus-target expanded-nameplate settings (value copy).
     Settings::FocusSettings focus = {};
@@ -262,17 +373,8 @@ struct ActorCache
     }
 };
 
-/// Actor disposition (drives existing nameplate color logic).
-enum class Disposition : std::uint8_t
-{
-    Neutral,      ///< Neutral NPCs (white/gray)
-    Enemy,        ///< Hostile NPCs (red)
-    AllyOrFriend  ///< Friendly/allied NPCs (blue)
-};
-
-/// Refined player-relationship channel for the `%r` token.  Parallel to
-/// `Disposition` -- kept separate so the legacy 3-state color logic isn't
-/// forced to expand.
+/// Player-relationship channel for the `%r` token, badges, and NPC text
+/// color (see `RenderSettingsSnapshot::npcColors`).
 enum class RelationshipKind : std::uint8_t
 {
     Hostile,  ///< IsHostileToActor(player)
@@ -303,23 +405,72 @@ enum class CreatureKind : std::uint8_t
     Dragon   ///< ActorTypeDragon
 };
 
+/// Social role for the NPC role badge slot.  Commoner is the muted default;
+/// Guard and Merchant render lit.  Derived from `IsGuard()` and vendor-faction
+/// membership on the game thread.
+enum class RoleKind : std::uint8_t
+{
+    Commoner,  ///< No notable role -- muted
+    Merchant,  ///< Member of a vendor faction (TESFaction::IsVendor)
+    Guard      ///< Actor::IsGuard()
+};
+
+/// Invulnerability status for the protection badge slot.  Mortal is the muted
+/// default.  Essential overrides Protected when both flags are set.
+enum class ProtectionKind : std::uint8_t
+{
+    Mortal,     ///< Killable -- muted
+    Protected,  ///< Only the player can kill (IsProtected)
+    Essential   ///< Cannot be killed (IsEssential)
+};
+
+/// Awareness/engagement state for the engagement badge slot.  One mutually
+/// exclusive axis (combat supersedes alert supersedes idle).  Idle is muted.
+enum class EngagementKind : std::uint8_t
+{
+    Idle,   ///< Not in combat, not alerted -- muted
+    Alert,  ///< Aware/searching proxy (weapon drawn + detects player)
+    Combat  ///< IsInCombat()
+};
+
+/// Player stealth state for the sneak badge slot.  Off is the muted default
+/// (not sneaking); Hidden/Detected render lit while sneaking.
+enum class SneakKind : std::uint8_t
+{
+    Off,      ///< Not sneaking -- muted
+    Hidden,   ///< Sneaking, undetected
+    Detected  ///< Sneaking, detected by a nearby hostile
+};
+
 /// Data for rendering a single actor's nameplate.
 struct ActorDrawData
 {
-    uint32_t formID{0};                       ///< Actor's form ID (unique identifier)
-    RE::NiPoint3 worldPos{};                  ///< World position above actor's head
-    std::string name;                         ///< Display name (capitalized)
-    uint16_t level{0};                        ///< Actor's level
-    float distToPlayer{.0f};                  ///< Distance to player in units
-    Disposition dispo{Disposition::Neutral};  ///< Disposition towards player
-    bool isPlayer{false};                     ///< Whether this is the player character
-    bool isOccluded{false};                   ///< Whether actor is occluded from view
+    uint32_t formID{0};       ///< Actor's form ID (unique identifier)
+    RE::NiPoint3 worldPos{};  ///< World position above actor's head
+    std::string name;         ///< Display name (capitalized)
+    uint16_t level{0};        ///< Actor's level
+    float distToPlayer{.0f};  ///< Distance to player in units
+    bool isPlayer{false};     ///< Whether this is the player character
+    bool isOccluded{false};   ///< Whether actor is occluded from view
 
     /// @name Contextual nameplate facts (resolved on game thread)
     /// @{
     RelationshipKind relationship{RelationshipKind::Neutral};  ///< %r token source
     LevelDelta levelDelta{LevelDelta::Even};                   ///< %d token source
     CreatureKind creatureKind{CreatureKind::NPC};              ///< %c token source
+    /// @}
+
+    /// @name Status badge facts (resolved on game thread)
+    /// NPC slots: role, protection, engagement.  Player slots: sneak,
+    /// playerInCombat, encumbered, wanted.  Each drives one always-on badge.
+    /// @{
+    RoleKind role{RoleKind::Commoner};                  ///< NPC role badge
+    ProtectionKind protection{ProtectionKind::Mortal};  ///< NPC protection badge
+    EngagementKind engagement{EngagementKind::Idle};    ///< NPC engagement badge
+    SneakKind sneak{SneakKind::Off};                    ///< Player sneak badge
+    bool playerInCombat{false};                         ///< Player engagement badge
+    bool encumbered{false};                             ///< Player encumbered badge
+    bool wanted{false};                                 ///< Player bounty badge
     /// @}
 };
 
@@ -337,7 +488,9 @@ struct RendererState
     /// @name Cache
     /// @{
     std::unordered_map<uint32_t, ActorCache> cache;  ///< Per-actor animation cache, keyed by formID
-    uint32_t frame = 0;                              ///< Render-thread frame counter
+    std::unordered_map<uint32_t, ActorDrawData>
+        lastDrawData;    ///< Last live draw data per actor, replayed by the exit animation
+    uint32_t frame = 0;  ///< Render-thread frame counter
     /// @}
 
     /// @name Snapshot & Thread Safety
@@ -395,6 +548,19 @@ struct RenderSeg
     ImVec2 displaySize;       ///< Measured size of displayText
 };
 
+/// One resolved status badge icon, fully positioned during layout.
+/// Color carries no alpha -- DrawBadges packs it with the per-frame
+/// style alpha (plus the Deadly pulse) at draw time.
+struct BadgeDrawItem
+{
+    ImTextureID tex = 0;     ///< Rasterized duotone icon SRV (from BadgeTextures)
+    Settings::Color3 color;  ///< Semantic badge tint
+    ImVec2 pos;              ///< Top-left draw position (screen pixels)
+    ImVec2 size;             ///< Draw size (square)
+    bool pulse;              ///< Deadly skull breathing alpha
+    bool muted = false;      ///< Neutral/inactive slot -- dimmed + desaturated at draw time
+};
+
 /// Bundle of resolved actor-fact values passed to `FormatString` for one
 /// expansion call.  All string_views point into the active
 /// `RenderSettingsSnapshot::labels` (lives for the frame, per-frame
@@ -412,14 +578,14 @@ struct ActorLabelContext
 };
 
 /**
- * Color terminology used throughout the rendering pipeline:
+ * Color resolution model:
  *
- * - **Pastelize**: Blend a color toward white based on the actor's level
- *   position within its tier.  Higher levels get more vivid (less pastel)
- *   colors.  Formula: `result = 1 + (color - 1) * t`.
- * - **MixToWhite**: Blend color toward white by a fixed ratio.  Applied as
- *   a base color
- * damping for lower tiers.
+ * Colors are resolved once per label into per-role values (name, level,
+ * title) plus per-role text effects.  The player and special titles use the
+ * tier palette, displayed **as authored** in the INI; NPCs resolve to flat
+ * white-leaning colors from `RenderSettingsSnapshot::npcColors`, keyed by
+ * `RelationshipKind`.  Draw code applies the resolved style uniformly and
+ * contains no per-actor color branches.
  */
 
 /// All color, tier, and effect data computed once per label.
@@ -429,19 +595,25 @@ struct LabelStyle
     const Settings::TierDefinition* tier;
     const Settings::SpecialTitleDefinition* specialTitle;
 
+    /// @name Resolved per-role text effects (tier effects, or None for NPCs)
+    /// @{
+    const Settings::EffectParams* nameEffect;
+    const Settings::EffectParams* levelEffect;
+    const Settings::EffectParams* titleEffect;
+    bool usesTierVisuals;  ///< Player / special title: tier effects, wave, shine overlay
+    /// @}
+
     ImU32 colL, colR;            ///< Name gradient (packed)
     ImU32 colLTitle, colRTitle;  ///< Title gradient
     ImU32 colLLevel, colRLevel;  ///< Level gradient
     ImU32 highlight;             ///< Shimmer / sparkle highlight
 
-    ImVec4 Lc, Rc;            ///< Tier left/right color (pasteled float).
-    ImVec4 LcName, RcName;    ///< Computed name color (float, for glow).
-    ImVec4 LcTitle, RcTitle;  ///< Computed title color (float, for glow).
-    ImVec4 LcLevel, RcLevel;  ///< Softened level color (float, for glow).
+    ImVec4 LcName, RcName;    ///< Resolved name color (float, for glow).
+    ImVec4 LcTitle, RcTitle;  ///< Resolved title color (float, for glow).
+    ImVec4 LcLevel, RcLevel;  ///< Resolved level color (float, for glow).
     ImVec4 supportName;       ///< Representative tint for name support layers.
     ImVec4 supportTitle;      ///< Representative tint for title support layers.
     ImVec4 supportLevel;      ///< Representative tint for level support layers.
-    ImVec4 dispoCol;          ///< Disposition color.
     ImVec4 specialGlowColor;  ///< Special title glow color.
 
     float alpha;
@@ -506,6 +678,8 @@ struct LabelLayout
     std::vector<RenderSeg> infoSegments;  ///< Info row segments (built from InfoFormat)
     float infoLineWidth = .0f;            ///< Total width of all info segments plus padding
     float infoLineHeight = .0f;           ///< Height of the tallest info segment
+
+    std::vector<BadgeDrawItem> badges;  ///< Status icon badges (built from snap.icons)
 
     std::string titleStr;         ///< Full title text
     std::string titleDisplayStr;  ///< Title text after typewriter truncation
@@ -708,7 +882,7 @@ void DrawBackgroundGlow(ImDrawList* dl,
                         const RenderSettingsSnapshot& snap);
 
 /// Draw particle aura effects behind the nameplate.  Renders on splitter
-/// channel 0 (back layer).
+/// channel 0 (back layer).  Player-only unless forced by specialTitle.
 void DrawParticles(ImDrawList* dl,
                    const ActorDrawData& d,
                    const LabelStyle& style,
@@ -732,7 +906,6 @@ void DrawOrnaments(ImDrawList* dl,
 
 /// Render the title line above the main nameplate line.
 void DrawTitleText(ImDrawList* dl,
-                   const ActorDrawData& d,
                    const LabelStyle& style,
                    const LabelLayout& layout,
                    float lodTitleFactor,
@@ -742,7 +915,6 @@ void DrawTitleText(ImDrawList* dl,
 
 /// Render each segment of the main nameplate line with its configured effect.
 void DrawMainLineSegments(ImDrawList* dl,
-                          const ActorDrawData& d,
                           const LabelStyle& style,
                           const LabelLayout& layout,
                           ImDrawListSplitter* splitter,
@@ -752,12 +924,21 @@ void DrawMainLineSegments(ImDrawList* dl,
 /// Render the contextual info row below the main line.  No-op when no info
 /// segments survived the per-segment drop-if-blank trimming.
 void DrawInfoLineSegments(ImDrawList* dl,
-                          const ActorDrawData& d,
                           const LabelStyle& style,
                           const LabelLayout& layout,
                           ImDrawListSplitter* splitter,
                           bool fastOutlines,
                           const RenderSettingsSnapshot& snap);
+
+/// Render resolved status badge glyphs (relationship, threat pip, creature)
+/// around the main line.  No-op when the layout produced no badge items or
+/// the icon font is unavailable.
+void DrawBadges(ImDrawList* dl,
+                const LabelStyle& style,
+                const LabelLayout& layout,
+                ImDrawListSplitter* splitter,
+                bool fastOutlines,
+                const RenderSettingsSnapshot& snap);
 
 // ============================================================================
 // Coordinator functions (Renderer.cpp)
