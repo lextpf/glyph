@@ -19,3 +19,9 @@ assets/
 # Font Awesome Pro is licensed per-seat and must never enter the public repo
 Font Awesome*
 skse/plugins/glyph/duotone/
+
+# Particle sprite textures are not redistributed; runtime falls back to procedural sprites
+skse/plugins/glyph/particles/
+
+# Photoshop design source exports
+*.psd
