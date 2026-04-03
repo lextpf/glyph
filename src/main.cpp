@@ -85,19 +85,9 @@ void Register()
     std::uint32_t commandCount = RE::SCRIPT_FUNCTION::Commands::kConsoleCommandsEnd -
                                  RE::SCRIPT_FUNCTION::Commands::kConsoleOpBase;
 
+    // Find an unused command slot to replace, and check if already registered
+    RE::SCRIPT_FUNCTION* targetSlot = nullptr;
     for (std::uint32_t i = 0; i < commandCount; ++i)
-    {
-        auto* cmd = &commands[i];
-        if (cmd && cmd->functionName && _stricmp(cmd->functionName, "glyph") == 0)
-        {
-            logger::info("Console command 'glyph' already registered");
-            return;
-        }
-    }
-
-    // Find an unused command slot to replace
-    bool found = false;
-    for (std::uint32_t i = 0; i < commandCount && !found; ++i)
     {
         auto* cmd = &commands[i];
         if (!cmd || !cmd->functionName)
@@ -105,28 +95,34 @@ void Register()
             continue;
         }
 
-        // Replace TestSeenData
-        if (_stricmp(cmd->functionName, "TestSeenData") == 0)
+        if (_stricmp(cmd->functionName, "glyph") == 0)
         {
-            cmd->functionName = "glyph";
-            cmd->shortName = "";
-            cmd->helpString = "Toggle nameplate rendering on/off";
-            cmd->referenceFunction = false;
-            cmd->executeFunction = GlyphExecute;
-            cmd->numParams = 0;
-            cmd->params = nullptr;
-            found = true;
-            logger::info("Registered 'glyph' console command");
+            logger::info("Console command 'glyph' already registered");
+            return;
+        }
+
+        // Replace TestSeenData
+        if (!targetSlot && _stricmp(cmd->functionName, "TestSeenData") == 0)
+        {
+            targetSlot = cmd;
         }
     }
 
-    if (!found)
+    if (targetSlot)
     {
-        logger::warn("Could not find slot for glyph command");
+        targetSlot->functionName = "glyph";
+        targetSlot->shortName = "";
+        targetSlot->helpString = "Toggle nameplate rendering on/off";
+        targetSlot->referenceFunction = false;
+        targetSlot->executeFunction = GlyphExecute;
+        targetSlot->numParams = 0;
+        targetSlot->params = nullptr;
+        logger::info("Registered 'glyph' console command");
+        logger::info("Usage: Type 'glyph' to toggle nameplate rendering");
     }
     else
     {
-        logger::info("Usage: Type 'glyph' to toggle nameplate rendering");
+        logger::warn("Could not find slot for glyph command");
     }
 }
 }  // namespace ConsoleCommands
@@ -146,9 +142,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
         } snapshot;
 
         const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
-        snapshot.enabled = Settings::UseTemplateAppearance;
-        snapshot.formID = Settings::TemplateFormID;
-        snapshot.plugin = Settings::TemplatePlugin;
+        const auto& app = Settings::Appearance();
+        snapshot.enabled = app.UseTemplateAppearance;
+        snapshot.formID = app.TemplateFormID;
+        snapshot.plugin = app.TemplatePlugin;
         return snapshot;
     };
 

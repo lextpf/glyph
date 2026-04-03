@@ -20,7 +20,7 @@
 
 namespace Settings
 {
-/// Single source of truth for EffectType <-> lowercase string mapping.
+// Single source of truth for EffectType <-> lowercase string mapping.
 static constexpr Stl::EnumStringMap<EffectType, 14> kEffectTypeMap{{
     {{"none", EffectType::None},
      {"gradient", EffectType::Gradient},
@@ -51,128 +51,108 @@ std::shared_mutex& Mutex()
     return settingsMutex;
 }
 
-std::string TitleFormat;
-std::vector<Segment> DisplayFormat;
+std::atomic<uint32_t>& Generation()
+{
+    static std::atomic<uint32_t> gen{0};
+    return gen;
+}
 
-// Tier Definitions
-std::vector<TierDefinition> Tiers;
+std::string& TitleFormat()
+{
+    static std::string s;
+    return s;
+}
 
-// Special Titles
-std::vector<SpecialTitleDefinition> SpecialTitles;
+std::vector<Segment>& DisplayFormat()
+{
+    static std::vector<Segment> v;
+    return v;
+}
 
-// Distance & Visibility
-float FadeStartDistance = 200.0f;
-float FadeEndDistance = 2500.0f;
-float ScaleStartDistance = 200.0f;
-float ScaleEndDistance = 2500.0f;
-float MinimumScale = .1f;
-float MaxScanDistance = 3000.0f;
+std::vector<TierDefinition>& Tiers()
+{
+    static std::vector<TierDefinition> v;
+    return v;
+}
 
-// Occlusion Settings
-bool EnableOcclusionCulling = true;
-float OcclusionSettleTime = .58f;
-int OcclusionCheckInterval = 3;
+std::vector<SpecialTitleDefinition>& SpecialTitles()
+{
+    static std::vector<SpecialTitleDefinition> v;
+    return v;
+}
 
-// Visual Effects
-float TitleShadowOffsetX = 2.0f;
-float TitleShadowOffsetY = 2.0f;
-float MainShadowOffsetX = 4.0f;
-float MainShadowOffsetY = 4.0f;
-float SegmentPadding = 4.0f;
+// Category struct accessors (function-local statics)
+DistanceSettings& Distance()
+{
+    static DistanceSettings s;
+    return s;
+}
 
-// Outline Settings
-float OutlineWidthMin = 2.0f;
-float OutlineWidthMax = 2.5f;
-bool FastOutlines = false;
+OcclusionSettings& Occlusion()
+{
+    static OcclusionSettings s;
+    return s;
+}
 
-// Glow Settings
-bool EnableGlow = false;
-float GlowRadius = 4.0f;
-float GlowIntensity = .5f;
-int GlowSamples = 8;
+ShadowOutlineSettings& ShadowOutline()
+{
+    static ShadowOutlineSettings s;
+    return s;
+}
 
-// Typewriter Settings
-bool EnableTypewriter = false;
-float TypewriterSpeed = 30.0f;
-float TypewriterDelay = .0f;
+GlowSettings& Glow()
+{
+    static GlowSettings s;
+    return s;
+}
 
-// Debug Settings
-bool EnableDebugOverlay = false;
+TypewriterSettings& Typewriter()
+{
+    static TypewriterSettings s;
+    return s;
+}
 
-// Side Ornaments
-bool EnableOrnaments = true;
-float OrnamentScale = 1.0f;
-float OrnamentSpacing = 3.0f;
+OrnamentSettings& Ornament()
+{
+    static OrnamentSettings s;
+    return s;
+}
 
-// Particle Aura
-bool EnableParticleAura = true;
-bool UseParticleTextures = true;
-bool EnableStars = true;
-bool EnableSparks = false;
-bool EnableWisps = false;
-bool EnableRunes = false;
-bool EnableOrbs = false;
-int ParticleCount = 8;
-float ParticleSize = 3.0f;
-float ParticleSpeed = 1.0f;
-float ParticleSpread = 20.0f;
-float ParticleAlpha = .8f;
-// Textures loaded from subfolders: Data/SKSE/Plugins/glyph/particles/<type>/
+ParticleSettings& Particle()
+{
+    static ParticleSettings s;
+    return s;
+}
 
-// Display Options
-float VerticalOffset = 8.0f;
-bool HidePlayer = false;
-bool HideCreatures = false;
-int ReloadKey = 0;  // 0 = disabled, 207 = End key
+DisplaySettings& Display()
+{
+    static DisplaySettings s;
+    return s;
+}
 
-// Animation
-float AnimSpeedLowTier = .35f;
-float AnimSpeedMidTier = .20f;
-float AnimSpeedHighTier = .10f;
+AnimColorSettings& AnimColor()
+{
+    static AnimColorSettings s;
+    return s;
+}
 
-// Color & Effects
-float ColorWashAmount = .50f;
-float NameColorMix = .35f;
-float EffectAlphaMin = .20f;
-float EffectAlphaMax = .60f;
-float StrengthMin = .15f;
-float StrengthMax = .60f;
+FontSettings& Font()
+{
+    static FontSettings s;
+    return s;
+}
 
-// Smoothing, settle time in seconds
-float AlphaSettleTime = .46f;
-float ScaleSettleTime = .46f;
-float PositionSettleTime = .38f;
+AppearanceSettings& Appearance()
+{
+    static AppearanceSettings s;
+    return s;
+}
 
 VisualSettings& Visual()
 {
     static VisualSettings vs;
     return vs;
 }
-
-// Font Settings
-std::string NameFontPath;
-float NameFontSize = 122.0f;
-std::string LevelFontPath;
-float LevelFontSize = 61.0f;
-std::string TitleFontPath;
-float TitleFontSize = 42.0f;
-
-// Ornament font settings
-std::string OrnamentFontPath;
-float OrnamentFontSize = 64.0f;
-
-// Appearance template settings
-std::string TemplateFormID;
-std::string TemplatePlugin;
-bool UseTemplateAppearance;
-bool TemplateIncludeRace;
-bool TemplateIncludeBody;
-bool TemplateCopyFaceGen = true;       // Load and apply FaceGen mesh/tint
-bool TemplateCopySkin = false;         // Copy skin textures (risky for custom bodies)
-bool TemplateCopyOverlays = false;     // Copy RaceMenu overlays if available (requires NiOverride)
-bool TemplateCopyOutfit = false;       // Copy equipped armor from template actor
-bool TemplateReapplyOnReload = false;  // Re-apply appearance on hot reload
-std::string TemplateFaceGenPlugin;     // Optional override for FaceGen plugin (empty = auto-detect)
 
 // Default font paths (shared between table and ResetToDefaults)
 static constexpr auto kDefaultNameFontPath =
@@ -186,88 +166,93 @@ static constexpr auto kDefaultOrnamentFontPath =
 
 // clang-format off
 
-/// Single source of truth for all scalar settings.
-/// Each row: key, alias, target ptr, default value, validation rule.
+// Single source of truth for all scalar settings.
+// Each row: key, alias, target ptr, default value, validation rule.
 static const auto kSettings = std::to_array<SettingEntry>({
     // Distance & Visibility
-    {"FadeStartDistance",       "", &FadeStartDistance,     200.0f,   MinFloat{.0f}},
-    {"FadeEndDistance",         "", &FadeEndDistance,       2500.0f,  MinFloat{.0f}},
-    {"ScaleStartDistance",      "", &ScaleStartDistance,    200.0f,   MinFloat{.0f}},
-    {"ScaleEndDistance",        "", &ScaleEndDistance,      2500.0f,  MinFloat{.0f}},
-    {"MinimumScale",           "", &MinimumScale,          .1f,      ClampFloat{.01f, 5.0f}},
-    {"MaxScanDistance",         "", &MaxScanDistance,       3000.0f,  MinFloat{.0f}},
+    {"FadeStartDistance",       "", &Distance().FadeStartDistance,     200.0f,   MinFloat{.0f}},
+    {"FadeEndDistance",         "", &Distance().FadeEndDistance,       2500.0f,  MinFloat{.0f}},
+    {"ScaleStartDistance",      "", &Distance().ScaleStartDistance,    200.0f,   MinFloat{.0f}},
+    {"ScaleEndDistance",        "", &Distance().ScaleEndDistance,      2500.0f,  MinFloat{.0f}},
+    {"MinimumScale",           "", &Distance().MinimumScale,          .1f,      ClampFloat{.01f, 5.0f}},
+    {"MaxScanDistance",         "", &Distance().MaxScanDistance,       3000.0f,  MinFloat{.0f}},
 
     // Occlusion
-    {"EnableOcclusionCulling",  "", &EnableOcclusionCulling, true,    NoClamping{}},
-    {"OcclusionSettleTime",     "", &OcclusionSettleTime,    .58f,    MinFloat{.01f}},
-    {"OcclusionCheckInterval",  "", &OcclusionCheckInterval, 3,       MinInt{1}},
+    {"EnableOcclusionCulling",  "", &Occlusion().Enabled,              true,    NoClamping{}},
+    {"OcclusionSettleTime",     "", &Occlusion().SettleTime,           .58f,    MinFloat{.01f}},
+    {"OcclusionCheckInterval",  "", &Occlusion().CheckInterval,        3,       MinInt{1}},
 
     // Shadow & Outline
-    {"TitleShadowOffsetX",     "", &TitleShadowOffsetX,    2.0f,     NoClamping{}},
-    {"TitleShadowOffsetY",     "", &TitleShadowOffsetY,    2.0f,     NoClamping{}},
-    {"MainShadowOffsetX",      "", &MainShadowOffsetX,     4.0f,     NoClamping{}},
-    {"MainShadowOffsetY",      "", &MainShadowOffsetY,     4.0f,     NoClamping{}},
-    {"SegmentPadding",         "", &SegmentPadding,        4.0f,     NoClamping{}},
-    {"OutlineWidthMin",        "", &OutlineWidthMin,       2.0f,     MinFloat{.0f}},
-    {"OutlineWidthMax",        "", &OutlineWidthMax,       2.5f,     MinFloat{.0f}},
-    {"FastOutlines",           "", &FastOutlines,          false,    NoClamping{}},
+    {"TitleShadowOffsetX",     "", &ShadowOutline().TitleShadowOffsetX,    2.0f,     NoClamping{}},
+    {"TitleShadowOffsetY",     "", &ShadowOutline().TitleShadowOffsetY,    2.0f,     NoClamping{}},
+    {"MainShadowOffsetX",      "", &ShadowOutline().MainShadowOffsetX,     4.0f,     NoClamping{}},
+    {"MainShadowOffsetY",      "", &ShadowOutline().MainShadowOffsetY,     4.0f,     NoClamping{}},
+    {"SegmentPadding",         "", &ShadowOutline().SegmentPadding,        4.0f,     NoClamping{}},
+    {"OutlineWidthMin",        "", &ShadowOutline().OutlineWidthMin,       2.0f,     MinFloat{.0f}},
+    {"OutlineWidthMax",        "", &ShadowOutline().OutlineWidthMax,       2.5f,     MinFloat{.0f}},
+    {"FastOutlines",           "", &ShadowOutline().FastOutlines,          false,    NoClamping{}},
+    {"TitleMainGap",           "", &ShadowOutline().TitleMainGap,          .0f,      MinFloat{.0f}},
+    {"OutlineMinScale",        "", &ShadowOutline().OutlineMinScale,       .65f,     ClampFloat{.0f, 1.0f}},
+    {"ProportionalSpacing",    "", &ShadowOutline().ProportionalSpacing,   false,    NoClamping{}},
 
     // Glow
-    {"EnableGlow",             "", &EnableGlow,            false,    NoClamping{}},
-    {"GlowRadius",             "", &GlowRadius,           4.0f,     MinFloat{.0f}},
-    {"GlowIntensity",          "", &GlowIntensity,        .5f,      ClampFloat{.0f, 1.0f}},
-    {"GlowSamples",            "", &GlowSamples,          8,        ClampInt{1, 64}},
+    {"EnableGlow",             "", &Glow().Enabled,                   false,    NoClamping{}},
+    {"GlowRadius",             "", &Glow().Radius,                    4.0f,     MinFloat{.0f}},
+    {"GlowIntensity",          "", &Glow().Intensity,                 .5f,      ClampFloat{.0f, 1.0f}},
+    {"GlowSamples",            "", &Glow().Samples,                   8,        ClampInt{1, 64}},
 
     // Typewriter
-    {"EnableTypewriter",       "", &EnableTypewriter,      false,    NoClamping{}},
-    {"TypewriterSpeed",        "", &TypewriterSpeed,       30.0f,    MinFloat{.0f}},
-    {"TypewriterDelay",        "", &TypewriterDelay,       .0f,      MinFloat{.0f}},
+    {"EnableTypewriter",       "", &Typewriter().Enabled,             false,    NoClamping{}},
+    {"TypewriterSpeed",        "", &Typewriter().Speed,               30.0f,    MinFloat{.0f}},
+    {"TypewriterDelay",        "", &Typewriter().Delay,               .0f,      MinFloat{.0f}},
 
     // Debug
-    {"EnableDebugOverlay",     "", &EnableDebugOverlay,    false,    NoClamping{}},
+    {"EnableDebugOverlay",     "", &Display().EnableDebugOverlay,     false,    NoClamping{}},
 
     // Ornaments
-    {"EnableOrnaments",        "EnableFlourishes",   &EnableOrnaments,     true,     NoClamping{}},
-    {"OrnamentScale",          "FlourishScale",      &OrnamentScale,       1.0f,     NoClamping{}},
-    {"OrnamentSpacing",        "FlourishSpacing",    &OrnamentSpacing,     3.0f,     NoClamping{}},
+    {"EnableOrnaments",        "EnableFlourishes",   &Ornament().Enabled,      true,     NoClamping{}},
+    {"OrnamentScale",          "FlourishScale",      &Ornament().Scale,        1.0f,     NoClamping{}},
+    {"OrnamentSpacing",        "FlourishSpacing",    &Ornament().Spacing,      3.0f,     NoClamping{}},
+    {"OrnamentAnchorToMainLine", "",                  &Ornament().AnchorToMainLine, true, NoClamping{}},
 
     // Particle Aura
-    {"EnableParticleAura",     "", &EnableParticleAura,    true,     NoClamping{}},
-    {"UseParticleTextures",    "", &UseParticleTextures,   true,     NoClamping{}},
-    {"EnableStars",            "", &EnableStars,           true,     NoClamping{}},
-    {"EnableSparks",           "", &EnableSparks,          false,    NoClamping{}},
-    {"EnableWisps",            "", &EnableWisps,           false,    NoClamping{}},
-    {"EnableRunes",            "", &EnableRunes,           false,    NoClamping{}},
-    {"EnableOrbs",             "", &EnableOrbs,            false,    NoClamping{}},
-    {"ParticleCount",          "", &ParticleCount,         8,        MinInt{0}},
-    {"ParticleSize",           "", &ParticleSize,          3.0f,     MinFloat{.0f}},
-    {"ParticleSpeed",          "", &ParticleSpeed,         1.0f,     MinFloat{.0f}},
-    {"ParticleSpread",         "", &ParticleSpread,        20.0f,    MinFloat{.0f}},
-    {"ParticleAlpha",          "", &ParticleAlpha,         .8f,      ClampFloat{.0f, 1.0f}},
+    {"EnableParticleAura",     "", &Particle().Enabled,               true,     NoClamping{}},
+    {"UseParticleTextures",    "", &Particle().UseParticleTextures,   true,     NoClamping{}},
+    {"EnableStars",            "", &Particle().EnableStars,           true,     NoClamping{}},
+    {"EnableSparks",           "", &Particle().EnableSparks,          false,    NoClamping{}},
+    {"EnableWisps",            "", &Particle().EnableWisps,           false,    NoClamping{}},
+    {"EnableRunes",            "", &Particle().EnableRunes,           false,    NoClamping{}},
+    {"EnableOrbs",             "", &Particle().EnableOrbs,            false,    NoClamping{}},
+    {"ParticleCount",          "", &Particle().Count,                 8,        MinInt{0}},
+    {"ParticleSize",           "", &Particle().Size,                  3.0f,     MinFloat{.0f}},
+    {"ParticleSpeed",          "", &Particle().Speed,                 1.0f,     MinFloat{.0f}},
+    {"ParticleSpread",         "", &Particle().Spread,                20.0f,    MinFloat{.0f}},
+    {"ParticleAlpha",          "", &Particle().Alpha,                 .8f,      ClampFloat{.0f, 1.0f}},
+    {"ParticleBlendMode",      "", &Particle().BlendMode,             0,        ClampInt{0, 2}},
 
     // Display Options
-    {"VerticalOffset",         "", &VerticalOffset,        8.0f,     NoClamping{}},
-    {"HidePlayer",             "", &HidePlayer,            false,    NoClamping{}},
-    {"HideCreatures",          "", &HideCreatures,         false,    NoClamping{}},
-    {"ReloadKey",              "", &ReloadKey,             0,        NoClamping{}},
+    {"VerticalOffset",         "", &Display().VerticalOffset,         8.0f,     NoClamping{}},
+    {"HidePlayer",             "", &Display().HidePlayer,             false,    NoClamping{}},
+    {"HideCreatures",          "", &Display().HideCreatures,          false,    NoClamping{}},
+    {"ReloadKey",              "", &Display().ReloadKey,              0,        NoClamping{}},
 
     // Animation Speed
-    {"AnimSpeedLowTier",       "", &AnimSpeedLowTier,     .35f,     NoClamping{}},
-    {"AnimSpeedMidTier",       "", &AnimSpeedMidTier,     .20f,     NoClamping{}},
-    {"AnimSpeedHighTier",      "", &AnimSpeedHighTier,    .10f,     NoClamping{}},
+    {"AnimSpeedLowTier",       "", &AnimColor().AnimSpeedLowTier,    .35f,     NoClamping{}},
+    {"AnimSpeedMidTier",       "", &AnimColor().AnimSpeedMidTier,    .20f,     NoClamping{}},
+    {"AnimSpeedHighTier",      "", &AnimColor().AnimSpeedHighTier,   .10f,     NoClamping{}},
 
     // Color & Effects
-    {"ColorWashAmount",        "", &ColorWashAmount,       .50f,     ClampFloat{.0f, 1.0f}},
-    {"NameColorMix",           "", &NameColorMix,          .35f,     ClampFloat{.0f, 1.0f}},
-    {"EffectAlphaMin",         "", &EffectAlphaMin,        .20f,     ClampFloat{.0f, 1.0f}},
-    {"EffectAlphaMax",         "", &EffectAlphaMax,        .60f,     ClampFloat{.0f, 1.0f}},
-    {"StrengthMin",            "", &StrengthMin,           .15f,     MinFloat{.0f}},
-    {"StrengthMax",            "", &StrengthMax,           .60f,     MinFloat{.0f}},
+    {"ColorWashAmount",        "", &AnimColor().ColorWashAmount,      .50f,     ClampFloat{.0f, 1.0f}},
+    {"NameColorMix",           "", &AnimColor().NameColorMix,         .35f,     ClampFloat{.0f, 1.0f}},
+    {"EffectAlphaMin",         "", &AnimColor().EffectAlphaMin,       .20f,     ClampFloat{.0f, 1.0f}},
+    {"EffectAlphaMax",         "", &AnimColor().EffectAlphaMax,       .60f,     ClampFloat{.0f, 1.0f}},
+    {"StrengthMin",            "", &AnimColor().StrengthMin,          .15f,     MinFloat{.0f}},
+    {"StrengthMax",            "", &AnimColor().StrengthMax,          .60f,     MinFloat{.0f}},
 
     // Smoothing
-    {"AlphaSettleTime",        "", &AlphaSettleTime,       .46f,     MinFloat{.01f}},
-    {"ScaleSettleTime",        "", &ScaleSettleTime,       .46f,     MinFloat{.01f}},
-    {"PositionSettleTime",     "", &PositionSettleTime,    .38f,     MinFloat{.01f}},
+    {"AlphaSettleTime",        "", &AnimColor().AlphaSettleTime,      .46f,     MinFloat{.01f}},
+    {"ScaleSettleTime",        "", &AnimColor().ScaleSettleTime,      .46f,     MinFloat{.01f}},
+    {"PositionSettleTime",     "", &AnimColor().PositionSettleTime,   .38f,     MinFloat{.01f}},
 
     // Visual sub-settings (via Visual() singleton)
     {"EnableDistanceOutlineScale", "", &Visual().EnableDistanceOutlineScale, false, NoClamping{}},
@@ -292,32 +277,32 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OrnamentMinTier",        "", &Visual().OrnamentMinTier,     10,      NoClamping{}},
 
     // Fonts
-    {"NameFontPath",           "", &NameFontPath,          std::string(kDefaultNameFontPath),    NoClamping{}},
-    {"NameFontSize",           "", &NameFontSize,          122.0f,   NoClamping{}},
-    {"LevelFontPath",          "", &LevelFontPath,         std::string(kDefaultLevelFontPath),   NoClamping{}},
-    {"LevelFontSize",          "", &LevelFontSize,         61.0f,    NoClamping{}},
-    {"TitleFontPath",          "", &TitleFontPath,         std::string(kDefaultTitleFontPath),   NoClamping{}},
-    {"TitleFontSize",          "", &TitleFontSize,         42.0f,    NoClamping{}},
-    {"OrnamentFontPath",       "", &OrnamentFontPath,      std::string(kDefaultOrnamentFontPath), NoClamping{}},
-    {"OrnamentFontSize",       "", &OrnamentFontSize,      64.0f,    NoClamping{}},
+    {"NameFontPath",           "", &Font().NameFontPath,           std::string(kDefaultNameFontPath),    NoClamping{}},
+    {"NameFontSize",           "", &Font().NameFontSize,           122.0f,   NoClamping{}},
+    {"LevelFontPath",          "", &Font().LevelFontPath,          std::string(kDefaultLevelFontPath),   NoClamping{}},
+    {"LevelFontSize",          "", &Font().LevelFontSize,          61.0f,    NoClamping{}},
+    {"TitleFontPath",          "", &Font().TitleFontPath,          std::string(kDefaultTitleFontPath),   NoClamping{}},
+    {"TitleFontSize",          "", &Font().TitleFontSize,          42.0f,    NoClamping{}},
+    {"OrnamentFontPath",       "", &Ornament().FontPath,           std::string(kDefaultOrnamentFontPath), NoClamping{}},
+    {"OrnamentFontSize",       "", &Ornament().FontSize,           64.0f,    NoClamping{}},
 
     // Appearance Template
-    {"TemplateFormID",         "", &TemplateFormID,        std::string(),  NoClamping{}},
-    {"TemplatePlugin",         "", &TemplatePlugin,        std::string(),  NoClamping{}},
-    {"UseTemplateAppearance",  "", &UseTemplateAppearance, false,    NoClamping{}},
-    {"TemplateIncludeRace",    "", &TemplateIncludeRace,   false,    NoClamping{}},
-    {"TemplateIncludeBody",    "", &TemplateIncludeBody,   false,    NoClamping{}},
-    {"TemplateCopyFaceGen",    "", &TemplateCopyFaceGen,   true,     NoClamping{}},
-    {"TemplateCopySkin",       "", &TemplateCopySkin,      false,    NoClamping{}},
-    {"TemplateCopyOverlays",   "", &TemplateCopyOverlays,  false,    NoClamping{}},
-    {"TemplateCopyOutfit",     "", &TemplateCopyOutfit,    false,    NoClamping{}},
-    {"TemplateReapplyOnReload","", &TemplateReapplyOnReload, false,  NoClamping{}},
-    {"TemplateFaceGenPlugin",  "", &TemplateFaceGenPlugin, std::string(),  NoClamping{}},
+    {"TemplateFormID",         "", &Appearance().TemplateFormID,        std::string(),  NoClamping{}},
+    {"TemplatePlugin",         "", &Appearance().TemplatePlugin,        std::string(),  NoClamping{}},
+    {"UseTemplateAppearance",  "", &Appearance().UseTemplateAppearance, false,    NoClamping{}},
+    {"TemplateIncludeRace",    "", &Appearance().TemplateIncludeRace,   false,    NoClamping{}},
+    {"TemplateIncludeBody",    "", &Appearance().TemplateIncludeBody,   false,    NoClamping{}},
+    {"TemplateCopyFaceGen",    "", &Appearance().TemplateCopyFaceGen,   true,     NoClamping{}},
+    {"TemplateCopySkin",       "", &Appearance().TemplateCopySkin,      false,    NoClamping{}},
+    {"TemplateCopyOverlays",   "", &Appearance().TemplateCopyOverlays,  false,    NoClamping{}},
+    {"TemplateCopyOutfit",     "", &Appearance().TemplateCopyOutfit,    false,    NoClamping{}},
+    {"TemplateReapplyOnReload","", &Appearance().TemplateReapplyOnReload, false,  NoClamping{}},
+    {"TemplateFaceGenPlugin",  "", &Appearance().TemplateFaceGenPlugin, std::string(),  NoClamping{}},
 });
 
 // clang-format on
 
-/// Lazily-built lookup map: lowercase key -> SettingEntry pointer.
+// Lazily-built lookup map: lowercase key -> SettingEntry pointer.
 static const std::unordered_map<std::string, const SettingEntry*>& GetKeyMap()
 {
     static const auto map = []
@@ -337,7 +322,7 @@ static const std::unordered_map<std::string, const SettingEntry*>& GetKeyMap()
     return map;
 }
 
-/// Apply a parsed string value to the correct typed target.
+// Apply a parsed string value to the correct typed target.
 static void ApplySettingValue(const SettingEntry& entry, const std::string& val)
 {
     std::visit(
@@ -350,7 +335,7 @@ static void ApplySettingValue(const SettingEntry& entry, const std::string& val)
         entry.target);
 }
 
-/// Reset all table-driven settings to their defaults.
+// Reset all table-driven settings to their defaults.
 static void ResetTableDefaults()
 {
     for (const auto& s : kSettings)
@@ -365,7 +350,7 @@ static void ResetTableDefaults()
     }
 }
 
-/// Apply validation rules from the table.
+// Apply validation rules from the table.
 static void ValidateTableSettings()
 {
     for (const auto& s : kSettings)
@@ -427,7 +412,7 @@ static std::string ToLowerAscii(std::string_view input)
     return out;
 }
 
-/// Canonicalize a key for tier/special-title section fields (not in the table).
+// Canonicalize a key for tier/special-title section fields (not in the table).
 static std::string CanonicalizeStructKey(const std::string& rawKey)
 {
     static const std::unordered_map<std::string, std::string> kStructKeys = {
@@ -465,12 +450,12 @@ static std::string CanonicalizeStructKey(const std::string& rawKey)
 
 static void ResetToDefaults()
 {
-    TitleFormat = "%t";
-    DisplayFormat = {{"%n", false}, {" Lv.%l", true}};
+    TitleFormat() = "%t";
+    DisplayFormat() = {{"%n", false}, {" Lv.%l", true}};
 
-    Tiers.clear();
-    Tiers.push_back(MakeDefaultTier());
-    SpecialTitles.clear();
+    Tiers().clear();
+    Tiers().push_back(MakeDefaultTier());
+    SpecialTitles().clear();
 
     // All scalar settings are reset from the descriptor table.
     ResetTableDefaults();
@@ -482,25 +467,28 @@ static void ClampAndValidate()
     ValidateTableSettings();
 
     // Cross-field constraints that cannot be expressed per-setting.
-    FadeEndDistance = std::max(FadeStartDistance + 1.0f, FadeEndDistance);
-    ScaleEndDistance = std::max(ScaleStartDistance + 1.0f, ScaleEndDistance);
-    OutlineWidthMax = std::max(OutlineWidthMin, OutlineWidthMax);
+    auto& dist = Distance();
+    dist.FadeEndDistance = std::max(dist.FadeStartDistance + 1.0f, dist.FadeEndDistance);
+    dist.ScaleEndDistance = std::max(dist.ScaleStartDistance + 1.0f, dist.ScaleEndDistance);
+    ShadowOutline().OutlineWidthMax =
+        std::max(ShadowOutline().OutlineWidthMin, ShadowOutline().OutlineWidthMax);
 
-    if (EffectAlphaMin > EffectAlphaMax)
+    auto& ac = AnimColor();
+    if (ac.EffectAlphaMin > ac.EffectAlphaMax)
     {
-        std::swap(EffectAlphaMin, EffectAlphaMax);
+        std::swap(ac.EffectAlphaMin, ac.EffectAlphaMax);
     }
-    if (StrengthMin > StrengthMax)
+    if (ac.StrengthMin > ac.StrengthMax)
     {
-        std::swap(StrengthMin, StrengthMax);
-    }
-
-    if (Tiers.empty())
-    {
-        Tiers.push_back(MakeDefaultTier());
+        std::swap(ac.StrengthMin, ac.StrengthMax);
     }
 
-    for (auto& tier : Tiers)
+    if (Tiers().empty())
+    {
+        Tiers().push_back(MakeDefaultTier());
+    }
+
+    for (auto& tier : Tiers())
     {
         if (tier.maxLevel < tier.minLevel)
         {
@@ -512,7 +500,7 @@ static void ClampAndValidate()
         tier.highlightColor.clamp01();
     }
 
-    for (auto& special : SpecialTitles)
+    for (auto& special : SpecialTitles())
     {
         special.keyword = Trim(special.keyword);
         special.keywordLower = ToLowerAscii(special.keyword);
@@ -633,6 +621,247 @@ static EffectType ParseEffectType(const std::string& str)
     return kEffectTypeMap.fromString(ToLowerAscii(Trim(str)), EffectType::Gradient);
 }
 
+// Parse an effect string "EffectType param1,param2,... [whiteBase]" into an EffectParams.
+static void ParseEffectString(const std::string& val, EffectParams& effect)
+{
+    std::istringstream ss(val);
+    std::string effectTypeName;
+    ss >> effectTypeName;
+
+    effect.type = ParseEffectType(effectTypeName);
+
+    std::string paramsStr;
+    std::getline(ss, paramsStr);
+    paramsStr = Trim(paramsStr);
+
+    std::string paramsLower = ToLowerAscii(paramsStr);
+    size_t wbPos = paramsLower.find("whitebase");
+    if (wbPos != std::string::npos)
+    {
+        effect.useWhiteBase = true;
+        paramsStr = paramsStr.substr(0, wbPos);
+    }
+
+    std::istringstream paramStream(paramsStr);
+    std::string token;
+    int paramIdx = 0;
+    while (std::getline(paramStream, token, ',') && paramIdx < 5)
+    {
+        token = Trim(token);
+        if (token.empty())
+        {
+            continue;
+        }
+
+        float v = ParseFloat(token, .0f);
+        switch (paramIdx)
+        {
+            case 0:
+                effect.param1 = v;
+                break;
+            case 1:
+                effect.param2 = v;
+                break;
+            case 2:
+                effect.param3 = v;
+                break;
+            case 3:
+                effect.param4 = v;
+                break;
+            case 4:
+                effect.param5 = v;
+                break;
+        }
+        paramIdx++;
+    }
+}
+
+// Parse ornaments string "LEFT, RIGHT" or legacy "AB" format.
+static void ParseOrnaments(const std::string& val,
+                           std::string& leftOrnaments,
+                           std::string& rightOrnaments)
+{
+    size_t commaPos = val.find(',');
+    if (commaPos != std::string::npos)
+    {
+        leftOrnaments = Trim(val.substr(0, commaPos));
+        rightOrnaments = Trim(val.substr(commaPos + 1));
+    }
+    else if (val.length() >= 2)
+    {
+        leftOrnaments = val.substr(0, 1);
+        rightOrnaments = val.substr(1, 1);
+    }
+    else
+    {
+        leftOrnaments.clear();
+        rightOrnaments.clear();
+    }
+}
+
+// Parse a single key-value pair for a [TierN] section.
+static bool ParseTierField(TierDefinition& tier, const std::string& key, const std::string& val)
+{
+    if (key == "Name")
+    {
+        tier.title = val;
+    }
+    else if (key == "MinLevel")
+    {
+        const int parsed = ParseInt(val, 1);
+        const int clamped =
+            std::clamp(parsed, 0, static_cast<int>((std::numeric_limits<uint16_t>::max)()));
+        tier.minLevel = static_cast<uint16_t>(clamped);
+    }
+    else if (key == "MaxLevel")
+    {
+        const int parsed = ParseInt(val, 25);
+        const int clamped =
+            std::clamp(parsed, 0, static_cast<int>((std::numeric_limits<uint16_t>::max)()));
+        tier.maxLevel = static_cast<uint16_t>(clamped);
+    }
+    else if (key == "LeftColor")
+    {
+        ParseColor3(val, tier.leftColor);
+    }
+    else if (key == "RightColor")
+    {
+        ParseColor3(val, tier.rightColor);
+    }
+    else if (key == "HighlightColor")
+    {
+        ParseColor3(val, tier.highlightColor);
+    }
+    else if (key == "TitleEffect" || key == "NameEffect" || key == "LevelEffect")
+    {
+        EffectParams& effect = (key == "TitleEffect")  ? tier.titleEffect
+                               : (key == "NameEffect") ? tier.nameEffect
+                                                       : tier.levelEffect;
+        ParseEffectString(val, effect);
+    }
+    else if (key == "Ornaments")
+    {
+        ParseOrnaments(val, tier.leftOrnaments, tier.rightOrnaments);
+    }
+    else if (key == "ParticleTypes")
+    {
+        tier.particleTypes = val;
+    }
+    else if (key == "ParticleCount")
+    {
+        tier.particleCount = ParseInt(val, 0);
+    }
+    else
+    {
+        return false;
+    }
+    return true;
+}
+
+// Parse a single key-value pair for a [SpecialTitleN] section.
+static bool ParseSpecialTitleField(SpecialTitleDefinition& st,
+                                   const std::string& key,
+                                   const std::string& val)
+{
+    if (key == "Keyword")
+    {
+        st.keyword = val;
+    }
+    else if (key == "DisplayTitle")
+    {
+        st.displayTitle = val;
+    }
+    else if (key == "Color")
+    {
+        ParseColor3(val, st.color);
+    }
+    else if (key == "GlowColor")
+    {
+        ParseColor3(val, st.glowColor);
+    }
+    else if (key == "ForceOrnaments" || key == "ForceFlourishes")
+    {
+        st.forceOrnaments = ParseBool(val);
+    }
+    else if (key == "ForceParticles")
+    {
+        st.forceParticles = ParseBool(val);
+    }
+    else if (key == "Priority")
+    {
+        st.priority = ParseInt(val, 0);
+    }
+    else if (key == "Ornaments")
+    {
+        ParseOrnaments(val, st.leftOrnaments, st.rightOrnaments);
+    }
+    else
+    {
+        return false;
+    }
+    return true;
+}
+
+// Parse the Format key: quoted segments forming title and display format.
+static void ParseDisplayFormat(const std::string& val)
+{
+    std::vector<Segment> newDisplayFormat;
+    std::string newTitleFormat;
+    bool titleFound = false;
+
+    bool inQuote = false;
+    std::string current;
+    for (size_t i = 0; i < val.size(); ++i)
+    {
+        char c = val[i];
+
+        if (c == '\\' && i + 1 < val.size())
+        {
+            if (inQuote)
+            {
+                current += val[++i];
+            }
+            continue;
+        }
+
+        if (c == '"')
+        {
+            if (inQuote)
+            {
+                if (current.find("%t") != std::string::npos)
+                {
+                    newTitleFormat = current;
+                    titleFound = true;
+                }
+                else
+                {
+                    bool isLevel = current.find("%l") != std::string::npos;
+                    newDisplayFormat.push_back({current, isLevel});
+                }
+                current.clear();
+                inQuote = false;
+            }
+            else
+            {
+                inQuote = true;
+            }
+        }
+        else if (inQuote)
+        {
+            current += c;
+        }
+    }
+
+    if (titleFound)
+    {
+        TitleFormat() = newTitleFormat;
+    }
+    if (!newDisplayFormat.empty())
+    {
+        DisplayFormat() = newDisplayFormat;
+    }
+}
+
 void Load()
 {
     std::unique_lock<std::shared_mutex> settingsWriteLock(Mutex());
@@ -712,9 +941,9 @@ void Load()
                 else
                 {
                     // Dynamically grow the Tiers vector to accommodate the specified tier
-                    while (static_cast<int>(Tiers.size()) <= currentTier)
+                    while (static_cast<int>(Tiers().size()) <= currentTier)
                     {
-                        Tiers.emplace_back();
+                        Tiers().emplace_back();
                     }
                 }
             }
@@ -730,7 +959,7 @@ void Load()
                     currentSpecialTitle <= RenderConstants::MAX_SPECIAL_TITLE_INDEX)
                 {
                     // Dynamically grow the SpecialTitles vector
-                    while (static_cast<int>(SpecialTitles.size()) <= currentSpecialTitle)
+                    while (static_cast<int>(SpecialTitles().size()) <= currentSpecialTitle)
                     {
                         SpecialTitleDefinition newSpecial;
                         newSpecial.keyword = "";
@@ -740,7 +969,7 @@ void Load()
                         newSpecial.forceOrnaments = true;
                         newSpecial.forceParticles = true;
                         newSpecial.priority = 0;
-                        SpecialTitles.push_back(newSpecial);
+                        SpecialTitles().push_back(newSpecial);
                     }
                 }
                 else
@@ -793,305 +1022,22 @@ void Load()
 
         bool handled = false;
 
-        // If we're inside a [TierN] section, all kv pairs apply to that tier
-        // This allows each tier to have its own level range, colors, and effects
-        if (currentTier >= 0 && currentTier < static_cast<int>(Tiers.size()))
+        if (currentTier >= 0 && currentTier < static_cast<int>(Tiers().size()))
         {
-            if (key == "Name")
-            {
-                // "Name" is displayed as the tier title
-                Tiers[currentTier].title = val;
-                handled = true;
-            }
-            else if (key == "MinLevel")
-            {
-                // Inclusive lower bound for this tier's level range
-                const int parsed = ParseInt(val, 1);
-                const int clamped =
-                    std::clamp(parsed, 0, static_cast<int>((std::numeric_limits<uint16_t>::max)()));
-                Tiers[currentTier].minLevel = static_cast<uint16_t>(clamped);
-                handled = true;
-            }
-            else if (key == "MaxLevel")
-            {
-                // Inclusive upper bound for this tier's level range
-                const int parsed = ParseInt(val, 25);
-                const int clamped =
-                    std::clamp(parsed, 0, static_cast<int>((std::numeric_limits<uint16_t>::max)()));
-                Tiers[currentTier].maxLevel = static_cast<uint16_t>(clamped);
-                handled = true;
-            }
-            else if (key == "LeftColor")
-            {
-                // Left/start color for gradient effects (RGB floats 0.0-1.0)
-                ParseColor3(val, Tiers[currentTier].leftColor);
-                handled = true;
-            }
-            else if (key == "RightColor")
-            {
-                // Right/end color for gradient effects
-                ParseColor3(val, Tiers[currentTier].rightColor);
-                handled = true;
-            }
-            else if (key == "HighlightColor")
-            {
-                // Accent color for shimmer, sparkle, and scanline effects
-                ParseColor3(val, Tiers[currentTier].highlightColor);
-                handled = true;
-            }
-            else if (key == "TitleEffect" || key == "NameEffect" || key == "LevelEffect")
-            {
-                // Effect syntax: "EffectType param1,param2,param3,param4,param5 [whiteBase]"
-                // Example: "RainbowWave 0.15,0.30,0.60,0.40,1.00 whiteBase"
-
-                std::istringstream ss(val);
-                std::string effectTypeName;
-                ss >> effectTypeName;  // Extract first word (effect type name)
-
-                // Select which effect struct to populate based on key name
-                EffectParams& effect = (key == "TitleEffect")  ? Tiers[currentTier].titleEffect
-                                       : (key == "NameEffect") ? Tiers[currentTier].nameEffect
-                                                               : Tiers[currentTier].levelEffect;
-
-                effect.type = ParseEffectType(effectTypeName);
-
-                // Get the rest of the line
-                std::string paramsStr;
-                std::getline(ss, paramsStr);
-                paramsStr = Trim(paramsStr);
-
-                // Check for "whiteBase" keyword
-                // When enabled, renders white text layer under effects
-                std::string paramsLower = ToLowerAscii(paramsStr);
-                size_t wbPos = paramsLower.find("whitebase");
-                if (wbPos != std::string::npos)
-                {
-                    effect.useWhiteBase = true;
-                    paramsStr = paramsStr.substr(0, wbPos);  // Strip flag from params
-                }
-
-                // Parse comma-separated parameters (up to 5 floats)
-                // Different effects interpret these differently:
-                //   Shimmer: param1=bandWidth, param2=strength
-                //   Aurora: param1=speed, param2=waves, param3=intensity, param4=sway
-                //   RainbowWave: param1=baseHue, param2=hueSpread, param3=speed, param4=sat,
-                //   param5=val
-                std::istringstream paramStream(paramsStr);
-                std::string token;
-                int paramIdx = 0;
-                while (std::getline(paramStream, token, ',') && paramIdx < 5)
-                {
-                    token = Trim(token);
-                    if (token.empty())
-                    {
-                        continue;  // Skip empty tokens (e.g., "1.0,,2.0")
-                    }
-
-                    float v = ParseFloat(token, .0f);
-                    switch (paramIdx)
-                    {
-                        case 0:
-                            effect.param1 = v;
-                            break;
-                        case 1:
-                            effect.param2 = v;
-                            break;
-                        case 2:
-                            effect.param3 = v;
-                            break;
-                        case 3:
-                            effect.param4 = v;
-                            break;
-                        case 4:
-                            effect.param5 = v;
-                            break;
-                    }
-                    paramIdx++;
-                }
-                handled = true;
-            }
-            else if (key == "Ornaments")
-            {
-                // Ornament format: "LEFT, RIGHT" (e.g., "AC, BD")
-                size_t commaPos = val.find(',');
-                if (commaPos != std::string::npos)
-                {
-                    // New format: split on comma
-                    Tiers[currentTier].leftOrnaments = Trim(val.substr(0, commaPos));
-                    Tiers[currentTier].rightOrnaments = Trim(val.substr(commaPos + 1));
-                }
-                else if (val.length() >= 2)
-                {
-                    // Legacy format: first char = left, second char = right
-                    Tiers[currentTier].leftOrnaments = val.substr(0, 1);
-                    Tiers[currentTier].rightOrnaments = val.substr(1, 1);
-                }
-                else
-                {
-                    Tiers[currentTier].leftOrnaments.clear();
-                    Tiers[currentTier].rightOrnaments.clear();
-                }
-                handled = true;
-            }
-            else if (key == "ParticleTypes")
-            {
-                // Particle types for this tier (e.g., "Stars,Wisps,Orbs")
-                Tiers[currentTier].particleTypes = val;
-                handled = true;
-            }
-            else if (key == "ParticleCount")
-            {
-                // Number of particles for this tier (0 = use global)
-                Tiers[currentTier].particleCount = ParseInt(val, 0);
-                handled = true;
-            }
+            handled = ParseTierField(Tiers()[currentTier], key, val);
         }
 
-        // If we're inside a [SpecialTitleN] section, parse special title properties
         if (!handled && currentSpecialTitle >= 0 &&
-            currentSpecialTitle < static_cast<int>(SpecialTitles.size()))
+            currentSpecialTitle < static_cast<int>(SpecialTitles().size()))
         {
-            if (key == "Keyword")
-            {
-                // Text to match in actor name (case-insensitive)
-                SpecialTitles[currentSpecialTitle].keyword = val;
-                handled = true;
-            }
-            else if (key == "DisplayTitle")
-            {
-                // Title shown above name
-                SpecialTitles[currentSpecialTitle].displayTitle = val;
-                handled = true;
-            }
-            else if (key == "Color")
-            {
-                // RGB color for nameplate
-                ParseColor3(val, SpecialTitles[currentSpecialTitle].color);
-                handled = true;
-            }
-            else if (key == "GlowColor")
-            {
-                // RGB color for glow effect
-                ParseColor3(val, SpecialTitles[currentSpecialTitle].glowColor);
-                handled = true;
-            }
-            else if (key == "ForceOrnaments" || key == "ForceFlourishes")
-            {
-                SpecialTitles[currentSpecialTitle].forceOrnaments = ParseBool(val);
-                handled = true;
-            }
-            else if (key == "ForceParticles")
-            {
-                // Always show particle aura
-                SpecialTitles[currentSpecialTitle].forceParticles = ParseBool(val);
-                handled = true;
-            }
-            else if (key == "Priority")
-            {
-                // Higher priority = checked first
-                SpecialTitles[currentSpecialTitle].priority = ParseInt(val, 0);
-                handled = true;
-            }
-            else if (key == "Ornaments")
-            {
-                // Ornament format: "LEFT, RIGHT" (e.g., "AC, BD")
-                size_t commaPos = val.find(',');
-                if (commaPos != std::string::npos)
-                {
-                    SpecialTitles[currentSpecialTitle].leftOrnaments =
-                        Trim(val.substr(0, commaPos));
-                    SpecialTitles[currentSpecialTitle].rightOrnaments =
-                        Trim(val.substr(commaPos + 1));
-                }
-                else if (val.length() >= 2)
-                {
-                    SpecialTitles[currentSpecialTitle].leftOrnaments = val.substr(0, 1);
-                    SpecialTitles[currentSpecialTitle].rightOrnaments = val.substr(1, 1);
-                }
-                else
-                {
-                    SpecialTitles[currentSpecialTitle].leftOrnaments.clear();
-                    SpecialTitles[currentSpecialTitle].rightOrnaments.clear();
-                }
-                handled = true;
-            }
+            handled = ParseSpecialTitleField(SpecialTitles()[currentSpecialTitle], key, val);
         }
 
         if (!handled)
         {
-            // Format key requires special parsing because it contains multiple quoted segments
-            // Syntax: Format = "%t" "%n" "Lv.%l"
             if (key == "Format")
             {
-                std::vector<Segment> newDisplayFormat;
-                std::string newTitleFormat;
-                bool titleFound = false;
-
-                // Simple state machine to parse quoted strings
-                // Handles escaped quotes (\") within strings
-                bool inQuote = false;
-                std::string current;
-                for (size_t i = 0; i < val.size(); ++i)
-                {
-                    char c = val[i];
-
-                    // Handle escape sequences (\" -> literal quote, etc.)
-                    if (c == '\\' && i + 1 < val.size())
-                    {
-                        if (inQuote)
-                        {
-                            // Inside quotes, add the escaped character literally
-                            current += val[++i];
-                        }
-                        // Outside quotes, skip escape sequences
-                        continue;
-                    }
-
-                    if (c == '"')
-                    {
-                        if (inQuote)
-                        {
-                            // Closing quote, finish current segment
-                            if (current.find("%t") != std::string::npos)
-                            {
-                                // Segment contains %t -> it's the title format, separate line
-                                newTitleFormat = current;
-                                titleFound = true;
-                            }
-                            else
-                            {
-                                // Regular segment -> add to main line
-                                // Use level font if segment contains %l
-                                bool isLevel = current.find("%l") != std::string::npos;
-                                newDisplayFormat.push_back({current, isLevel});
-                            }
-                            current.clear();
-                            inQuote = false;
-                        }
-                        else
-                        {
-                            // Opening quote, start new segment
-                            inQuote = true;
-                        }
-                    }
-                    else if (inQuote)
-                    {
-                        // Inside quotes, accumulate characters
-                        current += c;
-                    }
-                    // Characters outside quotes are ignored
-                }
-
-                // Only update if we actually parsed something
-                // This prevents empty Format= from clearing the defaults
-                if (titleFound)
-                {
-                    TitleFormat = newTitleFormat;
-                }
-                if (!newDisplayFormat.empty())
-                {
-                    DisplayFormat = newDisplayFormat;
-                }
+                ParseDisplayFormat(val);
             }
             // Table-driven lookup for all scalar settings.
             else if (auto it = GetKeyMap().find(ToLowerAscii(keyRaw)); it != GetKeyMap().end())
@@ -1127,5 +1073,7 @@ void Load()
             SKSE::log::warn("Settings: warning output truncated");
         }
     }
+
+    Generation().fetch_add(1, std::memory_order_release);
 }
 }  // namespace Settings

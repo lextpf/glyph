@@ -20,50 +20,97 @@
 
 namespace Hooks
 {
-// Atomic flag indicating whether ImGui has been initialized
-std::atomic<bool> s_Initialized = false;
-std::atomic<bool> s_Initializing = false;
+// ============================================================================
+// Initialization and per-frame state machine
+//
+// State is organized into three flag structs accessed via static functions:
+//
+//   Init()  -- Initialization lifecycle flags
+//     initialized, initializing                         (UNINITIALIZED)
+//     -> CreateD3DAndSwapChain::thunk CAS initializing=true  (INITIALIZING)
+//     -> On success: initialized=true, initializing=false    (INITIALIZED)
+//     -> On failure: initializing=false                      (UNINITIALIZED)
+//     backendReinitRequested  -- triggers DX11 backend re-init
+//     mipmapsGenerated        -- reset to force font atlas rebuild
+//     particleTexturesLoaded  -- reset to force texture reload
+//
+//   Frame() -- Per-frame flags (reset at start of each PostDisplay::thunk call)
+//     shouldRenderOverlay      -- set if overlay is allowed this frame
+//     overlayRenderedThisFrame -- set after RenderOverlayNow completes
+//
+//   Diag()  -- Diagnostics
+//     renderExceptionCount     -- throttled error logging
+//     missingPresentLogged     -- one-shot warning for missing Present
+//     deviceChangeLogged       -- one-shot warning for device change
+// ============================================================================
 
-// Flag indicating whether mipmapped font atlas has been created
-std::atomic<bool> s_MipmapsGenerated = false;
+struct InitFlags
+{
+    std::atomic<bool> initialized{false};
+    std::atomic<bool> initializing{false};
+    std::atomic<bool> mipmapsGenerated{false};
+    std::atomic<bool> particleTexturesLoaded{false};
+    std::atomic<bool> backendReinitRequested{false};
+};
 
-// Flag indicating whether particle textures have been loaded
-std::atomic<bool> s_ParticleTexturesLoaded = false;
+struct FrameFlags
+{
+    std::atomic<bool> shouldRenderOverlay{false};
+    std::atomic<bool> overlayRenderedThisFrame{false};
+};
 
-// Flag indicating overlay should be rendered this frame
-std::atomic<bool> s_ShouldRenderOverlay = false;
+struct DiagFlags
+{
+    std::atomic<uint32_t> renderExceptionCount{0};
+    std::atomic<bool> missingPresentLogged{false};
+    std::atomic<bool> deviceChangeLogged{false};
+};
 
-// Flag indicating overlay has been rendered this frame
-std::atomic<bool> s_OverlayRenderedThisFrame = false;
-
-// Render exception metrics (logged with throttling).
-std::atomic<uint32_t> s_RenderExceptionCount = 0;
-std::atomic<bool> s_MissingPresentLogged = false;
-std::atomic<bool> s_DeviceChangeLogged = false;
-std::atomic<bool> s_BackendReinitRequested = false;
+static InitFlags& Init()
+{
+    static InitFlags f;
+    return f;
+}
+static FrameFlags& Frame()
+{
+    static FrameFlags f;
+    return f;
+}
+static DiagFlags& Diag()
+{
+    static DiagFlags f;
+    return f;
+}
 static std::mutex& StateMutex()
 {
     static std::mutex instance;
     return instance;
 }
 
-// Stored D3D11 device for mipmap generation
-Microsoft::WRL::ComPtr<ID3D11Device> g_Device;
-
-// Stored D3D11 context for mipmap generation
-Microsoft::WRL::ComPtr<ID3D11DeviceContext> g_Context;
-
-// Stored swap chain for Present hook
-Microsoft::WRL::ComPtr<IDXGISwapChain> g_SwapChain;
-
 // Original Present function pointer
 using PresentFn = HRESULT(WINAPI*)(IDXGISwapChain*, UINT, UINT);
-std::atomic<PresentFn> g_OriginalPresent{nullptr};
+
+// D3D11 device, context, swap chain, and original Present pointer.
+// Wrapped in a function-local static to avoid non-trivially destructible
+// namespace-scope globals (static destruction order risk on DLL unload).
+struct D3DState
+{
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain;
+    std::atomic<PresentFn> originalPresent{nullptr};
+};
+
+static D3DState& D3D()
+{
+    static D3DState s;
+    return s;
+}
 
 // Forward declaration of Present hook
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
 
-// Forward declaration of overlay render function (used by screenshot hook)
+// Forward declaration of overlay render function (called by PresentHook and PostDisplay::thunk)
 void RenderOverlayNow();
 
 // Installs the Present hook on a specific swapchain and stores original Present.
@@ -90,9 +137,9 @@ bool TryInstallPresentHook(IDXGISwapChain* swapChain)
     const std::lock_guard<std::mutex> lock(StateMutex());
     if (currentPresent == ourPresent)
     {
-        return g_OriginalPresent.load(std::memory_order_relaxed) != nullptr;
+        return D3D().originalPresent.load(std::memory_order_relaxed) != nullptr;
     }
-    g_OriginalPresent.store(currentPresent, std::memory_order_release);
+    D3D().originalPresent.store(currentPresent, std::memory_order_release);
 
     DWORD oldProtect = 0;
     if (!VirtualProtect(&vtable[8], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
@@ -105,6 +152,227 @@ bool TryInstallPresentHook(IDXGISwapChain* swapChain)
     return true;
 }
 
+// Detect runtime swap-chain/device changes and refresh cached pointers.
+static void HandleDeviceChange()
+{
+    auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+    if (!renderer || !renderer->data.renderWindows)
+    {
+        return;
+    }
+
+    auto& data = renderer->data;
+    auto swapChain = reinterpret_cast<IDXGISwapChain*>(data.renderWindows[0].swapChain);
+    auto device = reinterpret_cast<ID3D11Device*>(data.forwarder);
+    auto context = reinterpret_cast<ID3D11DeviceContext*>(data.context);
+    bool changed = false;
+    if (swapChain && device && context)
+    {
+        const std::lock_guard<std::mutex> lock(StateMutex());
+        changed = (swapChain != D3D().swapChain.Get() || device != D3D().device.Get() ||
+                   context != D3D().context.Get());
+        if (changed)
+        {
+            D3D().swapChain = swapChain;
+            D3D().device = device;
+            D3D().context = context;
+        }
+    }
+    if (changed)
+    {
+        ParticleTextures::Shutdown();
+        Init().mipmapsGenerated.store(false, std::memory_order_release);
+        Init().particleTexturesLoaded.store(false, std::memory_order_release);
+        Init().backendReinitRequested.store(true, std::memory_order_release);
+        if (!TryInstallPresentHook(swapChain))
+        {
+            logger::error("Hooks: Failed to (re)install Present hook on updated swapchain");
+        }
+        if (!Diag().deviceChangeLogged.exchange(true, std::memory_order_acq_rel))
+        {
+            logger::warn(
+                "Hooks: Detected renderer device/swapchain change, scheduling backend "
+                "refresh");
+        }
+    }
+}
+
+// Perform first-time ImGui initialization: create context, load fonts,
+// initialize Win32/DX11 backends, and install the Present hook.
+static void InitializeImGui()
+{
+    auto renderer = RE::BSGraphics::Renderer::GetSingleton();
+    if (!renderer)
+    {
+        return;
+    }
+
+    auto& data = renderer->data;
+    if (!data.renderWindows)
+    {
+        return;
+    }
+
+    auto swapChain = reinterpret_cast<IDXGISwapChain*>(data.renderWindows[0].swapChain);
+    if (!swapChain)
+    {
+        return;
+    }
+
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (FAILED(swapChain->GetDesc(std::addressof(desc))))
+    {
+        return;
+    }
+
+    const auto device = reinterpret_cast<ID3D11Device*>(data.forwarder);
+    const auto context = reinterpret_cast<ID3D11DeviceContext*>(data.context);
+
+    if (!device || !context)
+    {
+        return;
+    }
+
+    // Store for later mipmap generation
+    {
+        const std::lock_guard<std::mutex> lock(StateMutex());
+        D3D().device = device;
+        D3D().context = context;
+    }
+
+    bool contextCreated = false;
+    bool win32Initialized = false;
+    bool dx11Initialized = false;
+    auto cleanupFailedInit = [&]()
+    {
+        if (dx11Initialized)
+        {
+            ImGui_ImplDX11_Shutdown();
+            dx11Initialized = false;
+        }
+        if (win32Initialized)
+        {
+            ImGui_ImplWin32_Shutdown();
+            win32Initialized = false;
+        }
+        if (contextCreated)
+        {
+            ImGui::DestroyContext();
+            contextCreated = false;
+        }
+        {
+            const std::lock_guard<std::mutex> lock(StateMutex());
+            D3D().device.Reset();
+            D3D().context.Reset();
+            D3D().swapChain.Reset();
+            D3D().originalPresent.store(nullptr, std::memory_order_release);
+        }
+        ParticleTextures::Shutdown();
+    };
+
+    ImGui::CreateContext();
+    contextCreated = true;
+
+    // Configure ImGui I/O settings
+    auto& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.MouseDrawCursor = false;
+    io.IniFilename = nullptr;
+
+    // Load custom fonts for different text elements
+    // Character range: Basic Latin + Latin-1 Supplement (0x0020-0x00FF).
+    // This covers Western European languages but excludes Cyrillic (0x0400+),
+    // CJK (0x4E00+), and other non-Latin scripts.  Actors with localized
+    // names in unsupported scripts will display ImGui fallback glyphs.
+    // TODO: Consider configurable glyph ranges for broader locale support.
+    static const ImWchar ranges[] = {
+        0x0020,
+        0x00FF,
+        0,
+    };
+    const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+
+    // Font config: FreeType with light hinting for smooth scaled text
+    ImFontConfig config;
+    config.FontBuilderFlags = ImGuiFreeTypeBuilderFlags_LightHinting;
+    config.OversampleH = 2;  // FreeType + mipmaps make 4x unnecessary
+    config.OversampleV = 2;
+    config.PixelSnapH = false;  // Disable pixel snapping for smooth subpixel rendering
+
+    // Font Index 0: Name font
+    const auto& font = Settings::Font();
+    ImFont* nameFont =
+        io.Fonts->AddFontFromFileTTF(font.NameFontPath.c_str(), font.NameFontSize, &config, ranges);
+    if (!nameFont)
+    {
+        // Fallback to default font if custom font fails to load
+        io.Fonts->AddFontDefault();
+    }
+
+    // Font Index 1: Level font
+    ImFont* levelFont = io.Fonts->AddFontFromFileTTF(
+        font.LevelFontPath.c_str(), font.LevelFontSize, &config, ranges);
+    if (!levelFont)
+    {
+        io.Fonts->AddFontDefault();
+    }
+
+    // Font Index 2: Title font
+    ImFont* titleFont = io.Fonts->AddFontFromFileTTF(
+        font.TitleFontPath.c_str(), font.TitleFontSize, &config, ranges);
+    if (!titleFont)
+    {
+        io.Fonts->AddFontDefault();
+    }
+
+    // Font Index 3: Ornament font
+    const auto& orn = Settings::Ornament();
+    if (!orn.FontPath.empty())
+    {
+        ImFont* ornamentFont =
+            io.Fonts->AddFontFromFileTTF(orn.FontPath.c_str(), orn.FontSize, &config, ranges);
+        if (!ornamentFont)
+        {
+            io.Fonts->AddFontDefault();
+        }
+    }
+    else
+    {
+        // Add placeholder so font indices stay consistent
+        io.Fonts->AddFontDefault();
+    }
+
+    if (!ImGui_ImplWin32_Init(desc.OutputWindow))
+    {
+        logger::error("Hooks: ImGui Win32 backend initialization failed");
+        cleanupFailedInit();
+        return;
+    }
+    win32Initialized = true;
+    if (!ImGui_ImplDX11_Init(device, context))
+    {
+        logger::error("Hooks: ImGui DX11 backend initialization failed");
+        cleanupFailedInit();
+        return;
+    }
+    dx11Initialized = true;
+
+    // Store swap chain and hook Present for post-upscaler rendering
+    {
+        const std::lock_guard<std::mutex> lock(StateMutex());
+        D3D().swapChain = swapChain;
+    }
+
+    if (!TryInstallPresentHook(swapChain))
+    {
+        logger::error("Hooks: Failed to install Present hook");
+        cleanupFailedInit();
+        return;
+    }
+
+    Init().initialized.store(true, std::memory_order_release);
+}
+
 // Hook for D3D11 device/swap chain creation
 struct CreateD3DAndSwapChain
 {
@@ -112,242 +380,110 @@ struct CreateD3DAndSwapChain
     {
         func();
 
-        if (s_Initialized.load(std::memory_order_acquire))
+        if (Init().initialized.load(std::memory_order_acquire))
         {
-            // Detect runtime swap-chain/device changes and refresh cached pointers.
-            auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-            if (renderer && renderer->data.renderWindows)
-            {
-                auto& data = renderer->data;
-                auto swapChain = reinterpret_cast<IDXGISwapChain*>(data.renderWindows[0].swapChain);
-                auto device = reinterpret_cast<ID3D11Device*>(data.forwarder);
-                auto context = reinterpret_cast<ID3D11DeviceContext*>(data.context);
-                bool changed = false;
-                if (swapChain && device && context)
-                {
-                    const std::lock_guard<std::mutex> lock(StateMutex());
-                    changed = (swapChain != g_SwapChain.Get() || device != g_Device.Get() ||
-                               context != g_Context.Get());
-                    if (changed)
-                    {
-                        g_SwapChain = swapChain;
-                        g_Device = device;
-                        g_Context = context;
-                    }
-                }
-                if (changed)
-                {
-                    ParticleTextures::Shutdown();
-                    s_MipmapsGenerated.store(false, std::memory_order_release);
-                    s_ParticleTexturesLoaded.store(false, std::memory_order_release);
-                    s_BackendReinitRequested.store(true, std::memory_order_release);
-                    if (!TryInstallPresentHook(swapChain))
-                    {
-                        logger::error(
-                            "Hooks: Failed to (re)install Present hook on updated swapchain");
-                    }
-                    if (!s_DeviceChangeLogged.exchange(true, std::memory_order_acq_rel))
-                    {
-                        logger::warn(
-                            "Hooks: Detected renderer device/swapchain change, scheduling backend "
-                            "refresh");
-                    }
-                }
-            }
+            HandleDeviceChange();
             return;
         }
 
         // Ensure only one thread attempts initialization at a time.
         bool expected = false;
-        if (!s_Initializing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        if (!Init().initializing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
         {
             return;
         }
         struct InitScope
         {
-            ~InitScope() { s_Initializing.store(false, std::memory_order_release); }
+            ~InitScope() { Init().initializing.store(false, std::memory_order_release); }
         } _;
 
-        // Get Skyrim's renderer singleton
-        auto renderer = RE::BSGraphics::Renderer::GetSingleton();
-        if (!renderer)
-        {
-            return;
-        }
-
-        // Access the renderer's data which contains D3D objects
-        auto& data = renderer->data;
-        if (!data.renderWindows)
-        {
-            return;
-        }
-
-        // Get the swap chain from the first render window
-        auto swapChain = reinterpret_cast<IDXGISwapChain*>(data.renderWindows[0].swapChain);
-        if (!swapChain)
-        {
-            return;
-        }
-
-        // Retrieve swap chain description to get window handle
-        DXGI_SWAP_CHAIN_DESC desc{};
-        if (FAILED(swapChain->GetDesc(std::addressof(desc))))
-        {
-            return;
-        }
-
-        // Get D3D11 device and context from Skyrim's renderer
-        const auto device = reinterpret_cast<ID3D11Device*>(data.forwarder);
-        const auto context = reinterpret_cast<ID3D11DeviceContext*>(data.context);
-
-        if (!device || !context)
-        {
-            return;
-        }
-
-        // Store for later mipmap generation
-        {
-            const std::lock_guard<std::mutex> lock(StateMutex());
-            g_Device = device;
-            g_Context = context;
-        }
-
-        bool contextCreated = false;
-        bool win32Initialized = false;
-        bool dx11Initialized = false;
-        auto cleanupFailedInit = [&]()
-        {
-            if (dx11Initialized)
-            {
-                ImGui_ImplDX11_Shutdown();
-                dx11Initialized = false;
-            }
-            if (win32Initialized)
-            {
-                ImGui_ImplWin32_Shutdown();
-                win32Initialized = false;
-            }
-            if (contextCreated)
-            {
-                ImGui::DestroyContext();
-                contextCreated = false;
-            }
-            {
-                const std::lock_guard<std::mutex> lock(StateMutex());
-                g_Device.Reset();
-                g_Context.Reset();
-                g_SwapChain.Reset();
-                g_OriginalPresent.store(nullptr, std::memory_order_release);
-            }
-            ParticleTextures::Shutdown();
-        };
-
-        // Create ImGui context for our overlay
-        ImGui::CreateContext();
-        contextCreated = true;
-
-        // Configure ImGui I/O settings
-        auto& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable keyboard navigation
-        io.MouseDrawCursor = false;                            // Do not draw ImGui cursor
-        io.IniFilename = nullptr;                              // Disable imgui.ini file
-
-        // Load custom fonts for different text elements
-        // Character range: Basic Latin + Latin-1 Supplement
-        static const ImWchar ranges[] = {
-            0x0020,
-            0x00FF,
-            0,
-        };
-        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
-
-        // Font config: FreeType with light hinting for smooth scaled text
-        ImFontConfig config;
-        config.FontBuilderFlags = ImGuiFreeTypeBuilderFlags_LightHinting;
-        config.OversampleH = 2;  // FreeType + mipmaps make 4x unnecessary
-        config.OversampleV = 2;
-        config.PixelSnapH = false;  // Disable pixel snapping for smooth subpixel rendering
-
-        // Font Index 0: Name font
-        ImFont* nameFont = io.Fonts->AddFontFromFileTTF(
-            Settings::NameFontPath.c_str(), Settings::NameFontSize, &config, ranges);
-        if (!nameFont)
-        {
-            // Fallback to default font if custom font fails to load
-            io.Fonts->AddFontDefault();
-        }
-
-        // Font Index 1: Level font
-        ImFont* levelFont = io.Fonts->AddFontFromFileTTF(
-            Settings::LevelFontPath.c_str(), Settings::LevelFontSize, &config, ranges);
-        if (!levelFont)
-        {
-            io.Fonts->AddFontDefault();
-        }
-
-        // Font Index 2: Title font
-        ImFont* titleFont = io.Fonts->AddFontFromFileTTF(
-            Settings::TitleFontPath.c_str(), Settings::TitleFontSize, &config, ranges);
-        if (!titleFont)
-        {
-            io.Fonts->AddFontDefault();
-        }
-
-        // Font Index 3: Ornament font
-        if (!Settings::OrnamentFontPath.empty())
-        {
-            ImFont* ornamentFont = io.Fonts->AddFontFromFileTTF(
-                Settings::OrnamentFontPath.c_str(), Settings::OrnamentFontSize, &config, ranges);
-            if (!ornamentFont)
-            {
-                io.Fonts->AddFontDefault();
-            }
-        }
-        else
-        {
-            // Add placeholder so font indices stay consistent
-            io.Fonts->AddFontDefault();
-        }
-
-        // Initialize ImGui backends for Win32 and DirectX 11
-        if (!ImGui_ImplWin32_Init(desc.OutputWindow))
-        {
-            logger::error("Hooks: ImGui Win32 backend initialization failed");
-            cleanupFailedInit();
-            return;
-        }
-        win32Initialized = true;
-        if (!ImGui_ImplDX11_Init(device, context))
-        {
-            logger::error("Hooks: ImGui DX11 backend initialization failed");
-            cleanupFailedInit();
-            return;
-        }
-        dx11Initialized = true;
-
-        // Store swap chain and hook Present for post-upscaler rendering
-        {
-            const std::lock_guard<std::mutex> lock(StateMutex());
-            g_SwapChain = swapChain;
-        }
-
-        if (!TryInstallPresentHook(swapChain))
-        {
-            logger::error("Hooks: Failed to install Present hook");
-            cleanupFailedInit();
-            return;
-        }
-
-        // Mark initialization as complete
-        s_Initialized.store(true, std::memory_order_release);
+        InitializeImGui();
     }
     static inline REL::Relocation<decltype(thunk)> func;
 };
 
+// Generate mipmapped font atlas for improved text rendering at various scales.
+static void GenerateMipmappedFontAtlas(ID3D11Device* device, ID3D11DeviceContext* context)
+{
+    if (Init().mipmapsGenerated.load(std::memory_order_acquire) || !device || !context)
+    {
+        return;
+    }
+
+    auto& io = ImGui::GetIO();
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+    bool mipmapsReady = false;
+    if (pixels && width > 0 && height > 0)
+    {
+        int mipLevels = 1;
+        int maxDim = (width > height) ? width : height;
+        while (maxDim > 1)
+        {
+            maxDim >>= 1;
+            mipLevels++;
+        }
+
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.MipLevels = mipLevels;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_DEFAULT;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> fontTexture;
+        if (SUCCEEDED(device->CreateTexture2D(&texDesc, nullptr, fontTexture.GetAddressOf())))
+        {
+            context->UpdateSubresource(fontTexture.Get(), 0, nullptr, pixels, width * 4, 0);
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = mipLevels;
+
+            Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> fontSRV;
+            if (SUCCEEDED(device->CreateShaderResourceView(
+                    fontTexture.Get(), &srvDesc, fontSRV.GetAddressOf())))
+            {
+                context->GenerateMips(fontSRV.Get());
+                if (io.Fonts->TexID)
+                {
+                    reinterpret_cast<ID3D11ShaderResourceView*>(io.Fonts->TexID)->Release();
+                }
+                io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(fontSRV.Detach()));
+                mipmapsReady = true;
+            }
+        }
+    }
+    if (mipmapsReady)
+    {
+        Init().mipmapsGenerated.store(true, std::memory_order_release);
+    }
+}
+
+// Load particle textures if enabled and not yet loaded.
+static void EnsureParticleTexturesLoaded(ID3D11Device* device, bool useParticleTextures)
+{
+    if (useParticleTextures && !Init().particleTexturesLoaded.load(std::memory_order_acquire) &&
+        device)
+    {
+        if (ParticleTextures::Initialize(device))
+        {
+            Init().particleTexturesLoaded.store(true, std::memory_order_release);
+        }
+    }
+}
+
 // Render overlay immediately
 void RenderOverlayNow()
 {
-    if (!s_Initialized.load(std::memory_order_acquire))
+    if (!Init().initialized.load(std::memory_order_acquire))
     {
         return;
     }
@@ -362,11 +498,11 @@ void RenderOverlayNow()
         Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
         {
             const std::lock_guard<std::mutex> lock(StateMutex());
-            device = g_Device;
-            context = g_Context;
+            device = D3D().device;
+            context = D3D().context;
         }
 
-        if (s_BackendReinitRequested.exchange(false, std::memory_order_acq_rel))
+        if (Init().backendReinitRequested.exchange(false, std::memory_order_acq_rel))
         {
             if (!device || !context)
             {
@@ -378,11 +514,11 @@ void RenderOverlayNow()
             {
                 logger::error(
                     "Hooks: Failed to reinitialize ImGui DX11 backend after device change");
-                s_Initialized.store(false, std::memory_order_release);
+                Init().initialized.store(false, std::memory_order_release);
                 return;
             }
-            s_MipmapsGenerated.store(false, std::memory_order_release);
-            s_ParticleTexturesLoaded.store(false, std::memory_order_release);
+            Init().mipmapsGenerated.store(false, std::memory_order_release);
+            Init().particleTexturesLoaded.store(false, std::memory_order_release);
             logger::info("Hooks: Reinitialized ImGui DX11 backend after device change");
         }
 
@@ -391,81 +527,16 @@ void RenderOverlayNow()
         ImGui_ImplWin32_NewFrame();
 
         // Generate mipmapped font atlas on first frame
-        if (!s_MipmapsGenerated.load(std::memory_order_acquire) && device && context)
-        {
-            auto& io = ImGui::GetIO();
-            unsigned char* pixels = nullptr;
-            int width = 0, height = 0;
-            io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-
-            bool mipmapsReady = false;
-            if (pixels && width > 0 && height > 0)
-            {
-                int mipLevels = 1;
-                int maxDim = (width > height) ? width : height;
-                while (maxDim > 1)
-                {
-                    maxDim >>= 1;
-                    mipLevels++;
-                }
-
-                D3D11_TEXTURE2D_DESC texDesc = {};
-                texDesc.Width = width;
-                texDesc.Height = height;
-                texDesc.MipLevels = mipLevels;
-                texDesc.ArraySize = 1;
-                texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-                texDesc.SampleDesc.Count = 1;
-                texDesc.Usage = D3D11_USAGE_DEFAULT;
-                texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-                texDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
-
-                Microsoft::WRL::ComPtr<ID3D11Texture2D> fontTexture;
-                if (SUCCEEDED(
-                        device->CreateTexture2D(&texDesc, nullptr, fontTexture.GetAddressOf())))
-                {
-                    context->UpdateSubresource(fontTexture.Get(), 0, nullptr, pixels, width * 4, 0);
-
-                    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-                    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-                    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                    srvDesc.Texture2D.MipLevels = mipLevels;
-
-                    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> fontSRV;
-                    if (SUCCEEDED(device->CreateShaderResourceView(
-                            fontTexture.Get(), &srvDesc, fontSRV.GetAddressOf())))
-                    {
-                        context->GenerateMips(fontSRV.Get());
-                        if (io.Fonts->TexID)
-                        {
-                            reinterpret_cast<ID3D11ShaderResourceView*>(io.Fonts->TexID)->Release();
-                        }
-                        io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(fontSRV.Detach()));
-                        mipmapsReady = true;
-                    }
-                }
-            }
-            if (mipmapsReady)
-            {
-                s_MipmapsGenerated.store(true, std::memory_order_release);
-            }
-        }
+        GenerateMipmappedFontAtlas(device.Get(), context.Get());
 
         bool useParticleTextures = false;
         {
             const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
-            useParticleTextures = Settings::UseParticleTextures;
+            useParticleTextures = Settings::Particle().UseParticleTextures;
         }
 
         // Load particle textures on first frame
-        if (useParticleTextures && !s_ParticleTexturesLoaded.load(std::memory_order_acquire) &&
-            device)
-        {
-            if (ParticleTextures::Initialize(device.Get()))
-            {
-                s_ParticleTexturesLoaded.store(true, std::memory_order_release);
-            }
-        }
+        EnsureParticleTexturesLoaded(device.Get(), useParticleTextures);
 
         // Set display size to actual screen resolution
         {
@@ -492,11 +563,12 @@ void RenderOverlayNow()
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
         // Mark that overlay was rendered this frame
-        s_OverlayRenderedThisFrame.store(true, std::memory_order_release);
+        Frame().overlayRenderedThisFrame.store(true, std::memory_order_release);
     }
     catch (const std::exception& e)
     {
-        const uint32_t count = s_RenderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+        const uint32_t count =
+            Diag().renderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count <= 5 || (count % 120) == 0)
         {
             logger::error("Hooks: Exception in RenderOverlayNow (#{}): {}", count, e.what());
@@ -504,7 +576,8 @@ void RenderOverlayNow()
     }
     catch (...)
     {
-        const uint32_t count = s_RenderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+        const uint32_t count =
+            Diag().renderExceptionCount.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count <= 5 || (count % 120) == 0)
         {
             logger::error("Hooks: Unknown exception in RenderOverlayNow (#{}).", count);
@@ -517,23 +590,34 @@ void RenderOverlayNow()
 // ways that can cause PostDisplay to be skipped or deferred.
 // This hook catches that case, we render it here as a last resort,
 // right before the original Present flips the backbuffer to screen.
+//
+// Recovery limitation: if D3D().originalPresent is null (should not happen in
+// normal operation), the recovery path reads vtable[8] from the swapchain.
+// Because we already replaced vtable[8] with PresentHook, the candidate
+// will equal PresentHook and be rejected.  Recovery can only succeed if a
+// *third-party* hook has since overwritten vtable[8] with its own function,
+// in which case we adopt that function as "original".  This is correct for
+// linear hook chains but would produce incorrect call ordering if the
+// third-party hook also saved our PresentHook as *its* original.  In
+// practice this edge case is unreachable: D3D().originalPresent is always set
+// during TryInstallPresentHook before any Present call can occur.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-    if (s_ShouldRenderOverlay.load(std::memory_order_acquire) &&
-        !s_OverlayRenderedThisFrame.load(std::memory_order_acquire))
+    if (Frame().shouldRenderOverlay.load(std::memory_order_acquire) &&
+        !Frame().overlayRenderedThisFrame.load(std::memory_order_acquire))
     {
         RenderOverlayNow();
     }
 
     // Fast path: atomic load avoids the mutex for the common case.
-    PresentFn originalPresent = g_OriginalPresent.load(std::memory_order_acquire);
+    PresentFn originalPresent = D3D().originalPresent.load(std::memory_order_acquire);
 
     if (!originalPresent)
     {
         // Slow path: lock and re-read in case of a concurrent store.
         {
             const std::lock_guard<std::mutex> lock(StateMutex());
-            originalPresent = g_OriginalPresent.load(std::memory_order_relaxed);
+            originalPresent = D3D().originalPresent.load(std::memory_order_relaxed);
         }
 
         if (!originalPresent)
@@ -548,18 +632,18 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
                     if (candidate && candidate != reinterpret_cast<PresentFn>(&PresentHook))
                     {
                         const std::lock_guard<std::mutex> lock(StateMutex());
-                        if (!g_OriginalPresent.load(std::memory_order_relaxed))
+                        if (!D3D().originalPresent.load(std::memory_order_relaxed))
                         {
-                            g_OriginalPresent.store(candidate, std::memory_order_release);
+                            D3D().originalPresent.store(candidate, std::memory_order_release);
                         }
-                        originalPresent = g_OriginalPresent.load(std::memory_order_relaxed);
+                        originalPresent = D3D().originalPresent.load(std::memory_order_relaxed);
                     }
                 }
             }
 
             if (!originalPresent)
             {
-                if (!s_MissingPresentLogged.exchange(true, std::memory_order_acq_rel))
+                if (!Diag().missingPresentLogged.exchange(true, std::memory_order_acq_rel))
                 {
                     logger::error(
                         "Hooks: Missing original IDXGISwapChain::Present pointer, returning "
@@ -601,12 +685,11 @@ struct PostDisplay
     // a_menu: Pointer to the HUD menu instance.
     static void thunk(RE::IMenu* a_menu)
     {
-        // Reset render flags at start of frame
-        s_ShouldRenderOverlay.store(false, std::memory_order_release);
-        s_OverlayRenderedThisFrame.store(false, std::memory_order_release);
+        Frame().shouldRenderOverlay.store(false, std::memory_order_release);
+        Frame().overlayRenderedThisFrame.store(false, std::memory_order_release);
 
         // Early exit checks
-        if (!s_Initialized.load(std::memory_order_acquire) || !GameState::CanDrawOverlay())
+        if (!Init().initialized.load(std::memory_order_acquire) || !GameState::CanDrawOverlay())
         {
             func(a_menu);
             return;
@@ -627,12 +710,12 @@ struct PostDisplay
 
         // Check if overlay should be rendered
         bool shouldRender = Renderer::IsOverlayAllowedRT();
-        s_ShouldRenderOverlay.store(shouldRender, std::memory_order_release);
+        Frame().shouldRenderOverlay.store(shouldRender, std::memory_order_release);
 
         // Call the original PostDisplay function first
         func(a_menu);
 
-        if (shouldRender && !s_OverlayRenderedThisFrame.load(std::memory_order_acquire))
+        if (shouldRender && !Frame().overlayRenderedThisFrame.load(std::memory_order_acquire))
         {
             RenderOverlayNow();
         }
