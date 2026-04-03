@@ -96,19 +96,34 @@ add_library(glyph SHARED
     src/Settings.h
     src/Renderer.cpp
     src/Renderer.h
+    src/RendererInternal.h
+    src/RendererSnapshot.cpp
+    src/RendererLayout.cpp
+    src/RendererEffects.cpp
     src/GameState.h
     src/GameState.cpp
     src/Hooks.cpp
     src/Hooks.h
     src/TextEffects.h
-    src/TextEffects.cpp
+    src/TextEffectsInternal.h
+    src/TextEffectsCore.cpp
+    src/TextEffectsGradient.cpp
+    src/TextEffectsAnimated.cpp
+    src/TextEffectsComplex.cpp
+    src/TextEffectsParticle.cpp
     src/Occlusion.h
     src/Occlusion.cpp
     src/DebugOverlay.h
     src/DebugOverlay.cpp
     src/RenderConstants.h
     src/AppearanceTemplate.h
+    src/AppearanceTemplateInternal.h
     src/AppearanceTemplate.cpp
+    src/AppearanceCopy.cpp
+    src/AppearanceFaceGen.cpp
+    src/AppearanceFormID.cpp
+    src/OutfitCopy.h
+    src/OutfitCopy.cpp
     src/ParticleTextures.h
     src/ParticleTextures.cpp
     src/Utf8Utils.h
