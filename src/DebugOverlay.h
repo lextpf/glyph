@@ -40,7 +40,7 @@
  * ```cpp
  * // In render loop:
  * DebugOverlay::UpdateFrameStats(stats, deltaTime, currentTime, ...);
- * if (Settings::EnableDebugOverlay) {
+ * if (Settings::Display().EnableDebugOverlay) {
  *     DebugOverlay::Render(context);
  * }
  * ```

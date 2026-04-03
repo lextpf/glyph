@@ -39,7 +39,6 @@ bool IsBehindCamera(const RE::NiPoint3& worldPos,
         return false;  // At camera position, not behind
     }
 
-    // Normalize direction to target
     toTarget.x /= distance;
     toTarget.y /= distance;
     toTarget.z /= distance;
@@ -75,20 +74,17 @@ bool IsActorOccluded(RE::Actor* actor,
                      const RE::NiPoint3& actorWorldPos,
                      bool occlusionEnabled)
 {
-    // Early out if occlusion is disabled
     if (!occlusionEnabled || !actor || !player)
     {
         return false;
     }
 
-    // Get camera info
     RE::NiPoint3 cameraPos, cameraForward;
     if (!GetCameraInfo(cameraPos, cameraForward))
     {
         return false;  // No camera, don't occlude
     }
 
-    // Calculate distance to actor
     RE::NiPoint3 toActor = actorWorldPos - cameraPos;
     float distance = toActor.Length();
 
