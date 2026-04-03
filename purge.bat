@@ -25,14 +25,14 @@ if defined GLYPH_DEPLOY_PATH (
 if defined GLYPH_MO2_MODS (
     set "MO2_MODS=%GLYPH_MO2_MODS%"
 ) else (
-    set "MO2_MODS=D:\Nolvus\Instance\MODS"
+    set "MO2_MODS=D:\Nolvus\Instance\MODS\mods"
 )
 
 :: MO2 active profile directory
 if defined GLYPH_MO2_PROFILE (
     set "MO2_PROFILE=%GLYPH_MO2_PROFILE%"
 ) else (
-    set "MO2_PROFILE=D:\Nolvus\Instance\profiles\Default"
+    set "MO2_PROFILE=D:\Nolvus\Instance\MODS\profiles\Nolvus Awakening"
 )
 
 :: Read version from vcpkg.json
@@ -49,15 +49,7 @@ set "MOD_NAME=glyph-dev-%VERSION%"
 echo Mod:     %MO2_MODS%\!MOD_NAME!
 echo Profile: %MO2_PROFILE%\modlist.txt
 echo.
-echo This will remove the !MOD_NAME! mod from MO2.
-echo.
 echo ============================================================================
-choice /C YN /M "Are you sure you want to purge the glyph plugin"
-if %ERRORLEVEL% neq 1 (
-    echo.
-    echo Purge cancelled.
-    goto :end
-)
 echo.
 
 REM ============================================================================
