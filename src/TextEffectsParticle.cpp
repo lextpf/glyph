@@ -29,6 +29,10 @@ static void DrawStar4(ImDrawList* list,
 
     // Draw star shape
     list->AddConvexPolyFilled(points, 8, color);
+
+    // Bright white core
+    int coreAlpha = (color >> IM_COL32_A_SHIFT) & 0xFF;
+    list->AddCircleFilled(pos, size * .3f, IM_COL32(255, 255, 255, coreAlpha / 2), 8);
 }
 
 // Draw 6-pointed star with glow
@@ -58,6 +62,10 @@ static void DrawStar6(ImDrawList* list,
 
     // Draw star shape
     list->AddConvexPolyFilled(points, 12, color);
+
+    // Bright white core
+    int coreAlpha = (color >> IM_COL32_A_SHIFT) & 0xFF;
+    list->AddCircleFilled(pos, size * .3f, IM_COL32(255, 255, 255, coreAlpha / 2), 8);
 }
 
 // Draw soft glowing orb with gradient layers
@@ -256,6 +264,8 @@ struct ParticleContext
     float jitterAngle, jitterDist;
     float alphaVariation;
     int r, g, b;
+    int r2, g2, b2;  // Secondary gradient color
+    bool hasSecondaryColor;
     ParticleTextures::BlendMode texBlendMode;
 };
 
@@ -280,14 +290,28 @@ static void RenderStarParticle(const ParticleContext& ctx)
     }
 
     float finalAlpha = ctx.alpha * (.3f + .7f * twinkle) * ctx.alphaVariation;
-    float finalSize = ctx.particleSize;
+    float breathe = 1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f);
+    float finalSize = ctx.particleSize * breathe;
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
     int glowA = std::clamp((int)(finalAlpha * 60.0f), 0, 255);
 
-    float brightness = twinkle * .6f + .4f;
-    int sr = std::clamp((int)(80 + 175 * brightness * brightness), 0, 255);
-    int sg = std::clamp((int)(120 + 135 * brightness), 0, 255);
-    int sb = std::clamp((int)(180 + 75 * brightness), 0, 255);
+    // Gradient color from tier left/right
+    float phaseLerp = .5f + .5f * std::sin(ctx.phase);
+    int sr, sg, sb;
+    if (ctx.hasSecondaryColor)
+    {
+        float brightness = twinkle * .6f + .4f;
+        sr = std::clamp((int)(ctx.r + (ctx.r2 - ctx.r) * phaseLerp * brightness), 0, 255);
+        sg = std::clamp((int)(ctx.g + (ctx.g2 - ctx.g) * phaseLerp * brightness), 0, 255);
+        sb = std::clamp((int)(ctx.b + (ctx.b2 - ctx.b) * phaseLerp * brightness), 0, 255);
+    }
+    else
+    {
+        float brightness = twinkle * .6f + .4f;
+        sr = std::clamp((int)(80 + 175 * brightness * brightness), 0, 255);
+        sg = std::clamp((int)(120 + 135 * brightness), 0, 255);
+        sb = std::clamp((int)(180 + 75 * brightness), 0, 255);
+    }
 
     float rotation = ctx.timeScaled * .5f + ctx.golden;
 
@@ -300,7 +324,7 @@ static void RenderStarParticle(const ParticleContext& ctx)
                                               finalSize * 6.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
-                                              IM_COL32(255, 255, 255, trailA),
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, trailA),
                                               ctx.texBlendMode,
                                               prevRotation);
         ParticleTextures::DrawSpriteWithIndex(ctx.list,
@@ -308,7 +332,7 @@ static void RenderStarParticle(const ParticleContext& ctx)
                                               finalSize * 6.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
-                                              IM_COL32(255, 255, 255, a),
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
                                               ctx.texBlendMode,
                                               rotation);
     }
@@ -364,7 +388,8 @@ static void RenderSparkParticle(const ParticleContext& ctx)
         return;
     }
 
-    float finalSize = ctx.particleSize;
+    float finalSize =
+        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
 
     float heatFade = 1.0f - life * .5f;
@@ -388,7 +413,7 @@ static void RenderSparkParticle(const ParticleContext& ctx)
                                                   finalSize * 6.0f,
                                                   ctx.texStyleId,
                                                   ctx.particleIndex,
-                                                  IM_COL32(255, 255, 255, trailA),
+                                                  IM_COL32(ctx.r, ctx.g, ctx.b, trailA),
                                                   ctx.texBlendMode,
                                                   curveAngle);
         }
@@ -397,7 +422,7 @@ static void RenderSparkParticle(const ParticleContext& ctx)
                                               finalSize * 6.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
-                                              IM_COL32(255, 255, 255, a),
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
                                               ctx.texBlendMode,
                                               curveAngle);
     }
@@ -425,7 +450,8 @@ static void RenderWispParticle(const ParticleContext& ctx)
 
     float pulse = .6f + .4f * std::sin(wispTime * 2.0f + ctx.golden * 2.0f);
     float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation;
-    float finalSize = ctx.particleSize;
+    float finalSize =
+        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
 
     int wr = std::min(255, ctx.r + 40);
@@ -446,7 +472,7 @@ static void RenderWispParticle(const ParticleContext& ctx)
                                               finalSize * 5.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
-                                              IM_COL32(255, 255, 255, echoA),
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, echoA),
                                               ctx.texBlendMode,
                                               moveAngle);
         ParticleTextures::DrawSpriteWithIndex(ctx.list,
@@ -454,7 +480,7 @@ static void RenderWispParticle(const ParticleContext& ctx)
                                               finalSize * 6.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
-                                              IM_COL32(255, 255, 255, a),
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
                                               ctx.texBlendMode,
                                               moveAngle);
     }
@@ -478,7 +504,8 @@ static void RenderRuneParticle(const ParticleContext& ctx)
 
     float pulse = .7f + .3f * std::sin(ctx.timeScaled * 2.0f + ctx.golden);
     float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation;
-    float finalSize = ctx.particleSize;
+    float finalSize =
+        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
 
     if (ctx.hasTextures)
@@ -491,7 +518,7 @@ static void RenderRuneParticle(const ParticleContext& ctx)
                                               finalSize * 6.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
-                                              IM_COL32(255, 255, 255, surgedA),
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, surgedA),
                                               ctx.texBlendMode,
                                               runeOrbit + wobble);
     }
@@ -521,7 +548,8 @@ static void RenderOrbParticle(const ParticleContext& ctx)
 
     float glow = .5f + .5f * std::sin(orbTime * 2.0f + ctx.golden * 2.0f);
     float finalAlpha = ctx.alpha * glow * ctx.alphaVariation;
-    float finalSize = ctx.particleSize;
+    float finalSize =
+        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
 
     if (ctx.hasTextures)
@@ -531,13 +559,66 @@ static void RenderOrbParticle(const ParticleContext& ctx)
                                               finalSize * 6.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
-                                              IM_COL32(255, 255, 255, a),
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
                                               ctx.texBlendMode,
                                               .0f);
     }
     else
     {
         DrawSoftOrb(ctx.list, ImVec2(x, y), finalSize, ctx.r, ctx.g, ctx.b, a);
+    }
+}
+
+// Crystalline shapes with slow rotation, floating, and facet flash.
+static void RenderCrystalParticle(const ParticleContext& ctx)
+{
+    float crystalTime = ctx.timeScaled * .3f;
+    float orbit = ctx.phase + crystalTime;
+
+    // Gentle floating with angular wobble
+    float wobble = std::sin(crystalTime * 1.2f + ctx.golden) * .08f;
+    float floatY = std::sin(crystalTime * 1.8f + ctx.golden * 1.5f) * ctx.radiusY * .1f;
+
+    float radiusWave = .5f + .5f * std::sin(ctx.golden);
+    float radiusMod =
+        (ctx.minRadius + (1.0f - ctx.minRadius) * (.76f * ctx.radialAnchor + .24f * radiusWave));
+    float x = ctx.center.x + std::cos(orbit + wobble) * ctx.radiusX * radiusMod +
+              std::cos(ctx.jitterAngle) * ctx.radiusX * ctx.jitterDist;
+    float y = ctx.center.y + std::sin(orbit * .85f + wobble) * ctx.radiusY * radiusMod + floatY +
+              std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist;
+
+    // Slow rotation
+    float rotation = crystalTime * .4f + ctx.golden;
+
+    // Facet flash: brief brightness pulse at specific phase
+    float flashCycle = std::sin(crystalTime * 2.0f + ctx.golden * 3.0f);
+    float flash = std::clamp((flashCycle - .85f) / .15f, .0f, 1.0f);
+
+    float pulse = .7f + .3f * std::sin(crystalTime * 1.5f + ctx.golden * 2.0f);
+    float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation * (1.0f + flash * .3f);
+    float finalSize =
+        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+
+    if (ctx.hasTextures)
+    {
+        ParticleTextures::DrawSpriteWithIndex(ctx.list,
+                                              ImVec2(x, y),
+                                              finalSize * 6.0f,
+                                              ctx.texStyleId,
+                                              ctx.particleIndex,
+                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
+                                              ctx.texBlendMode,
+                                              rotation);
+    }
+    else
+    {
+        // Procedural: simple hexagonal shape with glow
+        int glowA = std::clamp((int)(finalAlpha * 40.0f), 0, 255);
+        ctx.list->AddCircleFilled(
+            ImVec2(x, y), finalSize * 1.5f, IM_COL32(ctx.r, ctx.g, ctx.b, glowA), 6);
+        ctx.list->AddCircleFilled(ImVec2(x, y), finalSize, IM_COL32(ctx.r, ctx.g, ctx.b, a), 6);
+        ctx.list->AddCircleFilled(ImVec2(x, y), finalSize * .3f, IM_COL32(255, 255, 255, a / 2), 6);
     }
 }
 
@@ -574,6 +655,11 @@ void DrawParticleAura(const ParticleAuraParams& params)
     int baseG = (params.color >> IM_COL32_G_SHIFT) & 0xFF;
     int baseB = (params.color >> IM_COL32_B_SHIFT) & 0xFF;
 
+    bool hasSecondaryColor = (params.colorSecondary != 0);
+    int baseR2 = hasSecondaryColor ? ((params.colorSecondary >> IM_COL32_R_SHIFT) & 0xFF) : baseR;
+    int baseG2 = hasSecondaryColor ? ((params.colorSecondary >> IM_COL32_G_SHIFT) & 0xFF) : baseG;
+    int baseB2 = hasSecondaryColor ? ((params.colorSecondary >> IM_COL32_B_SHIFT) & 0xFF) : baseB;
+
     float timeScaled = params.time * params.speed;
 
     for (int i = 0; i < params.particleCount; ++i)
@@ -607,10 +693,9 @@ void DrawParticleAura(const ParticleAuraParams& params)
         int r = baseR, g = baseG, b = baseB;
         // Hue rotation in RGB space using Rec. 709 luminance weights (0.213, 0.715, 0.072).
         // The 3x3 rotation matrix preserves perceived brightness while shifting hue.
-        if (!hasTextures)
         {
-            float hueShift = std::sin(golden * 2.3f + timeScaled * .25f) * .4f;
-            float satMod = 1.1f + .2f * std::sin(golden * 1.5f);
+            float hueShift = std::sin(golden * 2.3f + timeScaled * .25f) * .08f;
+            float satMod = 1.0f + .08f * std::sin(golden * 1.5f);
 
             float hueAngle = hueShift * TWO_PI;
             float cosH = std::cos(hueAngle);
@@ -656,6 +741,10 @@ void DrawParticleAura(const ParticleAuraParams& params)
                             r,
                             g,
                             b,
+                            baseR2,
+                            baseG2,
+                            baseB2,
+                            hasSecondaryColor,
                             texBlend};
 
         switch (params.style)
@@ -675,6 +764,9 @@ void DrawParticleAura(const ParticleAuraParams& params)
                 break;
             case Settings::ParticleStyle::Orbs:
                 RenderOrbParticle(ctx);
+                break;
+            case Settings::ParticleStyle::Crystals:
+                RenderCrystalParticle(ctx);
                 break;
         }
     }

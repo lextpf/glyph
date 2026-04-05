@@ -77,7 +77,10 @@ void AddTextShimmer(ImDrawList* list,
         const float v = s.normalizedY(list->VtxBuffer[i].pos.y);
         ImU32 base = LerpColorU32(baseL, baseR, t);
 
-        const float d = std::abs(t - phase01);
+        // Wrap-around distance so the band smoothly exits right and enters left
+        const float d =
+            (std::min)(std::abs(t - phase01),
+                       (std::min)(std::abs(t - phase01 + 1.0f), std::abs(t - phase01 - 1.0f)));
 
         // Primary shimmer band with soft quintic falloff
         float h = (d < bandHalf) ? 1.0f - SmoothStep(d / bandHalf) : .0f;
@@ -228,16 +231,15 @@ void AddTextOutline4ChromaticShimmer(ImDrawList* list,
         list, font, size, pos, text, baseL, baseR, highlight, phase01, bandWidth01, strength01);
 }
 
-void AddTextPulseGradient(ImDrawList* list,
-                          ImFont* font,
-                          float size,
-                          const ImVec2& pos,
-                          const char* text,
-                          ImU32 a,
-                          ImU32 b,
-                          float time,
-                          float freqHz,
-                          float amp)
+void AddTextEmber(ImDrawList* list,
+                  ImFont* font,
+                  float size,
+                  const ImVec2& pos,
+                  const char* text,
+                  ImU32 colA,
+                  ImU32 colB,
+                  float speed,
+                  float intensity)
 {
     TextVertexSetup s;
     if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
@@ -245,13 +247,45 @@ void AddTextPulseGradient(ImDrawList* list,
         return;
     }
 
-    const float pulse = 1.0f + amp * std::sin(time * TWO_PI * freqHz);
+    const float time = (float)ImGui::GetTime() * speed;
+
+    // Warm highlight color (golden-orange tint of the brighter input color)
+    int rA = (colA >> IM_COL32_R_SHIFT) & 0xFF;
+    int gA = (colA >> IM_COL32_G_SHIFT) & 0xFF;
+    int bA = (colA >> IM_COL32_B_SHIFT) & 0xFF;
+    ImU32 warmHighlight =
+        IM_COL32((std::min)(255, rA + 60), (std::min)(255, gA + 20), (std::max)(0, bA - 30), 255);
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
-        const float t = s.normalizedX(list->VtxBuffer[i].pos.x);
-        ImU32 base = LerpColorU32(a, b, t);
-        list->VtxBuffer[i].col = ScaleRGB(base, pulse);
+        const ImVec2 p = list->VtxBuffer[i].pos;
+        const float nx = s.normalizedX(p.x);
+        const float ny = s.normalizedY(p.y);
+
+        ImU32 base = LerpColorU32(colA, colB, nx);
+
+        // Multiple noise layers for organic ember flicker
+        float n1 = std::sin(nx * 5.0f + time * 1.2f + ny * 3.0f) * .5f + .5f;
+        float n2 = std::sin(nx * 8.0f - time * 2.0f + ny * 5.0f) * .5f + .5f;
+        float n3 = std::sin(nx * 12.0f + time * 3.5f - ny * 2.0f) * .5f + .5f;
+
+        // Combine with different weights for organic feel
+        float ember = n1 * .5f + n2 * .3f + n3 * .2f;
+
+        // Sharpen the ember peaks for more dramatic flicker
+        ember = ember * ember;
+
+        // Vertical heat: hotter (brighter) at bottom
+        float heatGrad = .7f + .3f * ny;
+
+        // Per-character phase offset from X for varied flicker
+        float charFlicker = std::sin(time * 4.0f + nx * 20.0f) * .5f + .5f;
+        charFlicker = charFlicker * charFlicker * .15f;
+
+        float glow = Saturate((ember * heatGrad + charFlicker) * intensity);
+
+        // Blend base toward warm highlight at bright spots
+        list->VtxBuffer[i].col = LerpColorU32(base, warmHighlight, glow);
     }
 }
 
