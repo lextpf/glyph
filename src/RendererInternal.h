@@ -63,6 +63,26 @@ struct RenderSettingsSnapshot
     float glowIntensity = .0f;
     int glowSamples = 0;
 
+    // Outline Glow
+    bool enableOutlineGlow = false;
+    float outlineGlowScale = 1.6f;
+    float outlineGlowAlpha = .1f;
+    int outlineGlowRings = 2;
+    float outlineGlowR = 1.0f;
+    float outlineGlowG = 1.0f;
+    float outlineGlowB = 1.0f;
+    bool outlineGlowTierTint = false;
+    // Dual-tone directional outline
+    bool dualOutlineEnabled = false;
+    float innerOutlineTint = .3f;
+    float innerOutlineAlpha = .5f;
+    float innerOutlineScale = .5f;
+    float directionalLightAngle = 315.f;
+    float directionalLightBias = .15f;
+
+    float outlineColorTint = .0f;
+    float shadowColorTint = .0f;
+
     // Typewriter
     bool enableTypewriter = false;
     float typewriterSpeed = .0f;
@@ -84,6 +104,7 @@ struct RenderSettingsSnapshot
     bool enableWisps = false;
     bool enableRunes = false;
     bool enableOrbs = false;
+    bool enableCrystals = false;
     int particleCount = 0;
     float particleSize = .0f;
     float particleSpeed = .0f;
@@ -101,6 +122,7 @@ struct RenderSettingsSnapshot
     float effectAlphaMax = .0f;
     float strengthMin = .0f;
     float strengthMax = .0f;
+    float tierVibrancyBoost = .0f;
 
     // Smoothing
     float alphaSettleTime = .0f;
@@ -117,6 +139,14 @@ struct RenderSettingsSnapshot
 
     // Font size (paths are only used during ImGui init, not per-frame)
     float nameFontSize = .0f;
+
+    // Entrance/Exit Transitions
+    bool enableEntrance = false;
+    int entranceStyle = 0;
+    float entranceDuration = .35f;
+    float entranceOvershoot = 1.05f;
+    bool enableExit = false;
+    float exitDuration = .20f;
 
     // Visual polish settings (value copy)
     Settings::VisualSettings visual = {};
@@ -167,6 +197,16 @@ struct ActorCache
 
     float typewriterTime = .0f;       // Seconds since actor first appeared
     bool typewriterComplete = false;  // True when reveal animation finished
+
+    float entrancePhase = .0f;  // 0=start, 1=complete
+    float exitPhase = .0f;      // 0=visible, 1=fully exited
+    bool entranceDone = false;  // True when entrance animation finished
+
+    // Motion trail history (separate from posHistory used for smoothing)
+    static constexpr int TRAIL_HISTORY_SIZE = 8;
+    ImVec2 trailHistory[TRAIL_HISTORY_SIZE]{};
+    int trailIndex = 0;
+    bool trailFilled = false;
 
     std::string cachedName;       // Last known name (to detect changes)
     std::string cachedNameLower;  // Pre-lowered name for special title matching
@@ -543,7 +583,10 @@ void ApplyTextEffect(ImDrawList* drawList,
                      float strength,
                      float textSizeScale,
                      float alpha,
-                     bool fastOutlines);
+                     bool fastOutlines,
+                     const TextEffects::OutlineGlowParams* outlineGlow = nullptr,
+                     const TextEffects::DualOutlineParams* dualOutline = nullptr,
+                     const TextEffects::WaveParams* wave = nullptr);
 
 /// Draw particle aura effects behind the nameplate.  Renders on splitter
 /// channel 0 (back layer).

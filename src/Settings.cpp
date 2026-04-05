@@ -21,7 +21,7 @@
 namespace Settings
 {
 // Single source of truth for EffectType <-> lowercase string mapping.
-static constexpr Stl::EnumStringMap<EffectType, 14> kEffectTypeMap{{
+static constexpr Stl::EnumStringMap<EffectType, 17> kEffectTypeMap{{
     {{"none", EffectType::None},
      {"gradient", EffectType::Gradient},
      {"verticalgradient", EffectType::VerticalGradient},
@@ -29,13 +29,16 @@ static constexpr Stl::EnumStringMap<EffectType, 14> kEffectTypeMap{{
      {"radialgradient", EffectType::RadialGradient},
      {"shimmer", EffectType::Shimmer},
      {"chromaticshimmer", EffectType::ChromaticShimmer},
-     {"pulsegradient", EffectType::PulseGradient},
+     {"ember", EffectType::Ember},
+     {"pulsegradient", EffectType::Ember},  // backward compat alias
      {"rainbowwave", EffectType::RainbowWave},
      {"conicrainbow", EffectType::ConicRainbow},
      {"aurora", EffectType::Aurora},
      {"sparkle", EffectType::Sparkle},
      {"plasma", EffectType::Plasma},
-     {"scanline", EffectType::Scanline}},
+     {"scanline", EffectType::Scanline},
+     {"enchant", EffectType::Enchant},
+     {"frost", EffectType::Frost}},
 }};
 
 // Parser helper forward declarations (used before definitions).
@@ -142,6 +145,12 @@ FontSettings& Font()
     return s;
 }
 
+TransitionSettings& Transition()
+{
+    static TransitionSettings s;
+    return s;
+}
+
 AppearanceSettings& Appearance()
 {
     static AppearanceSettings s;
@@ -195,6 +204,26 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OutlineMinScale",        "", &ShadowOutline().OutlineMinScale,       .65f,     ClampFloat{.0f, 1.0f}},
     {"ProportionalSpacing",    "", &ShadowOutline().ProportionalSpacing,   false,    NoClamping{}},
 
+    // Outline Glow
+    {"EnableOutlineGlow",      "", &ShadowOutline().OutlineGlowEnabled,    false,    NoClamping{}},
+    {"OutlineGlowScale",       "", &ShadowOutline().OutlineGlowScale,      1.4f,     ClampFloat{1.0f, 4.0f}},
+    {"OutlineGlowAlpha",       "", &ShadowOutline().OutlineGlowAlpha,      .1f,      ClampFloat{.0f, 1.0f}},
+    {"OutlineGlowRings",       "", &ShadowOutline().OutlineGlowRings,      2,        ClampInt{1, 3}},
+    {"OutlineGlowR",           "", &ShadowOutline().OutlineGlowR,          1.0f,     ClampFloat{.0f, 1.0f}},
+    {"OutlineGlowG",           "", &ShadowOutline().OutlineGlowG,          1.0f,     ClampFloat{.0f, 1.0f}},
+    {"OutlineGlowB",           "", &ShadowOutline().OutlineGlowB,          1.0f,     ClampFloat{.0f, 1.0f}},
+    {"OutlineGlowTierTint",    "", &ShadowOutline().OutlineGlowTierTint,   false,    NoClamping{}},
+    // Dual-Tone Directional Outline
+    {"EnableDualOutline",      "", &ShadowOutline().DualOutlineEnabled,    false,    NoClamping{}},
+    {"InnerOutlineTint",       "", &ShadowOutline().InnerOutlineTint,      .3f,      ClampFloat{.0f, 1.0f}},
+    {"InnerOutlineAlpha",      "", &ShadowOutline().InnerOutlineAlpha,     .5f,      ClampFloat{.0f, 1.0f}},
+    {"InnerOutlineScale",      "", &ShadowOutline().InnerOutlineScale,     .5f,      ClampFloat{.1f, .9f}},
+    {"DirectionalLightAngle",  "", &ShadowOutline().DirectionalLightAngle, 315.f,    ClampFloat{.0f, 360.f}},
+    {"DirectionalLightBias",   "", &ShadowOutline().DirectionalLightBias,  .15f,     ClampFloat{.0f, .5f}},
+
+    {"OutlineColorTint",       "", &ShadowOutline().OutlineColorTint,      .0f,      ClampFloat{.0f, .25f}},
+    {"ShadowColorTint",        "", &ShadowOutline().ShadowColorTint,       .0f,      ClampFloat{.0f, .25f}},
+
     // Glow
     {"EnableGlow",             "", &Glow().Enabled,                   false,    NoClamping{}},
     {"GlowRadius",             "", &Glow().Radius,                    4.0f,     MinFloat{.0f}},
@@ -205,6 +234,14 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"EnableTypewriter",       "", &Typewriter().Enabled,             false,    NoClamping{}},
     {"TypewriterSpeed",        "", &Typewriter().Speed,               30.0f,    MinFloat{.0f}},
     {"TypewriterDelay",        "", &Typewriter().Delay,               .0f,      MinFloat{.0f}},
+
+    // Entrance/Exit Transitions
+    {"EnableEntranceAnimation","", &Transition().EnableEntrance,      false,    NoClamping{}},
+    {"EntranceStyle",          "", &Transition().EntranceStyle,       0,        ClampInt{0, 2}},
+    {"EntranceDuration",       "", &Transition().EntranceDuration,    .35f,     ClampFloat{.05f, 3.0f}},
+    {"EntranceOvershoot",      "", &Transition().EntranceOvershoot,   1.05f,    ClampFloat{1.0f, 1.3f}},
+    {"EnableExitAnimation",    "", &Transition().EnableExit,          false,    NoClamping{}},
+    {"ExitDuration",           "", &Transition().ExitDuration,        .20f,     ClampFloat{.05f, 2.0f}},
 
     // Debug
     {"EnableDebugOverlay",     "", &Display().EnableDebugOverlay,     false,    NoClamping{}},
@@ -223,6 +260,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"EnableWisps",            "", &Particle().EnableWisps,           false,    NoClamping{}},
     {"EnableRunes",            "", &Particle().EnableRunes,           false,    NoClamping{}},
     {"EnableOrbs",             "", &Particle().EnableOrbs,            false,    NoClamping{}},
+    {"EnableCrystals",         "", &Particle().EnableCrystals,        false,    NoClamping{}},
     {"ParticleCount",          "", &Particle().Count,                 8,        MinInt{0}},
     {"ParticleSize",           "", &Particle().Size,                  3.0f,     MinFloat{.0f}},
     {"ParticleSpeed",          "", &Particle().Speed,                 1.0f,     MinFloat{.0f}},
@@ -242,8 +280,8 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"AnimSpeedHighTier",      "", &AnimColor().AnimSpeedHighTier,   .10f,     NoClamping{}},
 
     // Color & Effects
-    {"ColorWashAmount",        "", &AnimColor().ColorWashAmount,      .50f,     ClampFloat{.0f, 1.0f}},
-    {"NameColorMix",           "", &AnimColor().NameColorMix,         .35f,     ClampFloat{.0f, 1.0f}},
+    {"ColorWashAmount",        "", &AnimColor().ColorWashAmount,      .15f,     ClampFloat{.0f, 1.0f}},
+    {"NameColorMix",           "", &AnimColor().NameColorMix,         .65f,     ClampFloat{.0f, 1.0f}},
     {"EffectAlphaMin",         "", &AnimColor().EffectAlphaMin,       .20f,     ClampFloat{.0f, 1.0f}},
     {"EffectAlphaMax",         "", &AnimColor().EffectAlphaMax,       .60f,     ClampFloat{.0f, 1.0f}},
     {"StrengthMin",            "", &AnimColor().StrengthMin,          .15f,     MinFloat{.0f}},
@@ -253,6 +291,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"AlphaSettleTime",        "", &AnimColor().AlphaSettleTime,      .46f,     MinFloat{.01f}},
     {"ScaleSettleTime",        "", &AnimColor().ScaleSettleTime,      .46f,     MinFloat{.01f}},
     {"PositionSettleTime",     "", &AnimColor().PositionSettleTime,   .38f,     MinFloat{.01f}},
+    {"TierVibrancyBoost",      "", &AnimColor().TierVibrancyBoost,    .0f,      ClampFloat{.0f, 1.0f}},
 
     // Visual sub-settings (via Visual() singleton)
     {"EnableDistanceOutlineScale", "", &Visual().EnableDistanceOutlineScale, false, NoClamping{}},
@@ -271,6 +310,21 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"PositionSmoothingBlend", "", &Visual().PositionSmoothingBlend, 1.0f, ClampFloat{.0f, 1.0f}},
     {"LargeMovementThreshold", "", &Visual().LargeMovementThreshold, 50.0f, MinFloat{.0f}},
     {"LargeMovementBlend",     "", &Visual().LargeMovementBlend,  .5f,     ClampFloat{.0f, 1.0f}},
+    // Motion Trail
+    {"EnableMotionTrail",      "", &Visual().EnableMotionTrail,      false,   NoClamping{}},
+    {"TrailLength",            "", &Visual().TrailLength,             4,       ClampInt{1, 8}},
+    {"TrailAlpha",             "", &Visual().TrailAlpha,              .3f,     ClampFloat{.0f, 1.0f}},
+    {"TrailFalloff",           "", &Visual().TrailFalloff,            2.0f,    ClampFloat{.5f, 5.0f}},
+    {"TrailMinDistance",        "", &Visual().TrailMinDistance,        2.0f,    MinFloat{.0f}},
+    {"TrailMinTier",           "", &Visual().TrailMinTier,            0,       MinInt{0}},
+
+    // Wave Displacement
+    {"EnableWave",             "", &Visual().EnableWave,             false,   NoClamping{}},
+    {"WaveAmplitude",          "", &Visual().WaveAmplitude,          1.5f,    ClampFloat{.0f, 10.0f}},
+    {"WaveFrequency",          "", &Visual().WaveFrequency,          3.0f,    ClampFloat{.5f, 20.0f}},
+    {"WaveSpeed",              "", &Visual().WaveSpeed,              1.0f,    ClampFloat{.0f, 10.0f}},
+    {"WaveMinTier",            "", &Visual().WaveMinTier,            0,       MinInt{0}},
+
     {"EnableTierEffectGating", "", &Visual().EnableTierEffectGating, false, NoClamping{}},
     {"GlowMinTier",            "", &Visual().GlowMinTier,         5,       NoClamping{}},
     {"ParticleMinTier",        "", &Visual().ParticleMinTier,     10,      NoClamping{}},
@@ -731,6 +785,36 @@ static bool ParseTierField(TierDefinition& tier, const std::string& key, const s
     else if (key == "HighlightColor")
     {
         ParseColor3(val, tier.highlightColor);
+    }
+    else if (key == "TitleLeftColor")
+    {
+        Color3 c;
+        ParseColor3(val, c);
+        tier.titleLeftColor = c;
+    }
+    else if (key == "TitleRightColor")
+    {
+        Color3 c;
+        ParseColor3(val, c);
+        tier.titleRightColor = c;
+    }
+    else if (key == "LevelLeftColor")
+    {
+        Color3 c;
+        ParseColor3(val, c);
+        tier.levelLeftColor = c;
+    }
+    else if (key == "LevelRightColor")
+    {
+        Color3 c;
+        ParseColor3(val, c);
+        tier.levelRightColor = c;
+    }
+    else if (key == "ParticleColor")
+    {
+        Color3 c;
+        ParseColor3(val, c);
+        tier.particleColor = c;
     }
     else if (key == "TitleEffect" || key == "NameEffect" || key == "LevelEffect")
     {

@@ -155,14 +155,16 @@ enum class EffectType
     RadialGradient,    ///< Radial gradient from center (param1 = gamma)
     Shimmer,           ///< Moving highlight band (param1 = width, param2 = strength)
     ChromaticShimmer,  ///< Chromatic aberration shimmer (param1-4 for tuning)
-    PulseGradient,     ///< Pulsing brightness modulation (param1 = freq, param2 = amp)
+    Ember,             ///< Warm flickering glow (param1 = speed, param2 = intensity)
     RainbowWave,       ///< Animated rainbow (param1-5 for hue/speed/saturation)
     ConicRainbow,      ///< Circular rainbow rotation (param1-4 for tuning)
     Aurora,  ///< Northern lights effect (param1 = speed, param2 = waves, param3 = intensity, param4
              ///< = sway)
-    Sparkle,  ///< Glittering stars (param1 = density, param2 = speed, param3 = intensity)
-    Plasma,   ///< Demoscene plasma pattern (param1 = freq1, param2 = freq2, param3 = speed)
-    Scanline  ///< Horizontal scanning bar (param1 = speed, param2 = width, param3 = intensity)
+    Sparkle,   ///< Glittering stars (param1 = density, param2 = speed, param3 = intensity)
+    Plasma,    ///< Demoscene plasma pattern (param1 = freq1, param2 = freq2, param3 = speed)
+    Scanline,  ///< Horizontal scanning bar (param1 = speed, param2 = width, param3 = intensity)
+    Enchant,   ///< Flowing magical energy (param1 = speed, param2 = scale, param3 = intensity)
+    Frost      ///< Crystalline ice sparkle (param1 = density, param2 = speed, param3 = intensity)
 };
 
 /**
@@ -227,9 +229,16 @@ struct TierDefinition
     uint16_t minLevel = 1;          ///< Minimum level for this tier (inclusive)
     uint16_t maxLevel = 250;        ///< Maximum level for this tier (inclusive)
     std::string title = "Unknown";  ///< Title text (e.g., "Novice", "Legend of Tamriel")
-    Color3 leftColor;               ///< RGB color for left/top of gradients
-    Color3 rightColor;              ///< RGB color for right/bottom of gradients
+    Color3 leftColor;               ///< RGB color for name gradient left/top
+    Color3 rightColor;              ///< RGB color for name gradient right/bottom
     Color3 highlightColor;          ///< RGB color for shimmer/sparkle highlights
+
+    /// Per-element color overrides (optional - falls back to derived from leftColor/rightColor)
+    std::optional<Color3> titleLeftColor;   ///< Title gradient left (default: washed from name)
+    std::optional<Color3> titleRightColor;  ///< Title gradient right
+    std::optional<Color3> levelLeftColor;   ///< Level gradient left (default: mixed from name)
+    std::optional<Color3> levelRightColor;  ///< Level gradient right
+    std::optional<Color3> particleColor;    ///< Particle tint (default: highlightColor)
 
     EffectParams titleEffect;  ///< Visual effect for title text (player only)
     EffectParams nameEffect;   ///< Visual effect for name text (player only)
@@ -317,6 +326,28 @@ struct ShadowOutlineSettings
     float TitleMainGap = .0f;          ///< Vertical gap between title and main line (pixels)
     float OutlineMinScale = .65f;      ///< Minimum outline width ratio for smaller text
     bool ProportionalSpacing = false;  ///< Scale pixel spacings with text size
+
+    // Outline Glow (white halo behind outline)
+    bool OutlineGlowEnabled = false;   ///< Enable white glow behind text outline
+    float OutlineGlowScale = 1.6f;     ///< Glow radius as multiplier of outline width
+    float OutlineGlowAlpha = .1f;      ///< Peak glow ring opacity 0-1
+    int OutlineGlowRings = 2;          ///< Concentric glow rings (1-3)
+    float OutlineGlowR = 1.0f;         ///< Glow color red
+    float OutlineGlowG = 1.0f;         ///< Glow color green
+    float OutlineGlowB = 1.0f;         ///< Glow color blue
+    bool OutlineGlowTierTint = false;  ///< Blend glow color with tier color
+
+    // Dual-tone directional outline
+    bool DualOutlineEnabled = false;  ///< Enable inner outline tinted with tier color
+    float InnerOutlineTint = .3f;     ///< How much to blend toward tier color (0=outline, 1=tier)
+    float InnerOutlineAlpha = .5f;    ///< Inner outline opacity multiplier
+    float InnerOutlineScale = .5f;    ///< Inner outline width as fraction of outer
+    float DirectionalLightAngle = 315.f;  ///< Light direction in degrees (0=right, 90=down)
+    float DirectionalLightBias = .15f;    ///< Directional width variation (0=uniform)
+
+    // Color tinting
+    float OutlineColorTint = .0f;  ///< Tier-color tint for outlines 0-0.25
+    float ShadowColorTint = .0f;   ///< Tier-color tint for shadows 0-0.25
 };
 ShadowOutlineSettings& ShadowOutline();
 
@@ -359,11 +390,12 @@ OrnamentSettings& Ornament();
  */
 enum class ParticleStyle
 {
-    Stars,   ///< Twinkling blue star points
-    Sparks,  ///< Fast, yellowish fire-like sparks
-    Wisps,   ///< Slow, ethereal wisps with pale/blue tint
-    Runes,   ///< Small magical rune symbols
-    Orbs     ///< Soft glowing orbs
+    Stars,    ///< Twinkling blue star points
+    Sparks,   ///< Fast, yellowish fire-like sparks
+    Wisps,    ///< Slow, ethereal wisps with pale/blue tint
+    Runes,    ///< Small magical rune symbols
+    Orbs,     ///< Soft glowing orbs
+    Crystals  ///< Geometric crystalline shapes
 };
 
 /// Particle aura settings.
@@ -376,6 +408,7 @@ struct ParticleSettings
     bool EnableWisps = false;         ///< Enable ethereal wisps
     bool EnableRunes = false;         ///< Enable magical runes
     bool EnableOrbs = false;          ///< Enable glowing orbs
+    bool EnableCrystals = false;      ///< Enable crystalline shapes
     int Count = 8;                    ///< Particles per type
     float Size = 3.0f;                ///< Particle size in pixels
     float Speed = 1.0f;               ///< Animation speed multiplier
@@ -402,8 +435,8 @@ struct AnimColorSettings
     float AnimSpeedLowTier = .35f;    ///< Speed for tiers 0-7
     float AnimSpeedMidTier = .20f;    ///< Speed for tier 8
     float AnimSpeedHighTier = .10f;   ///< Speed for tier 9+
-    float ColorWashAmount = .50f;     ///< Desaturation toward white 0-1
-    float NameColorMix = .35f;        ///< Base color strength 0-1
+    float ColorWashAmount = .15f;     ///< Desaturation toward white 0-1
+    float NameColorMix = .65f;        ///< Base color strength 0-1
     float EffectAlphaMin = .20f;      ///< Minimum effect alpha
     float EffectAlphaMax = .60f;      ///< Maximum effect alpha
     float StrengthMin = .15f;         ///< Minimum effect strength
@@ -411,6 +444,7 @@ struct AnimColorSettings
     float AlphaSettleTime = .46f;     ///< Alpha settle time in seconds
     float ScaleSettleTime = .46f;     ///< Font scale settle time in seconds
     float PositionSettleTime = .38f;  ///< Position settle time for NPCs in seconds
+    float TierVibrancyBoost = .0f;    ///< Extra color saturation for high tiers 0-1
 };
 AnimColorSettings& AnimColor();
 
@@ -425,6 +459,18 @@ struct FontSettings
     float TitleFontSize = 42.0f;  ///< Title font size in points
 };
 FontSettings& Font();
+
+/// Entrance/exit transition animation settings.
+struct TransitionSettings
+{
+    bool EnableEntrance = false;      ///< Enable pop-in/slide entrance animation
+    int EntranceStyle = 0;            ///< 0=PopIn, 1=SlideDown, 2=Expand
+    float EntranceDuration = .35f;    ///< Entrance animation duration in seconds
+    float EntranceOvershoot = 1.05f;  ///< Scale overshoot for PopIn style
+    bool EnableExit = false;          ///< Enable exit animation
+    float ExitDuration = .20f;        ///< Exit animation duration in seconds
+};
+TransitionSettings& Transition();
 
 /// NPC appearance template settings.
 struct AppearanceSettings
@@ -468,6 +514,21 @@ struct VisualSettings
     float PositionSmoothingBlend = 1.0f;   ///< 1.0=moving-avg, 0.0=exponential
     float LargeMovementThreshold = 50.0f;  ///< Pixel threshold for large movement handling
     float LargeMovementBlend = .5f;        ///< Blend factor for large movements
+    // Motion Trail
+    bool EnableMotionTrail = false;  ///< Enable afterimage trail on moving nameplates
+    int TrailLength = 4;             ///< Number of ghost copies (1-8)
+    float TrailAlpha = .3f;          ///< Peak ghost opacity
+    float TrailFalloff = 2.0f;       ///< Alpha falloff exponent (higher = faster fade)
+    float TrailMinDistance = 2.0f;   ///< Min pixels moved before trail renders
+    int TrailMinTier = 0;            ///< Minimum tier index for trail
+
+    // Wave Displacement
+    bool EnableWave = false;     ///< Enable per-glyph sine wave displacement
+    float WaveAmplitude = 1.5f;  ///< Wave height in pixels
+    float WaveFrequency = 3.0f;  ///< Cycles across text width
+    float WaveSpeed = 1.0f;      ///< Animation speed multiplier
+    int WaveMinTier = 0;         ///< Minimum tier index for wave effect
+
     // Tier Effect Gating
     bool EnableTierEffectGating = false;  ///< Gate effects by tier index
     int GlowMinTier = 5;                  ///< Minimum tier for glow effects
