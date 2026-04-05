@@ -5,6 +5,7 @@
 #include "ParticleTextures.h"
 #include "Renderer.h"
 #include "Settings.h"
+#include "TextPostProcess.h"
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -50,6 +51,7 @@ struct InitFlags
     std::atomic<bool> initializing{false};
     std::atomic<bool> mipmapsGenerated{false};
     std::atomic<bool> particleTexturesLoaded{false};
+    std::atomic<bool> postProcessInitialized{false};
     std::atomic<bool> backendReinitRequested{false};
 };
 
@@ -181,8 +183,10 @@ static void HandleDeviceChange()
     if (changed)
     {
         ParticleTextures::Shutdown();
+        TextPostProcess::Shutdown();
         Init().mipmapsGenerated.store(false, std::memory_order_release);
         Init().particleTexturesLoaded.store(false, std::memory_order_release);
+        Init().postProcessInitialized.store(false, std::memory_order_release);
         Init().backendReinitRequested.store(true, std::memory_order_release);
         if (!TryInstallPresentHook(swapChain))
         {
@@ -268,6 +272,7 @@ static void InitializeImGui()
             D3D().originalPresent.store(nullptr, std::memory_order_release);
         }
         ParticleTextures::Shutdown();
+        TextPostProcess::Shutdown();
     };
 
     ImGui::CreateContext();
@@ -519,6 +524,7 @@ void RenderOverlayNow()
             }
             Init().mipmapsGenerated.store(false, std::memory_order_release);
             Init().particleTexturesLoaded.store(false, std::memory_order_release);
+            Init().postProcessInitialized.store(false, std::memory_order_release);
             logger::info("Hooks: Reinitialized ImGui DX11 backend after device change");
         }
 
@@ -538,12 +544,22 @@ void RenderOverlayNow()
         // Load particle textures on first frame
         EnsureParticleTexturesLoaded(device.Get(), useParticleTextures);
 
+        // Initialize GPU post-processing on first frame
+        if (!Init().postProcessInitialized.load(std::memory_order_acquire) && device && context)
+        {
+            if (TextPostProcess::Initialize(device.Get(), context.Get()))
+            {
+                Init().postProcessInitialized.store(true, std::memory_order_release);
+            }
+        }
+
         // Set display size to actual screen resolution
         {
             const auto screenSize = RE::BSGraphics::Renderer::GetScreenSize();
             auto& io = ImGui::GetIO();
             io.DisplaySize.x = static_cast<float>(screenSize.width);
             io.DisplaySize.y = static_cast<float>(screenSize.height);
+            TextPostProcess::OnResize(screenSize.width, screenSize.height);
         }
 
         ImGui::NewFrame();

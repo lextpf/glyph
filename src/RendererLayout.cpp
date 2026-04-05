@@ -216,12 +216,29 @@ static void ComputeTierColors(LabelStyle& style,
 
     const float baseColorAmount = under100 ? (.35f + .65f * tierIntensity) : 1.0f;
 
-    style.LcLevel = MixToWhite(style.Lc, baseColorAmount);
-    style.RcLevel = MixToWhite(style.Rc, baseColorAmount);
+    // Level colors: use per-tier override if set, else derive from name
+    if (tier.levelLeftColor)
+        style.LcLevel = Pastelize(*tier.levelLeftColor);
+    else
+        style.LcLevel = MixToWhite(style.Lc, baseColorAmount);
+    if (tier.levelRightColor)
+        style.RcLevel = Pastelize(*tier.levelRightColor);
+    else
+        style.RcLevel = MixToWhite(style.Rc, baseColorAmount);
+
+    // Name colors: wash from level (always derived from Lc/Rc)
     style.LcName = WashColor(style.LcLevel, snap.colorWashAmount);
     style.RcName = WashColor(style.RcLevel, snap.colorWashAmount);
-    style.LcTitle = WashColor(style.LcName, snap.colorWashAmount);
-    style.RcTitle = WashColor(style.RcName, snap.colorWashAmount);
+
+    // Title colors: use per-tier override if set, else wash from name
+    if (tier.titleLeftColor)
+        style.LcTitle = Pastelize(*tier.titleLeftColor);
+    else
+        style.LcTitle = WashColor(style.LcName, snap.colorWashAmount);
+    if (tier.titleRightColor)
+        style.RcTitle = Pastelize(*tier.titleRightColor);
+    else
+        style.RcTitle = WashColor(style.RcName, snap.colorWashAmount);
 
     style.specialGlowColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
@@ -239,6 +256,27 @@ static void ComputeTierColors(LabelStyle& style,
         style.RcName = specialCol;
         style.LcTitle = WashColor(specialCol, snap.colorWashAmount);
         style.RcTitle = WashColor(specialCol, snap.colorWashAmount);
+    }
+
+    // Tier vibrancy boost: higher tiers get more saturated colors
+    if (snap.tierVibrancyBoost > .0f && snap.tiers.size() > 1 && !style.specialTitle)
+    {
+        float tierProgress =
+            static_cast<float>(style.tierIdx) / static_cast<float>(snap.tiers.size() - 1);
+        float boost = snap.tierVibrancyBoost * tierProgress;
+        // Pull colors away from white (reverse of wash) by lerping toward Lc/Rc
+        auto Vivify = [&](ImVec4& washed, const ImVec4& vivid)
+        {
+            washed.x += (vivid.x - washed.x) * boost;
+            washed.y += (vivid.y - washed.y) * boost;
+            washed.z += (vivid.z - washed.z) * boost;
+        };
+        Vivify(style.LcName, style.Lc);
+        Vivify(style.RcName, style.Rc);
+        Vivify(style.LcLevel, style.Lc);
+        Vivify(style.RcLevel, style.Rc);
+        Vivify(style.LcTitle, style.Lc);
+        Vivify(style.RcTitle, style.Rc);
     }
 
     // Pack colors to ImU32
@@ -263,8 +301,14 @@ static void ComputeTierColors(LabelStyle& style,
 
     const float outlineAlpha = TextEffects::Saturate(alpha);
     const float shadowAlpha = TextEffects::Saturate(alpha * .75f);
-    style.outlineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, outlineAlpha));
-    style.shadowColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, shadowAlpha));
+
+    // Subtle tier-color tint for outline and shadow (0 = pure black)
+    const float ot = snap.outlineColorTint;
+    const float st = snap.shadowColorTint;
+    style.outlineColor = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(style.Lc.x * ot, style.Lc.y * ot, style.Lc.z * ot, outlineAlpha));
+    style.shadowColor = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(style.Lc.x * st, style.Lc.y * st, style.Lc.z * st, shadowAlpha));
 
     // Outline width data (actual widths computed after font sizes are known)
     style.baseOutlineWidth = snap.outlineWidthMin + snap.outlineWidthMax;

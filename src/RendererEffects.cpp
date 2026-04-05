@@ -1,6 +1,7 @@
 #include "RendererInternal.h"
 
 #include "ParticleTextures.h"
+#include "TextPostProcess.h"
 
 namespace Renderer
 {
@@ -11,6 +12,8 @@ struct EffectArgs
     ImU32 colL, colR, highlight, outlineColor;
     float outlineWidth, phase01, strength, textSizeScale, alpha;
     bool fastOutlines;
+    TextEffects::OutlineGlowParams outlineGlow;
+    TextEffects::DualOutlineParams dualOutline;
 };
 
 namespace
@@ -18,28 +21,22 @@ namespace
 static void ApplyNone(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
-    TextEffects::AddTextOutline4(
-        dl, font, sz, pos, text, a.colL, a.outlineColor, a.outlineWidth, a.fastOutlines);
+    TextEffects::AddTextOutline4(dl,
+                                 font,
+                                 sz,
+                                 pos,
+                                 text,
+                                 a.colL,
+                                 a.outlineColor,
+                                 a.outlineWidth,
+                                 a.fastOutlines,
+                                 a.outlineGlow.enabled ? &a.outlineGlow : nullptr);
 }
 
 static void ApplyGradient(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
-    TextEffects::WithOutline<TextEffects::AddTextHorizontalGradient>(
-        dl, font, sz, pos, text, a.outlineColor, a.outlineWidth, a.fastOutlines, a.colL, a.colR);
-}
-
-static void ApplyVerticalGradient(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    TextEffects::WithOutline<TextEffects::AddTextVerticalGradient>(
-        dl, font, sz, pos, text, a.outlineColor, a.outlineWidth, a.fastOutlines, a.colL, a.colR);
-}
-
-static void ApplyDiagonalGradient(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    TextEffects::WithOutline<TextEffects::AddTextDiagonalGradient>(
+    TextEffects::WithOutlineGlow<TextEffects::AddTextHorizontalGradient>(
         dl,
         font,
         sz,
@@ -48,6 +45,41 @@ static void ApplyDiagonalGradient(
         a.outlineColor,
         a.outlineWidth,
         a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR);
+}
+
+static void ApplyVerticalGradient(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextVerticalGradient>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR);
+}
+
+static void ApplyDiagonalGradient(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextDiagonalGradient>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
         a.colL,
         a.colR,
         ImVec2(a.effect.param1, a.effect.param2));
@@ -56,24 +88,7 @@ static void ApplyDiagonalGradient(
 static void ApplyRadialGradient(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
-    TextEffects::WithOutline<TextEffects::AddTextRadialGradient>(dl,
-                                                                 font,
-                                                                 sz,
-                                                                 pos,
-                                                                 text,
-                                                                 a.outlineColor,
-                                                                 a.outlineWidth,
-                                                                 a.fastOutlines,
-                                                                 a.colL,
-                                                                 a.colR,
-                                                                 a.effect.param1,
-                                                                 nullptr);
-}
-
-static void ApplyShimmer(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    TextEffects::WithOutline<TextEffects::AddTextShimmer>(
+    TextEffects::WithOutlineGlow<TextEffects::AddTextRadialGradient>(
         dl,
         font,
         sz,
@@ -82,17 +97,51 @@ static void ApplyShimmer(
         a.outlineColor,
         a.outlineWidth,
         a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        a.effect.param1,
+        nullptr);
+}
+
+static void ApplyShimmer(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextShimmer>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
         a.colL,
         a.colR,
         a.highlight,
         a.phase01,
-        a.effect.param1,
+        ParamOr(a.effect.param1, .12f),
         ParamOr(a.effect.param2, 1.0f) * a.strength);
 }
 
 static void ApplyChromaticShimmer(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
+    if (a.outlineGlow.enabled)
+    {
+        TextEffects::DrawOutlineGlow(dl,
+                                     font,
+                                     sz,
+                                     pos,
+                                     text,
+                                     a.outlineGlow.color,
+                                     a.outlineWidth,
+                                     a.outlineGlow.scale,
+                                     a.outlineGlow.alpha,
+                                     a.outlineGlow.rings,
+                                     a.fastOutlines);
+    }
     TextEffects::AddTextOutline4ChromaticShimmer(dl,
                                                  font,
                                                  sz,
@@ -104,44 +153,58 @@ static void ApplyChromaticShimmer(
                                                  a.outlineColor,
                                                  a.outlineWidth,
                                                  a.phase01,
-                                                 a.effect.param1,
-                                                 a.effect.param2 * a.strength,
-                                                 a.effect.param3 * a.textSizeScale,
-                                                 a.effect.param4);
+                                                 ParamOr(a.effect.param1, .1f),
+                                                 ParamOr(a.effect.param2, .8f) * a.strength,
+                                                 ParamOr(a.effect.param3, 1.5f) * a.textSizeScale,
+                                                 ParamOr(a.effect.param4, .35f));
 }
 
-static void ApplyPulseGradient(
+static void ApplyEmber(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
-    float time = (float)ImGui::GetTime();
-    TextEffects::WithOutline<TextEffects::AddTextPulseGradient>(dl,
-                                                                font,
-                                                                sz,
-                                                                pos,
-                                                                text,
-                                                                a.outlineColor,
-                                                                a.outlineWidth,
-                                                                a.fastOutlines,
-                                                                a.colL,
-                                                                a.colR,
-                                                                time,
-                                                                a.effect.param1,
-                                                                a.effect.param2 * a.strength);
+    TextEffects::WithOutlineGlow<TextEffects::AddTextEmber>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, .5f),
+        ParamOr(a.effect.param2, .8f) * a.strength);
 }
 
 static void ApplyRainbowWave(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
+    if (a.outlineGlow.enabled)
+    {
+        TextEffects::DrawOutlineGlow(dl,
+                                     font,
+                                     sz,
+                                     pos,
+                                     text,
+                                     a.outlineGlow.color,
+                                     a.outlineWidth,
+                                     a.outlineGlow.scale,
+                                     a.outlineGlow.alpha,
+                                     a.outlineGlow.rings,
+                                     a.fastOutlines);
+    }
     TextEffects::AddTextOutline4RainbowWave(dl,
                                             font,
                                             sz,
                                             pos,
                                             text,
                                             a.effect.param1,
-                                            a.effect.param2,
-                                            a.effect.param3,
-                                            a.effect.param4,
-                                            a.effect.param5,
+                                            ParamOr(a.effect.param2, 1.0f),
+                                            ParamOr(a.effect.param3, .5f),
+                                            ParamOr(a.effect.param4, .85f),
+                                            ParamOr(a.effect.param5, .95f),
                                             a.alpha,
                                             a.outlineColor,
                                             a.outlineWidth,
@@ -152,15 +215,29 @@ static void ApplyRainbowWave(
 static void ApplyConicRainbow(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
+    if (a.outlineGlow.enabled)
+    {
+        TextEffects::DrawOutlineGlow(dl,
+                                     font,
+                                     sz,
+                                     pos,
+                                     text,
+                                     a.outlineGlow.color,
+                                     a.outlineWidth,
+                                     a.outlineGlow.scale,
+                                     a.outlineGlow.alpha,
+                                     a.outlineGlow.rings,
+                                     a.fastOutlines);
+    }
     TextEffects::AddTextOutline4ConicRainbow(dl,
                                              font,
                                              sz,
                                              pos,
                                              text,
                                              a.effect.param1,
-                                             a.effect.param2,
-                                             a.effect.param3,
-                                             a.effect.param4,
+                                             ParamOr(a.effect.param2, .4f),
+                                             ParamOr(a.effect.param3, .85f),
+                                             ParamOr(a.effect.param4, .95f),
                                              a.alpha,
                                              a.outlineColor,
                                              a.outlineWidth,
@@ -171,26 +248,7 @@ static void ApplyConicRainbow(
 static void ApplyAurora(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
-    TextEffects::WithOutline<TextEffects::AddTextAurora>(dl,
-                                                         font,
-                                                         sz,
-                                                         pos,
-                                                         text,
-                                                         a.outlineColor,
-                                                         a.outlineWidth,
-                                                         a.fastOutlines,
-                                                         a.colL,
-                                                         a.colR,
-                                                         ParamOr(a.effect.param1, .5f),
-                                                         ParamOr(a.effect.param2, 3.0f),
-                                                         ParamOr(a.effect.param3, 1.0f),
-                                                         ParamOr(a.effect.param4, .3f));
-}
-
-static void ApplySparkle(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    TextEffects::WithOutline<TextEffects::AddTextSparkle>(
+    TextEffects::WithOutlineGlow<TextEffects::AddTextAurora>(
         dl,
         font,
         sz,
@@ -199,6 +257,28 @@ static void ApplySparkle(
         a.outlineColor,
         a.outlineWidth,
         a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, .5f),
+        ParamOr(a.effect.param2, 3.0f),
+        ParamOr(a.effect.param3, 1.0f),
+        ParamOr(a.effect.param4, .3f));
+}
+
+static void ApplySparkle(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextSparkle>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
         a.colL,
         a.colR,
         a.highlight,
@@ -210,25 +290,7 @@ static void ApplySparkle(
 static void ApplyPlasma(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
-    TextEffects::WithOutline<TextEffects::AddTextPlasma>(dl,
-                                                         font,
-                                                         sz,
-                                                         pos,
-                                                         text,
-                                                         a.outlineColor,
-                                                         a.outlineWidth,
-                                                         a.fastOutlines,
-                                                         a.colL,
-                                                         a.colR,
-                                                         ParamOr(a.effect.param1, 2.0f),
-                                                         ParamOr(a.effect.param2, 3.0f),
-                                                         ParamOr(a.effect.param3, .5f));
-}
-
-static void ApplyScanline(
-    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
-{
-    TextEffects::WithOutline<TextEffects::AddTextScanline>(
+    TextEffects::WithOutlineGlow<TextEffects::AddTextPlasma>(
         dl,
         font,
         sz,
@@ -237,11 +299,72 @@ static void ApplyScanline(
         a.outlineColor,
         a.outlineWidth,
         a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, 2.0f),
+        ParamOr(a.effect.param2, 3.0f),
+        ParamOr(a.effect.param3, .5f));
+}
+
+static void ApplyScanline(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextScanline>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
         a.colL,
         a.colR,
         a.highlight,
         ParamOr(a.effect.param1, .5f),
         ParamOr(a.effect.param2, .15f),
+        ParamOr(a.effect.param3, 1.0f) * a.strength);
+}
+
+static void ApplyEnchant(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextEnchant>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, .3f),
+        ParamOr(a.effect.param2, 2.0f),
+        ParamOr(a.effect.param3, 1.0f));
+}
+
+static void ApplyFrost(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextFrost>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        ParamOr(a.effect.param1, .4f),
+        ParamOr(a.effect.param2, .8f),
         ParamOr(a.effect.param3, 1.0f) * a.strength);
 }
 }  // namespace
@@ -261,8 +384,14 @@ void ApplyTextEffect(ImDrawList* drawList,
                      float strength,
                      float textSizeScale,
                      float alpha,
-                     bool fastOutlines)
+                     bool fastOutlines,
+                     const TextEffects::OutlineGlowParams* outlineGlow,
+                     const TextEffects::DualOutlineParams* dualOutline,
+                     const TextEffects::WaveParams* wave)
 {
+    // Capture vertex count before rendering for wave displacement
+    const int vtxBefore = drawList->VtxBuffer.Size;
+
     EffectArgs args{effect,
                     colL,
                     colR,
@@ -273,7 +402,9 @@ void ApplyTextEffect(ImDrawList* drawList,
                     strength,
                     textSizeScale,
                     alpha,
-                    fastOutlines};
+                    fastOutlines,
+                    outlineGlow ? *outlineGlow : TextEffects::OutlineGlowParams{},
+                    dualOutline ? *dualOutline : TextEffects::DualOutlineParams{}};
 
     switch (effect.type)
     {
@@ -298,8 +429,8 @@ void ApplyTextEffect(ImDrawList* drawList,
         case Settings::EffectType::ChromaticShimmer:
             ApplyChromaticShimmer(drawList, font, fontSize, pos, text, args);
             break;
-        case Settings::EffectType::PulseGradient:
-            ApplyPulseGradient(drawList, font, fontSize, pos, text, args);
+        case Settings::EffectType::Ember:
+            ApplyEmber(drawList, font, fontSize, pos, text, args);
             break;
         case Settings::EffectType::RainbowWave:
             ApplyRainbowWave(drawList, font, fontSize, pos, text, args);
@@ -319,9 +450,137 @@ void ApplyTextEffect(ImDrawList* drawList,
         case Settings::EffectType::Scanline:
             ApplyScanline(drawList, font, fontSize, pos, text, args);
             break;
+        case Settings::EffectType::Enchant:
+            ApplyEnchant(drawList, font, fontSize, pos, text, args);
+            break;
+        case Settings::EffectType::Frost:
+            ApplyFrost(drawList, font, fontSize, pos, text, args);
+            break;
         default:
             break;
     }
+
+    // Draw inner outline on top (sits between outer outline and text visually
+    // due to smaller width and semi-transparent tier-tinted color)
+    if (args.dualOutline.enabled)
+    {
+        TextEffects::DrawDirectionalInnerOutline(drawList,
+                                                 font,
+                                                 fontSize,
+                                                 pos,
+                                                 text,
+                                                 args.outlineColor,
+                                                 args.dualOutline.tierColor,
+                                                 args.outlineWidth,
+                                                 args.dualOutline.innerScale,
+                                                 args.dualOutline.tintFactor,
+                                                 args.dualOutline.alphaFactor,
+                                                 args.dualOutline.lightAngle,
+                                                 args.dualOutline.lightBias,
+                                                 args.fastOutlines);
+    }
+
+    // Apply per-glyph wave displacement to all vertices added during this call
+    if (wave && wave->enabled)
+    {
+        const int vtxAfter = drawList->VtxBuffer.Size;
+        if (vtxAfter > vtxBefore)
+        {
+            // Compute bounding box of all added vertices
+            float bbMinX = FLT_MAX, bbMaxX = -FLT_MAX;
+            for (int i = vtxBefore; i < vtxAfter; ++i)
+            {
+                float x = drawList->VtxBuffer[i].pos.x;
+                if (x < bbMinX)
+                    bbMinX = x;
+                if (x > bbMaxX)
+                    bbMaxX = x;
+            }
+            float bbWidth = bbMaxX - bbMinX;
+            TextEffects::ApplyWaveDisplacement(drawList,
+                                               vtxBefore,
+                                               vtxAfter,
+                                               bbMinX,
+                                               bbWidth,
+                                               wave->amplitude,
+                                               wave->frequency,
+                                               wave->speed,
+                                               wave->time);
+        }
+    }
+}
+
+// Build outline glow params from snapshot and tier color.
+static TextEffects::OutlineGlowParams BuildOutlineGlow(const RenderSettingsSnapshot& snap,
+                                                       const LabelStyle& style)
+{
+    TextEffects::OutlineGlowParams glow;
+    glow.enabled = snap.enableOutlineGlow;
+    if (!glow.enabled)
+    {
+        return glow;
+    }
+    glow.scale = snap.outlineGlowScale;
+    glow.alpha = snap.outlineGlowAlpha;
+    glow.rings = snap.outlineGlowRings;
+
+    // Base glow color from settings (default white)
+    float gr = snap.outlineGlowR;
+    float gg = snap.outlineGlowG;
+    float gb = snap.outlineGlowB;
+
+    // Optionally tint toward tier color
+    if (snap.outlineGlowTierTint)
+    {
+        float t = .35f;  // blend 35% tier color into the glow
+        gr = gr + (style.Lc.x - gr) * t;
+        gg = gg + (style.Lc.y - gg) * t;
+        gb = gb + (style.Lc.z - gb) * t;
+    }
+
+    int a = std::clamp((int)(style.alpha * 255.0f + .5f), 0, 255);
+    glow.color = IM_COL32((int)(gr * 255.0f), (int)(gg * 255.0f), (int)(gb * 255.0f), a);
+    return glow;
+}
+
+// Build dual-tone directional outline params from snapshot and tier color.
+static TextEffects::DualOutlineParams BuildDualOutline(const RenderSettingsSnapshot& snap,
+                                                       const LabelStyle& style)
+{
+    TextEffects::DualOutlineParams dual;
+    dual.enabled = snap.dualOutlineEnabled;
+    if (!dual.enabled)
+    {
+        return dual;
+    }
+    // Use the left tier color as the tint target
+    int a = std::clamp((int)(style.alpha * 255.0f + .5f), 0, 255);
+    dual.tierColor = IM_COL32(
+        (int)(style.Lc.x * 255.0f), (int)(style.Lc.y * 255.0f), (int)(style.Lc.z * 255.0f), a);
+    dual.innerScale = snap.innerOutlineScale;
+    dual.tintFactor = snap.innerOutlineTint;
+    dual.alphaFactor = snap.innerOutlineAlpha;
+    dual.lightAngle = snap.directionalLightAngle;
+    dual.lightBias = snap.directionalLightBias;
+    return dual;
+}
+
+// Build wave displacement params from snapshot and style.
+static TextEffects::WaveParams BuildWaveParams(const RenderSettingsSnapshot& snap,
+                                               const LabelStyle& style,
+                                               float time)
+{
+    TextEffects::WaveParams wave;
+    wave.enabled = snap.visual.EnableWave && style.tierIdx >= snap.visual.WaveMinTier;
+    if (!wave.enabled)
+    {
+        return wave;
+    }
+    wave.amplitude = snap.visual.WaveAmplitude;
+    wave.frequency = snap.visual.WaveFrequency;
+    wave.speed = snap.visual.WaveSpeed;
+    wave.time = time;
+    return wave;
 }
 
 // Computed particle configuration for a single actor label.
@@ -329,6 +588,7 @@ struct ParticleConfig
 {
     bool showParticles;
     ImU32 particleColor;
+    ImU32 particleColorSecondary;
     float spreadX;
     float spreadY;
     int boostedCount;
@@ -339,6 +599,7 @@ struct ParticleConfig
     bool showRunes;
     bool showSparks;
     bool showStars;
+    bool showCrystals;
     int enabledStyles;
 };
 
@@ -355,7 +616,7 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
 
     bool tierHasParticles = !tier.particleTypes.empty() && tier.particleTypes != "None";
     bool globalHasParticles = snap.enableOrbs || snap.enableWisps || snap.enableRunes ||
-                              snap.enableSparks || snap.enableStars;
+                              snap.enableSparks || snap.enableStars || snap.enableCrystals;
     bool hasAnyParticles = tierHasParticles || globalHasParticles;
     cfg.showParticles =
         ((snap.enableParticleAura && hasAnyParticles && style.tierAllowsParticles) ||
@@ -372,11 +633,15 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
                                                                   style.specialTitle->color.g,
                                                                   style.specialTitle->color.b,
                                                                   1.0f));
+        cfg.particleColorSecondary = 0;  // single color for special titles
     }
     else
     {
-        cfg.particleColor = ImGui::ColorConvertFloat4ToU32(
-            ImVec4(tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, 1.0f));
+        const Settings::Color3& pc = tier.particleColor.value_or(tier.highlightColor);
+        cfg.particleColor = ImGui::ColorConvertFloat4ToU32(ImVec4(pc.r, pc.g, pc.b, 1.0f));
+        // Secondary color from the tier's right gradient for a gradient particle cloud
+        cfg.particleColorSecondary =
+            ImGui::ColorConvertFloat4ToU32(ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, 1.0f));
     }
 
     const float pSpacingScale =
@@ -391,13 +656,13 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
         tierBoost = static_cast<float>(style.tierIdx) / static_cast<float>(snap.tiers.size() - 1);
     }
     float levelBoost = TextEffects::Saturate((static_cast<float>(lv) - 100.0f) / 400.0f);
-    float particleBoost = 1.0f + .6f * tierBoost + .6f * levelBoost;
+    float particleBoost = 1.0f + .3f * tierBoost + .3f * levelBoost;
     cfg.boostedCount =
         std::clamp(static_cast<int>(std::round(particleCount * particleBoost)), particleCount, 96);
     cfg.boostedSize =
-        snap.particleSize * (1.0f + .4f * tierBoost + .35f * levelBoost) * pSpacingScale;
+        snap.particleSize * (1.0f + .2f * tierBoost + .2f * levelBoost) * pSpacingScale;
     cfg.boostedAlpha =
-        std::clamp(snap.particleAlpha * style.alpha * (.95f + .35f * tierBoost + .35f * levelBoost),
+        std::clamp(snap.particleAlpha * style.alpha * (.95f + .15f * tierBoost + .15f * levelBoost),
                    .0f,
                    1.0f);
 
@@ -408,6 +673,7 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
         cfg.showRunes = tier.particleTypes.find("Runes") != std::string::npos;
         cfg.showSparks = tier.particleTypes.find("Sparks") != std::string::npos;
         cfg.showStars = tier.particleTypes.find("Stars") != std::string::npos;
+        cfg.showCrystals = tier.particleTypes.find("Crystals") != std::string::npos;
     }
     else
     {
@@ -416,10 +682,11 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
         cfg.showRunes = snap.enableRunes;
         cfg.showSparks = snap.enableSparks;
         cfg.showStars = snap.enableStars;
+        cfg.showCrystals = snap.enableCrystals;
     }
 
     cfg.enabledStyles = (int)cfg.showOrbs + (int)cfg.showWisps + (int)cfg.showRunes +
-                        (int)cfg.showSparks + (int)cfg.showStars;
+                        (int)cfg.showSparks + (int)cfg.showStars + (int)cfg.showCrystals;
     return cfg;
 }
 
@@ -439,7 +706,8 @@ void DrawParticles(ImDrawList* dl,
         return;
     }
 
-    splitter->SetCurrentChannel(dl, 0);  // Back layer: particles
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    splitter->SetCurrentChannel(dl, gpuGlow ? 1 : 0);  // Back layer: particles
     int slot = 0;
 
     const bool useTextures = snap.useParticleTextures;
@@ -462,7 +730,8 @@ void DrawParticles(ImDrawList* dl,
                                        slot++,
                                        cfg.enabledStyles,
                                        useTextures,
-                                       blendMode});
+                                       blendMode,
+                                       cfg.particleColorSecondary});
     }
     if (cfg.showWisps)
     {
@@ -480,7 +749,8 @@ void DrawParticles(ImDrawList* dl,
                                        slot++,
                                        cfg.enabledStyles,
                                        useTextures,
-                                       blendMode});
+                                       blendMode,
+                                       cfg.particleColorSecondary});
     }
     if (cfg.showRunes)
     {
@@ -498,7 +768,8 @@ void DrawParticles(ImDrawList* dl,
                                        slot++,
                                        cfg.enabledStyles,
                                        useTextures,
-                                       blendMode});
+                                       blendMode,
+                                       cfg.particleColorSecondary});
     }
     if (cfg.showSparks)
     {
@@ -516,7 +787,8 @@ void DrawParticles(ImDrawList* dl,
                                        slot++,
                                        cfg.enabledStyles,
                                        useTextures,
-                                       blendMode});
+                                       blendMode,
+                                       cfg.particleColorSecondary});
     }
     if (cfg.showStars)
     {
@@ -534,7 +806,27 @@ void DrawParticles(ImDrawList* dl,
                                        slot++,
                                        cfg.enabledStyles,
                                        useTextures,
-                                       blendMode});
+                                       blendMode,
+                                       cfg.particleColorSecondary});
+    }
+    if (cfg.showCrystals)
+    {
+        TextEffects::DrawParticleAura({dl,
+                                       layout.nameplateCenter,
+                                       cfg.spreadX * .85f,
+                                       cfg.spreadY * .85f,
+                                       cfg.particleColor,
+                                       cfg.boostedAlpha,
+                                       Settings::ParticleStyle::Crystals,
+                                       (std::max)(4, cfg.boostedCount / 2),
+                                       cfg.boostedSize * 1.1f,
+                                       snap.particleSpeed * .3f,
+                                       time,
+                                       slot++,
+                                       cfg.enabledStyles,
+                                       useTextures,
+                                       blendMode,
+                                       cfg.particleColorSecondary});
     }
 }
 
@@ -645,25 +937,41 @@ void DrawOrnaments(ImDrawList* dl,
     ImU32 glowColor =
         ImGui::ColorConvertFloat4ToU32(ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha));
     bool showOrnGlow = snap.enableGlow && snap.glowIntensity > .0f && style.tierAllowsGlow;
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    const int chBack = gpuGlow ? 1 : 0;
+    const int chFront = gpuGlow ? 2 : 1;
+
+    auto ornGlow = BuildOutlineGlow(snap, style);
+    auto ornDual = BuildDualOutline(snap, style);
 
     auto drawOrnChar = [&](ImVec2 charPos, const char* ch)
     {
         if (showOrnGlow)
         {
-            splitter->SetCurrentChannel(dl, 0);  // Back layer: glow
-            ParticleTextures::PushAdditiveBlend(dl);
-            TextEffects::AddTextGlow(dl,
-                                     ornamentFont,
-                                     ornamentSize,
-                                     charPos,
-                                     ch,
-                                     glowColor,
-                                     snap.glowRadius,
-                                     snap.glowIntensity,
-                                     snap.glowSamples);
-            ParticleTextures::PopBlendState(dl);
+            if (gpuGlow)
+            {
+                // GPU path: single AddText to glow capture channel
+                splitter->SetCurrentChannel(dl, 0);
+                dl->AddText(ornamentFont, ornamentSize, charPos, glowColor, ch);
+            }
+            else
+            {
+                // CPU fallback: multi-copy glow
+                splitter->SetCurrentChannel(dl, chBack);
+                ParticleTextures::PushAdditiveBlend(dl);
+                TextEffects::AddTextGlow(dl,
+                                         ornamentFont,
+                                         ornamentSize,
+                                         charPos,
+                                         ch,
+                                         glowColor,
+                                         snap.glowRadius,
+                                         snap.glowIntensity,
+                                         snap.glowSamples);
+                ParticleTextures::PopBlendState(dl);
+            }
         }
-        splitter->SetCurrentChannel(dl, 1);  // Front layer: ornament shapes
+        splitter->SetCurrentChannel(dl, chFront);  // Front layer: ornament shapes
         ApplyTextEffect(dl,
                         ornamentFont,
                         ornamentSize,
@@ -679,7 +987,9 @@ void DrawOrnaments(ImDrawList* dl,
                         style.strength,
                         textSizeScale,
                         style.alpha,
-                        fastOutlines);
+                        fastOutlines,
+                        ornGlow.enabled ? &ornGlow : nullptr,
+                        ornDual.enabled ? &ornDual : nullptr);
     };
 
     const float ornAnchorY =
@@ -746,7 +1056,9 @@ void DrawTitleText(ImDrawList* dl,
     float lodTitleAlpha = style.alpha * lodTitleFactor;
     ImU32 titleShadow = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlpha * .5f));
 
-    splitter->SetCurrentChannel(dl, 0);  // Back layer: glow
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    const int chFront = gpuGlow ? 2 : 1;
+
     if (snap.enableGlow && snap.glowIntensity > .0f && style.tierAllowsGlow)
     {
         ImVec4 glowColorVec =
@@ -757,22 +1069,36 @@ void DrawTitleText(ImDrawList* dl,
                          style.alpha)
                 : ImVec4(style.LcTitle.x, style.LcTitle.y, style.LcTitle.z, style.alpha);
         ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(glowColorVec);
-        float glowIntensity = style.specialTitle ? snap.glowIntensity * 1.15f : snap.glowIntensity;
-        float glowRadius = style.specialTitle ? snap.glowRadius * 1.1f : snap.glowRadius;
-        ParticleTextures::PushAdditiveBlend(dl);
-        TextEffects::AddTextGlow(dl,
-                                 layout.fontTitle,
-                                 layout.titleFontSize,
-                                 titlePos,
-                                 titleDisplayText,
-                                 glowColor,
-                                 glowRadius,
-                                 glowIntensity,
-                                 snap.glowSamples);
-        ParticleTextures::PopBlendState(dl);
+
+        if (gpuGlow)
+        {
+            // GPU path: single AddText to glow capture channel
+            splitter->SetCurrentChannel(dl, 0);
+            dl->AddText(
+                layout.fontTitle, layout.titleFontSize, titlePos, glowColor, titleDisplayText);
+        }
+        else
+        {
+            // CPU fallback: multi-copy glow
+            float glowIntensity =
+                style.specialTitle ? snap.glowIntensity * 1.15f : snap.glowIntensity;
+            float glowRadius = style.specialTitle ? snap.glowRadius * 1.1f : snap.glowRadius;
+            splitter->SetCurrentChannel(dl, 0);
+            ParticleTextures::PushAdditiveBlend(dl);
+            TextEffects::AddTextGlow(dl,
+                                     layout.fontTitle,
+                                     layout.titleFontSize,
+                                     titlePos,
+                                     titleDisplayText,
+                                     glowColor,
+                                     glowRadius,
+                                     glowIntensity,
+                                     snap.glowSamples);
+            ParticleTextures::PopBlendState(dl);
+        }
     }
 
-    splitter->SetCurrentChannel(dl, 1);  // Front layer: shadow + text
+    splitter->SetCurrentChannel(dl, chFront);  // Front layer: shadow + text
     dl->AddText(layout.fontTitle,
                 layout.titleFontSize,
                 ImVec2(titlePos.x + snap.titleShadowOffsetX * spacingScale,
@@ -782,6 +1108,10 @@ void DrawTitleText(ImDrawList* dl,
 
     float lodTitleAlphaFinal = style.titleAlpha * lodTitleFactor;
     float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
+    auto titleGlow = BuildOutlineGlow(snap, style);
+    auto titleDual = BuildDualOutline(snap, style);
+    auto titleWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
+
     if (d.isPlayer)
     {
         ApplyTextEffect(dl,
@@ -799,7 +1129,10 @@ void DrawTitleText(ImDrawList* dl,
                         style.strength,
                         textSizeScale,
                         lodTitleAlphaFinal,
-                        fastOutlines);
+                        fastOutlines,
+                        titleGlow.enabled ? &titleGlow : nullptr,
+                        titleDual.enabled ? &titleDual : nullptr,
+                        titleWave.enabled ? &titleWave : nullptr);
     }
     else
     {
@@ -815,7 +1148,8 @@ void DrawTitleText(ImDrawList* dl,
                                      dCol,
                                      npcOutline,
                                      style.titleOutlineWidth,
-                                     fastOutlines);
+                                     fastOutlines,
+                                     titleGlow.enabled ? &titleGlow : nullptr);
     }
 }
 
@@ -830,6 +1164,11 @@ void DrawMainLineSegments(ImDrawList* dl,
 {
     const float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
     const float spacingScale = snap.proportionalSpacing ? textSizeScale : 1.0f;
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    const int chFront = gpuGlow ? 2 : 1;
+    auto mainGlow = BuildOutlineGlow(snap, style);
+    auto mainDual = BuildDualOutline(snap, style);
+    auto mainWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
 
     ImVec2 currentPos;
     currentPos.x = layout.startPos.x - layout.totalWidth * .5f +
@@ -847,7 +1186,6 @@ void DrawMainLineSegments(ImDrawList* dl,
         float vOffset = (layout.mainLineHeight - seg.size.y) * .5f;
         ImVec2 pos = ImVec2(currentPos.x, currentPos.y + vOffset);
 
-        splitter->SetCurrentChannel(dl, 0);  // Back layer: glow
         if (snap.enableGlow && snap.glowIntensity > .0f && style.tierAllowsGlow)
         {
             ImVec4 glowCol =
@@ -860,23 +1198,35 @@ void DrawMainLineSegments(ImDrawList* dl,
                            ? ImVec4(style.LcLevel.x, style.LcLevel.y, style.LcLevel.z, style.alpha)
                            : ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, style.alpha));
             ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(glowCol);
-            float glowIntensity =
-                style.specialTitle ? snap.glowIntensity * 1.15f : snap.glowIntensity;
-            float glowRadius = style.specialTitle ? snap.glowRadius * 1.1f : snap.glowRadius;
-            ParticleTextures::PushAdditiveBlend(dl);
-            TextEffects::AddTextGlow(dl,
-                                     seg.font,
-                                     seg.fontSize,
-                                     pos,
-                                     seg.displayText.c_str(),
-                                     glowColor,
-                                     glowRadius,
-                                     glowIntensity,
-                                     snap.glowSamples);
-            ParticleTextures::PopBlendState(dl);
+
+            if (gpuGlow)
+            {
+                // GPU path: single AddText to glow capture channel
+                splitter->SetCurrentChannel(dl, 0);
+                dl->AddText(seg.font, seg.fontSize, pos, glowColor, seg.displayText.c_str());
+            }
+            else
+            {
+                // CPU fallback: multi-copy glow
+                float glowIntensity =
+                    style.specialTitle ? snap.glowIntensity * 1.15f : snap.glowIntensity;
+                float glowRadius = style.specialTitle ? snap.glowRadius * 1.1f : snap.glowRadius;
+                splitter->SetCurrentChannel(dl, 0);
+                ParticleTextures::PushAdditiveBlend(dl);
+                TextEffects::AddTextGlow(dl,
+                                         seg.font,
+                                         seg.fontSize,
+                                         pos,
+                                         seg.displayText.c_str(),
+                                         glowColor,
+                                         glowRadius,
+                                         glowIntensity,
+                                         snap.glowSamples);
+                ParticleTextures::PopBlendState(dl);
+            }
         }
 
-        splitter->SetCurrentChannel(dl, 1);  // Front layer: shadow + text
+        splitter->SetCurrentChannel(dl, chFront);  // Front layer: shadow + text
         dl->AddText(seg.font,
                     seg.fontSize,
                     ImVec2(pos.x + snap.mainShadowOffsetX * spacingScale,
@@ -903,7 +1253,10 @@ void DrawMainLineSegments(ImDrawList* dl,
                             style.strength,
                             textSizeScale,
                             style.levelAlpha,
-                            fastOutlines);
+                            fastOutlines,
+                            mainGlow.enabled ? &mainGlow : nullptr,
+                            mainDual.enabled ? &mainDual : nullptr,
+                            mainWave.enabled ? &mainWave : nullptr);
         }
         else
         {
@@ -924,7 +1277,10 @@ void DrawMainLineSegments(ImDrawList* dl,
                                 style.strength,
                                 textSizeScale,
                                 style.alpha,
-                                fastOutlines);
+                                fastOutlines,
+                                mainGlow.enabled ? &mainGlow : nullptr,
+                                mainDual.enabled ? &mainDual : nullptr,
+                                mainWave.enabled ? &mainWave : nullptr);
             }
             else
             {
@@ -940,7 +1296,8 @@ void DrawMainLineSegments(ImDrawList* dl,
                                              dCol,
                                              npcOutline,
                                              segOutlineWidth,
-                                             fastOutlines);
+                                             fastOutlines,
+                                             mainGlow.enabled ? &mainGlow : nullptr);
             }
         }
 
