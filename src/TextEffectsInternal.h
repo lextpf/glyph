@@ -118,6 +118,19 @@ struct TextVertexSetup
                       const char* text);
 };
 
+/// Draw concentric glow rings behind the text outline.
+void DrawOutlineGlow(ImDrawList* list,
+                     ImFont* font,
+                     float size,
+                     const ImVec2& pos,
+                     const char* text,
+                     ImU32 glowColor,
+                     float outlineWidth,
+                     float glowScale,
+                     float glowAlpha,
+                     int rings,
+                     bool fastOutlines);
+
 /// Draw text outline using 4 cardinal directions (N/S/E/W).
 /// Faster but less smooth than 8-dir.
 void DrawOutline4Internal(ImDrawList* list,

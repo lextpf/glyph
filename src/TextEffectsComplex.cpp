@@ -378,6 +378,147 @@ void AddTextScanline(ImDrawList* list,
     }
 }
 
+void AddTextEnchant(ImDrawList* list,
+                    ImFont* font,
+                    float size,
+                    const ImVec2& pos,
+                    const char* text,
+                    ImU32 colA,
+                    ImU32 colB,
+                    float speed,
+                    float scale,
+                    float intensity)
+{
+    TextVertexSetup s;
+    if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
+    {
+        return;
+    }
+
+    const float time = (float)ImGui::GetTime() * speed;
+    ImU32 colMid = LerpColorU32(colA, colB, .5f);
+    ImU32 colBright = LerpColorU32(colB, IM_COL32(255, 255, 255, 255), .3f);
+
+    for (int i = s.vtxStart; i < s.vtxEnd; ++i)
+    {
+        const ImVec2 p = list->VtxBuffer[i].pos;
+        const float nx = s.normalizedX(p.x);
+        const float ny = s.normalizedY(p.y);
+
+        // FBM noise for smooth, flowing magical energy
+        float energy = FBMNoise(nx * scale + time * .3f, ny * scale + time * .15f, 4, .6f);
+
+        // Second offset layer for richer flow
+        float energy2 =
+            FBMNoise(nx * scale * .7f - time * .2f, ny * scale * 1.3f + time * .25f, 3, .5f);
+
+        // Combine for organic, flowing pattern
+        float combined = (energy * .6f + energy2 * .4f);
+
+        // Pulsing highlight at noise peaks
+        float highlight = Saturate((combined - .55f) * 4.0f) * intensity;
+
+        // Smooth base blend driven by noise
+        float t = Saturate(combined * intensity);
+
+        // Three-color gradient: colA -> colMid -> colB with bright highlights
+        ImU32 finalColor;
+        if (t < .4f)
+        {
+            finalColor = LerpColorU32(colA, colMid, t * 2.5f);
+        }
+        else if (t < .7f)
+        {
+            finalColor = LerpColorU32(colMid, colB, (t - .4f) * 3.33f);
+        }
+        else
+        {
+            finalColor = LerpColorU32(colB, colBright, (t - .7f) * 3.33f);
+        }
+
+        // Add bright highlight pulse at energy peaks
+        if (highlight > .0f)
+        {
+            finalColor = LerpColorU32(finalColor, colBright, highlight * .5f);
+        }
+
+        list->VtxBuffer[i].col = finalColor;
+    }
+}
+
+void AddTextFrost(ImDrawList* list,
+                  ImFont* font,
+                  float size,
+                  const ImVec2& pos,
+                  const char* text,
+                  ImU32 colA,
+                  ImU32 colB,
+                  float density,
+                  float speed,
+                  float sparkleIntensity)
+{
+    TextVertexSetup s;
+    if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
+    {
+        return;
+    }
+
+    const float time = (float)ImGui::GetTime();
+    ImU32 iceWhite = IM_COL32(220, 235, 255, 255);
+
+    for (int i = s.vtxStart; i < s.vtxEnd; ++i)
+    {
+        const ImVec2 p = list->VtxBuffer[i].pos;
+        const float nx = s.normalizedX(p.x);
+        const float ny = s.normalizedY(p.y);
+
+        ImU32 base = LerpColorU32(colA, colB, nx);
+
+        // Crystalline frost pattern: sharp, high-frequency noise
+        float frost1 = Hash(std::floor(p.x * .08f + time * speed * .3f), std::floor(p.y * .08f));
+        float frost2 = Hash(std::floor(p.x * .15f - time * speed * .2f) + 50.0f,
+                            std::floor(p.y * .15f) + 50.0f);
+
+        // Creeping frost animation
+        float creep = std::sin(nx * 4.0f + time * speed * .5f) * .5f + .5f;
+        float frostPattern = (frost1 * .6f + frost2 * .4f) * creep;
+
+        // Apply density threshold for crystalline look
+        float frostMask = Saturate((frostPattern - (1.0f - density)) * 3.0f);
+
+        // Tint base color toward icy blue-white at frosted areas
+        ImU32 frosted = LerpColorU32(base, iceWhite, frostMask * .4f);
+
+        // Sparkle flashes: bright white points that twinkle
+        float sparkle = .0f;
+
+        // Layer 1: Medium sparkles
+        float seed1 = Hash(std::floor(p.x * .1f) + 100.0f, std::floor(p.y * .1f) + 100.0f);
+        if (seed1 > (1.0f - density * .5f))
+        {
+            float phase = seed1 * TWO_PI;
+            float s1 = std::sin(time * speed * 2.0f + phase);
+            s1 = (std::max)(.0f, s1);
+            sparkle += std::pow(s1, 6.0f) * .7f;
+        }
+
+        // Layer 2: Rare brilliant flash
+        float seed2 = Hash(std::floor(p.x * .05f) + 200.0f, std::floor(p.y * .05f) + 200.0f);
+        if (seed2 > .9f)
+        {
+            float phase = seed2 * TWO_PI;
+            float s2 = std::sin(time * speed * .8f + phase);
+            s2 = (std::max)(.0f, s2);
+            sparkle += std::pow(s2, 3.0f) * 1.2f;
+        }
+
+        sparkle = Saturate(sparkle * sparkleIntensity);
+
+        // Blend: frosted base + sparkle highlights
+        list->VtxBuffer[i].col = LerpColorU32(frosted, iceWhite, sparkle);
+    }
+}
+
 // Perf: draws up to 3 layers x 8 samples = 24 AddText calls per string.
 // Use GlowSamples <= 4 for a cheaper single-layer fallback.
 void AddTextGlow(ImDrawList* list,
