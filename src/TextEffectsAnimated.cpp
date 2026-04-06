@@ -23,7 +23,7 @@ void AddTextShimmer(ImDrawList* list,
 
     // Whisper-subtle amplitude: cap peak highlight contribution so the band
     // reads as a gentle gloss instead of a sweeping flashlight.
-    static constexpr float kAmplitudeCap = .35f;
+    static constexpr float kAmplitudeCap = .30f;
     const float bandHalf = (std::max)(bandWidth01 * .65f, .01f);
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
@@ -75,7 +75,7 @@ void AddTextEmber(ImDrawList* list,
     const float time = (float)ImGui::GetTime() * speed;
 
     // Whisper-subtle amplitude: ember should glow, not strobe.
-    static constexpr float kAmplitudeCap = .30f;
+    static constexpr float kAmplitudeCap = .24f;
 
     // Warm highlight color (gentler tint than the original golden-orange pop)
     int rA = (colA >> IM_COL32_R_SHIFT) & 0xFF;
@@ -274,7 +274,7 @@ void AddTextShineOverlay(ImDrawList* list,
     const int sg = (shineColor >> IM_COL32_G_SHIFT) & 0xFF;
     const int sb = (shineColor >> IM_COL32_B_SHIFT) & 0xFF;
     const float shapedFalloff = (std::max)(0.5f, falloff) * 3.4f;
-    const float intensityScale = .12f;
+    const float intensityScale = .10f;
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
