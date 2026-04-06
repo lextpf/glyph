@@ -3,6 +3,9 @@
 #include "ParticleTextures.hpp"
 #include "TextPostProcess.hpp"
 
+#include <cctype>
+#include <cstring>
+
 namespace Renderer
 {
 // Common parameters passed to each per-effect helper.
@@ -627,13 +630,15 @@ static TextEffects::DualOutlineParams BuildDualOutline(const RenderSettingsSnaps
     return dual;
 }
 
-// Build wave displacement params from snapshot and style.
+// Build wave displacement params from snapshot and style.  Wave is a
+// decorative tier visual -- player / special titles only.
 static TextEffects::WaveParams BuildWaveParams(const RenderSettingsSnapshot& snap,
                                                const LabelStyle& style,
                                                float time)
 {
     TextEffects::WaveParams wave;
-    wave.enabled = snap.visual.EnableWave && style.tierIdx >= snap.visual.WaveMinTier;
+    wave.enabled =
+        snap.visual.EnableWave && style.tierIdx >= snap.visual.WaveMinTier && style.usesTierVisuals;
     if (!wave.enabled)
     {
         return wave;
@@ -645,12 +650,15 @@ static TextEffects::WaveParams BuildWaveParams(const RenderSettingsSnapshot& sna
     return wave;
 }
 
-static TextEffects::ShineParams BuildShineParams(const RenderSettingsSnapshot& snap)
+// The shine overlay is a decorative tier visual (player / special titles);
+// the transparency-shaping fields stay active for every actor.
+static TextEffects::ShineParams BuildShineParams(const RenderSettingsSnapshot& snap,
+                                                 const LabelStyle& style)
 {
     TextEffects::ShineParams shine;
     shine.innerTextAlpha = snap.innerTextAlpha;
     shine.textGlowAlpha = snap.textGlowAlpha;
-    shine.enabled = snap.enableShine;
+    shine.enabled = snap.enableShine && style.usesTierVisuals;
     shine.intensity = snap.shineIntensity;
     shine.falloff = snap.shineFalloff;
     return shine;
@@ -753,7 +761,7 @@ static void DrawMistVeil(ImDrawList* dl,
             coreRadius,
             PackGlowTint(MixVec4(centerTint, tint, .58f),
                          baseAlpha * (gpuGlow ? coreAlphas[i] : coreAlphas[i] * .82f)),
-            gpuGlow ? 30 : 24);
+            gpuGlow ? 48 : 32);
     }
 
     const MistLobe* lobes = gpuGlow ? kGpuLobes : kCpuLobes;
@@ -779,7 +787,7 @@ static void DrawMistVeil(ImDrawList* dl,
         dl->AddCircleFilled(lobeCenter,
                             lobeRadius * lobe.radiusMul,
                             PackGlowTint(tint, baseAlpha * lobe.alphaMul),
-                            gpuGlow ? 30 : 24);
+                            gpuGlow ? 48 : 32);
     }
 }
 
@@ -981,6 +989,75 @@ static OrnamentMetrics ComputeOrnamentMetrics(const ActorDrawData& d,
     return m;
 }
 
+// Per-weather-type emission tuning. The aura layout/motion are decided in
+// TextEffectsParticle; these scalars only nudge spread/size/speed/count so each
+// type sits well in its radial band. Order is independent of the enum -- the
+// `style` field is the link, the `token` is what `ParticleTypes` matches.
+struct ParticleTypeSpec
+{
+    Settings::ParticleStyle style;
+    const char* token;  ///< Lowercase comparison happens at match time
+    float spreadXScale;
+    float spreadYScale;
+    float sizeScale;
+    float speedScale;
+    float countScale;  ///< Multiplies boostedCount (result floored to >= 4)
+};
+
+static constexpr int kParticleTypeCount = 11;
+static const ParticleTypeSpec kParticleTypes[kParticleTypeCount] = {
+    {Settings::ParticleStyle::Firefly, "firefly", 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+    {Settings::ParticleStyle::Rain, "rain", 1.00f, 1.05f, 0.85f, 1.60f, 1.00f},
+    {Settings::ParticleStyle::Snow, "snow", 1.00f, 1.05f, 0.90f, 0.70f, 1.00f},
+    {Settings::ParticleStyle::Smoke, "smoke", 0.90f, 1.05f, 1.10f, 0.60f, 0.80f},
+    {Settings::ParticleStyle::Spark, "spark", 1.00f, 0.80f, 0.70f, 1.50f, 1.00f},
+    {Settings::ParticleStyle::Wisp, "wisp", 1.15f, 1.15f, 0.86f, 0.90f, 1.00f},
+    {Settings::ParticleStyle::Leaf, "leaf", 1.00f, 1.05f, 1.00f, 0.70f, 0.80f},
+    {Settings::ParticleStyle::Aurora, "aurora", 1.10f, 0.90f, 1.00f, 0.60f, 0.80f},
+    {Settings::ParticleStyle::CherryBlossom, "cherryblossom", 1.00f, 1.05f, 1.00f, 0.70f, 0.90f},
+    {Settings::ParticleStyle::Dust, "dust", 1.00f, 1.00f, 0.80f, 0.40f, 1.00f},
+    {Settings::ParticleStyle::Mote, "mote", 1.00f, 1.00f, 1.00f, 0.50f, 0.90f},
+};
+
+// True when `token` appears as a comma-separated entry in `particleTypes`
+// (case-insensitive, whitespace-trimmed). Exact-token match avoids substring
+// collisions between type names.
+static bool ParticleTypesContains(const std::string& particleTypes, const char* token)
+{
+    size_t start = 0;
+    while (start <= particleTypes.size())
+    {
+        size_t comma = particleTypes.find(',', start);
+        size_t end = (comma == std::string::npos) ? particleTypes.size() : comma;
+        size_t a = start, b = end;
+        while (a < b && std::isspace(static_cast<unsigned char>(particleTypes[a])))
+        {
+            ++a;
+        }
+        while (b > a && std::isspace(static_cast<unsigned char>(particleTypes[b - 1])))
+        {
+            --b;
+        }
+        const size_t len = b - a;
+        bool match = (std::strlen(token) == len);
+        for (size_t i = 0; match && i < len; ++i)
+        {
+            match = std::tolower(static_cast<unsigned char>(particleTypes[a + i])) ==
+                    static_cast<unsigned char>(token[i]);
+        }
+        if (match)
+        {
+            return true;
+        }
+        if (comma == std::string::npos)
+        {
+            break;
+        }
+        start = comma + 1;
+    }
+    return false;
+}
+
 // Computed particle configuration for a single actor label.
 struct ParticleConfig
 {
@@ -992,12 +1069,7 @@ struct ParticleConfig
     int boostedCount;
     float boostedSize;
     float boostedAlpha;
-    bool showOrbs;
-    bool showWisps;
-    bool showRunes;
-    bool showSparks;
-    bool showStars;
-    bool showCrystals;
+    bool enabled[kParticleTypeCount];
     int enabledStyles;
 };
 
@@ -1014,10 +1086,11 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
 
     // Per-tier ParticleTypes is the sole source of truth for which styles render.
     // A tier with empty / "None" particle types renders no particles unless a
-    // special title forces them on.
+    // special title forces them on.  Tier particle auras are a player-only
+    // flourish, mirroring the ornament gate.
     const bool tierHasParticles = !tier.particleTypes.empty() && tier.particleTypes != "None";
     cfg.showParticles =
-        ((snap.enableParticleAura && tierHasParticles && style.tierAllowsParticles) ||
+        ((d.isPlayer && snap.enableParticleAura && tierHasParticles && style.tierAllowsParticles) ||
          (style.specialTitle && style.specialTitle->forceParticles)) &&
         lodEffectsFactor > .01f;
     if (!cfg.showParticles)
@@ -1038,8 +1111,8 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
         const Settings::Color3& pc = tier.particleColor.value_or(tier.highlightColor);
         cfg.particleColor = ImGui::ColorConvertFloat4ToU32(ImVec4(pc.r, pc.g, pc.b, 1.0f));
         // Secondary color from the tier's right gradient for a gradient particle cloud
-        cfg.particleColorSecondary =
-            ImGui::ColorConvertFloat4ToU32(ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, 1.0f));
+        cfg.particleColorSecondary = ImGui::ColorConvertFloat4ToU32(
+            ImVec4(style.RcName.x, style.RcName.y, style.RcName.z, 1.0f));
     }
 
     const float pSpacingScale = layout.nameFontSize / layout.fontName->FontSize;
@@ -1077,15 +1150,12 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
         .0f,
         1.0f);
 
-    cfg.showOrbs = tier.particleTypes.find("Orbs") != std::string::npos;
-    cfg.showWisps = tier.particleTypes.find("Wisps") != std::string::npos;
-    cfg.showRunes = tier.particleTypes.find("Runes") != std::string::npos;
-    cfg.showSparks = tier.particleTypes.find("Sparks") != std::string::npos;
-    cfg.showStars = tier.particleTypes.find("Stars") != std::string::npos;
-    cfg.showCrystals = tier.particleTypes.find("Crystals") != std::string::npos;
-
-    cfg.enabledStyles = (int)cfg.showOrbs + (int)cfg.showWisps + (int)cfg.showRunes +
-                        (int)cfg.showSparks + (int)cfg.showStars + (int)cfg.showCrystals;
+    cfg.enabledStyles = 0;
+    for (int i = 0; i < kParticleTypeCount; ++i)
+    {
+        cfg.enabled[i] = ParticleTypesContains(tier.particleTypes, kParticleTypes[i].token);
+        cfg.enabledStyles += cfg.enabled[i] ? 1 : 0;
+    }
     return cfg;
 }
 
@@ -1113,127 +1183,39 @@ void DrawParticles(ImDrawList* dl,
 
     const int blendMode = snap.particleBlendMode;
 
-    if (cfg.showOrbs)
+    // One aura pass per enabled weather type. Each type's spec nudges
+    // spread/size/speed/count; the motion itself is decided in
+    // TextEffects::DrawParticleAura by the style.
+    for (int i = 0; i < kParticleTypeCount; ++i)
     {
-        TextEffects::DrawParticleAura({dl,
-                                       layout.nameplateCenter,
-                                       cfg.spreadX,
-                                       cfg.spreadY,
-                                       cfg.particleColor,
-                                       cfg.boostedAlpha,
-                                       Settings::ParticleStyle::Orbs,
-                                       cfg.boostedCount,
-                                       cfg.boostedSize,
-                                       snap.particleSpeed,
-                                       time,
-                                       slot++,
-                                       cfg.enabledStyles,
-                                       useTextures,
-                                       blendMode,
-                                       cfg.particleColorSecondary});
-    }
-    if (cfg.showWisps)
-    {
-        const bool soloWisps = cfg.enabledStyles == 1;
-        const float wispSpreadScale = soloWisps ? 1.22f : 1.15f;
-        const float wispAlpha = cfg.boostedAlpha * (soloWisps ? .62f : .74f);
-        const float wispSize = cfg.boostedSize * (soloWisps ? .78f : .86f);
-        const float wispSpeed = snap.particleSpeed * (soloWisps ? .82f : .90f);
+        if (!cfg.enabled[i])
+        {
+            continue;
+        }
+        const ParticleTypeSpec& spec = kParticleTypes[i];
+        const int count = (std::max)(4, static_cast<int>(cfg.boostedCount * spec.countScale));
 
-        // Keep wisps on the procedural renderer; textured wisp variants still
-        // read as thin sticks/rods in motion.
         TextEffects::DrawParticleAura({dl,
                                        layout.nameplateCenter,
-                                       cfg.spreadX * wispSpreadScale,
-                                       cfg.spreadY * wispSpreadScale,
-                                       cfg.particleColor,
-                                       wispAlpha,
-                                       Settings::ParticleStyle::Wisps,
-                                       cfg.boostedCount,
-                                       wispSize,
-                                       wispSpeed,
-                                       time,
-                                       slot++,
-                                       cfg.enabledStyles,
-                                       false,
-                                       blendMode,
-                                       cfg.particleColorSecondary});
-    }
-    if (cfg.showRunes)
-    {
-        TextEffects::DrawParticleAura({dl,
-                                       layout.nameplateCenter,
-                                       cfg.spreadX * .9f,
-                                       cfg.spreadY * .7f,
+                                       cfg.spreadX * spec.spreadXScale,
+                                       cfg.spreadY * spec.spreadYScale,
                                        cfg.particleColor,
                                        cfg.boostedAlpha,
-                                       Settings::ParticleStyle::Runes,
-                                       std::max(4, cfg.boostedCount / 2),
-                                       cfg.boostedSize * 1.2f,
-                                       snap.particleSpeed * .6f,
+                                       spec.style,
+                                       count,
+                                       cfg.boostedSize * spec.sizeScale,
+                                       snap.particleSpeed * spec.speedScale,
                                        time,
                                        slot++,
                                        cfg.enabledStyles,
                                        useTextures,
                                        blendMode,
-                                       cfg.particleColorSecondary});
-    }
-    if (cfg.showSparks)
-    {
-        TextEffects::DrawParticleAura({dl,
-                                       layout.nameplateCenter,
-                                       cfg.spreadX,
-                                       cfg.spreadY * .8f,
-                                       cfg.particleColor,
-                                       cfg.boostedAlpha,
-                                       Settings::ParticleStyle::Sparks,
-                                       cfg.boostedCount,
-                                       cfg.boostedSize * .7f,
-                                       snap.particleSpeed * 1.5f,
-                                       time,
-                                       slot++,
-                                       cfg.enabledStyles,
-                                       useTextures,
-                                       blendMode,
-                                       cfg.particleColorSecondary});
-    }
-    if (cfg.showStars)
-    {
-        TextEffects::DrawParticleAura({dl,
-                                       layout.nameplateCenter,
-                                       cfg.spreadX,
-                                       cfg.spreadY,
-                                       cfg.particleColor,
-                                       cfg.boostedAlpha,
-                                       Settings::ParticleStyle::Stars,
-                                       cfg.boostedCount,
-                                       cfg.boostedSize,
-                                       snap.particleSpeed,
-                                       time,
-                                       slot++,
-                                       cfg.enabledStyles,
-                                       useTextures,
-                                       blendMode,
-                                       cfg.particleColorSecondary});
-    }
-    if (cfg.showCrystals)
-    {
-        TextEffects::DrawParticleAura({dl,
-                                       layout.nameplateCenter,
-                                       cfg.spreadX * .85f,
-                                       cfg.spreadY * .85f,
-                                       cfg.particleColor,
-                                       cfg.boostedAlpha,
-                                       Settings::ParticleStyle::Crystals,
-                                       (std::max)(4, cfg.boostedCount / 2),
-                                       cfg.boostedSize * .95f,
-                                       snap.particleSpeed * .3f,
-                                       time,
-                                       slot++,
-                                       cfg.enabledStyles,
-                                       useTextures,
-                                       blendMode,
-                                       cfg.particleColorSecondary});
+                                       cfg.particleColorSecondary,
+                                       snap.particleDepthStrength,
+                                       snap.particleColorWarmth,
+                                       snap.particleGlowStrength,
+                                       snap.particleGlowSize,
+                                       snap.particleShineThreshold});
     }
 }
 
@@ -1301,8 +1283,8 @@ void DrawOrnaments(ImDrawList* dl,
     const float ornamentCharGap = metrics.ornamentCharGap;
     const float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
 
-    // Per-tier ornament color overrides bypass pastelization for punchier ornaments.
-    // Special titles keep their dedicated color (already stored in style.Lc/Rc).
+    // Per-tier ornament color overrides give ornaments their own material.
+    // Special titles keep their dedicated color (already stored in style.LcName/RcName).
     ImVec4 ornLv, ornRv;
     auto MixColors = [](const ImVec4& a, const ImVec4& b, float t)
     {
@@ -1328,8 +1310,8 @@ void DrawOrnaments(ImDrawList* dl,
     };
     if (style.specialTitle)
     {
-        ornLv = ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha);
-        ornRv = ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, style.alpha);
+        ornLv = ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, style.alpha);
+        ornRv = ImVec4(style.RcName.x, style.RcName.y, style.RcName.z, style.alpha);
     }
     else
     {
@@ -1377,7 +1359,7 @@ void DrawOrnaments(ImDrawList* dl,
 
     auto ornGlow = BuildOutlineGlow(snap, ornSupportTint, style.alpha);
     auto ornDual = BuildDualOutline(snap, ornSupportTint, style.alpha);
-    auto ornShine = BuildShineParams(snap);
+    auto ornShine = BuildShineParams(snap, style);
     const bool ornNeedsTextAdjust =
         snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
 
@@ -1471,7 +1453,6 @@ void DrawOrnaments(ImDrawList* dl,
 
 // Render the title line above the main nameplate line.
 void DrawTitleText(ImDrawList* dl,
-                   const ActorDrawData& d,
                    const LabelStyle& style,
                    const LabelLayout& layout,
                    float lodTitleFactor,
@@ -1491,12 +1472,9 @@ void DrawTitleText(ImDrawList* dl,
     ImVec2 titlePos(layout.startPos.x - layout.totalWidth * .5f + titleOffsetX,
                     layout.startPos.y + layout.titleY);
 
-    float lodTitleAlpha = style.alpha * lodTitleFactor;
     float lodTitleAlphaFinal = style.titleAlpha * lodTitleFactor;
     ImU32 titleShadow =
-        d.isPlayer
-            ? PackSupportTint(style.supportTitle, snap.shadowColorTint, lodTitleAlphaFinal * .5f)
-            : ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlpha * .5f));
+        PackSupportTint(style.supportTitle, snap.shadowColorTint, lodTitleAlphaFinal * .5f);
 
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const int chFront = gpuGlow ? 2 : 1;
@@ -1542,12 +1520,31 @@ void DrawTitleText(ImDrawList* dl,
     }
 
     splitter->SetCurrentChannel(dl, chFront);  // Front layer: shadow + text
-    dl->AddText(layout.fontTitle,
-                layout.titleFontSize,
-                ImVec2(titlePos.x + snap.titleShadowOffsetX * spacingScale,
-                       titlePos.y + snap.titleShadowOffsetY * spacingScale),
-                titleShadow,
-                titleDisplayText);
+    if (snap.softShadowEnabled)
+    {
+        const float ang = snap.softShadowAngle * 0.01745329252f;  // deg -> rad
+        TextEffects::AddTextSoftShadow(dl,
+                                       layout.fontTitle,
+                                       layout.titleFontSize,
+                                       titlePos,
+                                       titleDisplayText,
+                                       titleShadow,
+                                       std::cos(ang),
+                                       std::sin(ang),
+                                       snap.softShadowDistance * spacingScale,
+                                       snap.softShadowSoftness * spacingScale,
+                                       snap.softShadowOpacity,
+                                       snap.softShadowSamples);
+    }
+    else
+    {
+        dl->AddText(layout.fontTitle,
+                    layout.titleFontSize,
+                    ImVec2(titlePos.x + snap.titleShadowOffsetX * spacingScale,
+                           titlePos.y + snap.titleShadowOffsetY * spacingScale),
+                    titleShadow,
+                    titleDisplayText);
+    }
 
     float textSizeScale = layout.nameFontSize / layout.fontName->FontSize;
     ImU32 titleOutline = PackSupportTint(
@@ -1555,53 +1552,30 @@ void DrawTitleText(ImDrawList* dl,
     auto titleGlow = BuildOutlineGlow(snap, style.supportTitle, lodTitleAlphaFinal);
     auto titleDual = BuildDualOutline(snap, style.supportTitle, lodTitleAlphaFinal);
     auto titleWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
-    auto titleShine = BuildShineParams(snap);
+    auto titleShine = BuildShineParams(snap, style);
     const bool titleNeedsTextAdjust =
         snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
 
-    if (d.isPlayer)
-    {
-        ApplyTextEffect(dl,
-                        layout.fontTitle,
-                        layout.titleFontSize,
-                        titlePos,
-                        titleDisplayText,
-                        style.tier->titleEffect,
-                        style.colLTitle,
-                        style.colRTitle,
-                        style.highlight,
-                        titleOutline,
-                        style.titleOutlineWidth,
-                        style.phase01,
-                        style.strength,
-                        textSizeScale,
-                        lodTitleAlphaFinal,
-                        fastOutlines,
-                        titleGlow.enabled ? &titleGlow : nullptr,
-                        titleDual.enabled ? &titleDual : nullptr,
-                        titleWave.enabled ? &titleWave : nullptr,
-                        titleNeedsTextAdjust ? &titleShine : nullptr);
-    }
-    else
-    {
-        ImVec4 dColV = style.dispoCol;
-        dColV.w = lodTitleAlphaFinal;
-        ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
-        ImU32 npcOutline =
-            ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlphaFinal * snap.outlineAlpha));
-        const int vtxBefore = dl->VtxBuffer.Size;
-        TextEffects::AddTextOutline4(dl,
-                                     layout.fontTitle,
-                                     layout.titleFontSize,
-                                     titlePos,
-                                     titleDisplayText,
-                                     dCol,
-                                     npcOutline,
-                                     style.titleOutlineWidth,
-                                     fastOutlines,
-                                     titleGlow.enabled ? &titleGlow : nullptr);
-        ApplyTextTransparency(dl, vtxBefore, snap.innerTextAlpha, snap.textGlowAlpha);
-    }
+    ApplyTextEffect(dl,
+                    layout.fontTitle,
+                    layout.titleFontSize,
+                    titlePos,
+                    titleDisplayText,
+                    *style.titleEffect,
+                    style.colLTitle,
+                    style.colRTitle,
+                    style.highlight,
+                    titleOutline,
+                    style.titleOutlineWidth,
+                    style.phase01,
+                    style.strength,
+                    textSizeScale,
+                    lodTitleAlphaFinal,
+                    fastOutlines,
+                    titleGlow.enabled ? &titleGlow : nullptr,
+                    titleDual.enabled ? &titleDual : nullptr,
+                    titleWave.enabled ? &titleWave : nullptr,
+                    titleNeedsTextAdjust ? &titleShine : nullptr);
 }
 
 // Render a row of nameplate segments at the supplied line geometry.  Shared
@@ -1609,7 +1583,6 @@ void DrawTitleText(ImDrawList* dl,
 // both rows reuse the same per-actor style/effect derivations, only the
 // segment vector + line Y/width/height vary.
 static void DrawSegmentRow(ImDrawList* dl,
-                           const ActorDrawData& d,
                            const LabelStyle& style,
                            const LabelLayout& layout,
                            const std::vector<RenderSeg>& segments,
@@ -1637,7 +1610,7 @@ static void DrawSegmentRow(ImDrawList* dl,
     ImU32 levelShadow = PackSupportTint(
         style.supportLevel, snap.shadowColorTint, style.levelAlpha * .75f * snap.outlineAlpha);
     auto mainWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
-    auto mainShine = BuildShineParams(snap);
+    auto mainShine = BuildShineParams(snap, style);
     const bool mainNeedsTextAdjust =
         snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
 
@@ -1701,12 +1674,32 @@ static void DrawSegmentRow(ImDrawList* dl,
         }
 
         splitter->SetCurrentChannel(dl, chFront);  // Front layer: shadow + text
-        dl->AddText(seg.font,
-                    seg.fontSize,
-                    ImVec2(pos.x + snap.mainShadowOffsetX * spacingScale,
-                           pos.y + snap.mainShadowOffsetY * spacingScale),
-                    seg.isLevel ? levelShadow : nameShadow,
-                    seg.displayText.c_str());
+        const ImU32 segShadow = seg.isLevel ? levelShadow : nameShadow;
+        if (snap.softShadowEnabled)
+        {
+            const float ang = snap.softShadowAngle * 0.01745329252f;  // deg -> rad
+            TextEffects::AddTextSoftShadow(dl,
+                                           seg.font,
+                                           seg.fontSize,
+                                           pos,
+                                           seg.displayText.c_str(),
+                                           segShadow,
+                                           std::cos(ang),
+                                           std::sin(ang),
+                                           snap.softShadowDistance * spacingScale,
+                                           snap.softShadowSoftness * spacingScale,
+                                           snap.softShadowOpacity,
+                                           snap.softShadowSamples);
+        }
+        else
+        {
+            dl->AddText(seg.font,
+                        seg.fontSize,
+                        ImVec2(pos.x + snap.mainShadowOffsetX * spacingScale,
+                               pos.y + snap.mainShadowOffsetY * spacingScale),
+                        segShadow,
+                        seg.displayText.c_str());
+        }
 
         float segOutlineWidth = seg.isLevel ? style.levelOutlineWidth : style.nameOutlineWidth;
 
@@ -1717,7 +1710,7 @@ static void DrawSegmentRow(ImDrawList* dl,
                             seg.fontSize,
                             pos,
                             seg.displayText.c_str(),
-                            style.tier->levelEffect,
+                            *style.levelEffect,
                             style.colLLevel,
                             style.colRLevel,
                             style.highlight,
@@ -1735,51 +1728,26 @@ static void DrawSegmentRow(ImDrawList* dl,
         }
         else
         {
-            if (d.isPlayer)
-            {
-                ApplyTextEffect(dl,
-                                seg.font,
-                                seg.fontSize,
-                                pos,
-                                seg.displayText.c_str(),
-                                style.tier->nameEffect,
-                                style.colL,
-                                style.colR,
-                                style.highlight,
-                                nameOutline,
-                                segOutlineWidth,
-                                style.phase01,
-                                style.strength,
-                                textSizeScale,
-                                style.alpha,
-                                fastOutlines,
-                                nameGlow.enabled ? &nameGlow : nullptr,
-                                nameDual.enabled ? &nameDual : nullptr,
-                                mainWave.enabled ? &mainWave : nullptr,
-                                mainNeedsTextAdjust ? &mainShine : nullptr);
-            }
-            else
-            {
-                ImVec4 dColV = style.dispoCol;
-                dColV.w = style.alpha;
-                ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
-                ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(
-                    ImVec4(0, 0, 0, style.alpha * snap.outlineAlpha));
-                const int vtxBefore = dl->VtxBuffer.Size;
-                TextEffects::AddTextOutline4(dl,
-                                             seg.font,
-                                             seg.fontSize,
-                                             pos,
-                                             seg.displayText.c_str(),
-                                             dCol,
-                                             npcOutline,
-                                             segOutlineWidth,
-                                             fastOutlines,
-                                             seg.isLevel
-                                                 ? (levelGlow.enabled ? &levelGlow : nullptr)
-                                                 : (nameGlow.enabled ? &nameGlow : nullptr));
-                ApplyTextTransparency(dl, vtxBefore, snap.innerTextAlpha, snap.textGlowAlpha);
-            }
+            ApplyTextEffect(dl,
+                            seg.font,
+                            seg.fontSize,
+                            pos,
+                            seg.displayText.c_str(),
+                            *style.nameEffect,
+                            style.colL,
+                            style.colR,
+                            style.highlight,
+                            nameOutline,
+                            segOutlineWidth,
+                            style.phase01,
+                            style.strength,
+                            textSizeScale,
+                            style.alpha,
+                            fastOutlines,
+                            nameGlow.enabled ? &nameGlow : nullptr,
+                            nameDual.enabled ? &nameDual : nullptr,
+                            mainWave.enabled ? &mainWave : nullptr,
+                            mainNeedsTextAdjust ? &mainShine : nullptr);
         }
 
         currentPos.x += seg.size.x + layout.segmentPadding;
@@ -1788,7 +1756,6 @@ static void DrawSegmentRow(ImDrawList* dl,
 
 // Render each segment of the main nameplate line.
 void DrawMainLineSegments(ImDrawList* dl,
-                          const ActorDrawData& d,
                           const LabelStyle& style,
                           const LabelLayout& layout,
                           ImDrawListSplitter* splitter,
@@ -1796,7 +1763,6 @@ void DrawMainLineSegments(ImDrawList* dl,
                           const RenderSettingsSnapshot& snap)
 {
     DrawSegmentRow(dl,
-                   d,
                    style,
                    layout,
                    layout.segments,
@@ -1813,7 +1779,6 @@ void DrawMainLineSegments(ImDrawList* dl,
 // which the focus-target feature uses to hide the info row on ambient
 // (non-focused) actors and fade it in on the focused actor.
 void DrawInfoLineSegments(ImDrawList* dl,
-                          const ActorDrawData& d,
                           const LabelStyle& style,
                           const LabelLayout& layout,
                           ImDrawListSplitter* splitter,
@@ -1838,7 +1803,6 @@ void DrawInfoLineSegments(ImDrawList* dl,
     infoStyle.levelAlpha *= style.infoAlphaMul;
 
     DrawSegmentRow(dl,
-                   d,
                    infoStyle,
                    layout,
                    layout.infoSegments,
@@ -1848,6 +1812,74 @@ void DrawInfoLineSegments(ImDrawList* dl,
                    splitter,
                    fastOutlines,
                    snap);
+}
+
+// Render resolved status badge icons around the main line.  Geometry was
+// fixed in BuildBadges; only alpha packing and the Deadly pulse happen per
+// frame here.  Badges follow the main row's alpha (distance fade, focus
+// ambient dim) rather than the info row's infoAlphaMul.  Each icon is a
+// duotone texture quad: a black drop-shadow pass for readability, then the
+// tinted icon (the duotone layer opacities live in the texture's alpha).
+void DrawBadges(ImDrawList* dl,
+                const LabelStyle& style,
+                const LabelLayout& layout,
+                ImDrawListSplitter* splitter,
+                bool /*fastOutlines*/,
+                const RenderSettingsSnapshot& snap)
+{
+    if (layout.badges.empty())
+    {
+        return;
+    }
+
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    splitter->SetCurrentChannel(dl, gpuGlow ? 2 : 1);
+
+    const float spacingScale = layout.nameFontSize / layout.fontName->FontSize;
+    const ImVec2 shadowOff(snap.mainShadowOffsetX * spacingScale * .5f,
+                           snap.mainShadowOffsetY * spacingScale * .5f);
+
+    for (const auto& b : layout.badges)
+    {
+        float a = style.alpha;
+        if (b.pulse && snap.icons.deadlyPulse)
+        {
+            a *= .75f + .25f * std::sin(static_cast<float>(ImGui::GetTime()) * 3.0f);
+        }
+
+        // Muted (neutral/inactive) slots read as a subtle "off" state: drop
+        // alpha and desaturate toward luma so lit badges pop by comparison.
+        Settings::Color3 c = b.color;
+        if (b.muted)
+        {
+            a *= snap.icons.mutedAlpha;
+            const float luma = .299f * c.r + .587f * c.g + .114f * c.b;
+            const float k = snap.icons.mutedDesat;
+            c.r += (luma - c.r) * k;
+            c.g += (luma - c.g) * k;
+            c.b += (luma - c.b) * k;
+        }
+        if (a < .01f)
+        {
+            continue;
+        }
+        const ImVec2 pMax(b.pos.x + b.size.x, b.pos.y + b.size.y);
+        const ImU32 tint = ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, a));
+        // Lit badges get a drop shadow for readability; muted badges sit flat
+        // (no shadow pass) so the always-on strip stays calm.
+        if (!b.muted)
+        {
+            const ImU32 shadow =
+                ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, a * .75f * snap.outlineAlpha));
+            dl->AddImage(b.tex,
+                         ImVec2(b.pos.x + shadowOff.x, b.pos.y + shadowOff.y),
+                         ImVec2(pMax.x + shadowOff.x, pMax.y + shadowOff.y),
+                         ImVec2(0, 0),
+                         ImVec2(1, 1),
+                         shadow);
+        }
+        dl->AddImage(b.tex, b.pos, pMax, ImVec2(0, 0), ImVec2(1, 1), tint);
+    }
 }
 
 }  // namespace Renderer
