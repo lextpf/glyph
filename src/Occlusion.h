@@ -84,11 +84,11 @@
  *
  * All distances are in Skyrim game units where $\approx 70$ units $= 1$ meter.
  *
- * |                    Constant | Value  | Description |
- * |-----------------------------|--------|-------------------------------------------------------------------|
- * |   `CLOSE_DISTANCE_THRESHOLD` | 100.0  | Always visible when $\\|p_{actor} - p_{cam}\\| < 100$
- * units       | | `BEHIND_CAMERA_DOT_THRESHOLD` | -0.2   | Behind camera when $\hat{f} \cdot
- * \hat{d} < -0.2$ ($\approx 101$) |
+ * | Constant | Value | Description |
+ * |---|---|---|
+ * | `CLOSE_DISTANCE_THRESHOLD` | 100.0 | Always visible when distance $< 100$ units |
+ * | `BEHIND_CAMERA_DOT_THRESHOLD` | -0.2 | Behind camera when $\hat{f} \cdot \hat{d} < -0.2$
+ * ($\approx 101\degree$) |
  */
 namespace Occlusion
 {
