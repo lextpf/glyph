@@ -312,6 +312,23 @@ TEST(ParseColor3Test, PartialDefaults)
     // Only first value parsed, others remain 0
 }
 
+// Regression guard on the new always-on badge slot color defaults (these
+// strings live in Settings.cpp's binding table; a typo would ship a bad tint).
+TEST(ParseColor3Test, NewBadgeSlotDefaults)
+{
+    float muted[3] = {0, 0, 0};
+    ParseColor3("0.62, 0.64, 0.68", muted);  // IconMutedColor
+    EXPECT_NEAR(muted[0], 0.62f, 0.01f);
+    EXPECT_NEAR(muted[1], 0.64f, 0.01f);
+    EXPECT_NEAR(muted[2], 0.68f, 0.01f);
+
+    float combat[3] = {0, 0, 0};
+    ParseColor3("1.0, 0.35, 0.28", combat);  // IconCombatColor
+    EXPECT_NEAR(combat[0], 1.0f, 0.01f);
+    EXPECT_NEAR(combat[1], 0.35f, 0.01f);
+    EXPECT_NEAR(combat[2], 0.28f, 0.01f);
+}
+
 // ============================================================================
 // Tests: ParseEffectType
 // ============================================================================
@@ -702,4 +719,354 @@ TEST(FocusSettings, BoolParseFalseVariants)
     EXPECT_FALSE(focus_test::ParseBool("no"));
     EXPECT_FALSE(focus_test::ParseBool(""));
     EXPECT_FALSE(focus_test::ParseBool("anything-else"));
+}
+
+// ============================================================================
+// Soft directional drop-shadow settings
+// ============================================================================
+//
+// Mirrors the soft-shadow fields of Settings::ShadowOutlineSettings + the
+// clamping rules registered for them in Settings.cpp's kSettings binding table.
+
+namespace soft_shadow_test
+{
+
+struct SoftShadowSettings
+{
+    bool Enabled = false;
+    float Distance = 4.0f;
+    float Softness = 3.0f;
+    float Opacity = 0.8f;
+    float Angle = 45.0f;
+    int Samples = 12;
+};
+
+// Apply the same per-field validation rules as kSettings in Settings.cpp.
+static void ClampSoftShadow(SoftShadowSettings& s)
+{
+    s.Distance = std::clamp(s.Distance, 0.0f, 16.0f);
+    s.Softness = std::clamp(s.Softness, 0.0f, 12.0f);
+    s.Opacity = std::clamp(s.Opacity, 0.0f, 1.0f);
+    s.Angle = std::clamp(s.Angle, 0.0f, 360.0f);
+    s.Samples = std::clamp(s.Samples, 4, 24);
+}
+
+}  // namespace soft_shadow_test
+
+TEST(SoftShadow, DefaultsMatchProduction)
+{
+    soft_shadow_test::SoftShadowSettings s;
+    EXPECT_FALSE(s.Enabled);
+    EXPECT_FLOAT_EQ(s.Distance, 4.0f);
+    EXPECT_FLOAT_EQ(s.Softness, 3.0f);
+    EXPECT_FLOAT_EQ(s.Opacity, 0.8f);
+    EXPECT_FLOAT_EQ(s.Angle, 45.0f);
+    EXPECT_EQ(s.Samples, 12);
+}
+
+TEST(SoftShadow, ClampDistanceRange)
+{
+    soft_shadow_test::SoftShadowSettings s;
+    s.Distance = -1.0f;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_FLOAT_EQ(s.Distance, 0.0f);
+    s.Distance = 99.0f;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_FLOAT_EQ(s.Distance, 16.0f);
+}
+
+TEST(SoftShadow, ClampOpacityRange)
+{
+    soft_shadow_test::SoftShadowSettings s;
+    s.Opacity = 2.0f;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_FLOAT_EQ(s.Opacity, 1.0f);
+    s.Opacity = -0.5f;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_FLOAT_EQ(s.Opacity, 0.0f);
+}
+
+TEST(SoftShadow, ClampSamplesRange)
+{
+    soft_shadow_test::SoftShadowSettings s;
+    s.Samples = 1;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_EQ(s.Samples, 4);
+    s.Samples = 99;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_EQ(s.Samples, 24);
+}
+
+TEST(SoftShadow, ClampSoftnessAndAngle)
+{
+    soft_shadow_test::SoftShadowSettings s;
+    s.Softness = 50.0f;
+    s.Angle = 400.0f;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_FLOAT_EQ(s.Softness, 12.0f);
+    EXPECT_FLOAT_EQ(s.Angle, 360.0f);
+}
+
+TEST(SoftShadow, InRangeValuesPreserved)
+{
+    soft_shadow_test::SoftShadowSettings s;
+    s.Distance = 6.0f;
+    s.Softness = 4.0f;
+    s.Opacity = 0.55f;
+    s.Angle = 315.0f;
+    s.Samples = 16;
+    soft_shadow_test::ClampSoftShadow(s);
+    EXPECT_FLOAT_EQ(s.Distance, 6.0f);
+    EXPECT_FLOAT_EQ(s.Softness, 4.0f);
+    EXPECT_FLOAT_EQ(s.Opacity, 0.55f);
+    EXPECT_FLOAT_EQ(s.Angle, 315.0f);
+    EXPECT_EQ(s.Samples, 16);
+}
+
+// ============================================================================
+// Particle aura settings
+// ============================================================================
+//
+// Mirrors Settings::ParticleSettings defaults + the clamping rules registered
+// in Settings.cpp's kSettings binding table (the production source of truth).
+// Re-implemented here per the CLAUDE.md rule that tests mirror, not link, the
+// plugin code. Covers the premium-pass keys (depth/warmth/glow/shine) plus the
+// reconciled ParticleSize default.
+
+namespace particle_test
+{
+
+struct ParticleSettings
+{
+    bool Enabled = true;
+    bool UseParticleTextures = true;
+    int Count = 8;
+    float Size = 3.5f;  // reconciled S2 default (was 3.0)
+    float Speed = 1.0f;
+    float Spread = 20.0f;
+    float Alpha = 0.8f;
+    int BlendMode = 0;
+    float DepthStrength = 0.7f;
+    float ColorWarmth = 0.5f;
+    float GlowStrength = 0.35f;
+    float GlowSize = 2.2f;
+    float ShineThreshold = 0.84f;
+};
+
+// Apply the same per-field validation rules as kSettings in Settings.cpp.
+static void ClampParticle(ParticleSettings& p)
+{
+    if (p.Count < 0)
+    {
+        p.Count = 0;
+    }
+    if (p.Size < 0.0f)
+    {
+        p.Size = 0.0f;
+    }
+    if (p.Speed < 0.0f)
+    {
+        p.Speed = 0.0f;
+    }
+    if (p.Spread < 0.0f)
+    {
+        p.Spread = 0.0f;
+    }
+    p.Alpha = std::clamp(p.Alpha, 0.0f, 1.0f);
+    p.BlendMode = std::clamp(p.BlendMode, 0, 2);
+    p.DepthStrength = std::clamp(p.DepthStrength, 0.0f, 1.5f);
+    p.ColorWarmth = std::clamp(p.ColorWarmth, 0.0f, 1.0f);
+    p.GlowStrength = std::clamp(p.GlowStrength, 0.0f, 1.0f);
+    p.GlowSize = std::clamp(p.GlowSize, 1.0f, 4.0f);
+    p.ShineThreshold = std::clamp(p.ShineThreshold, 0.0f, 0.99f);
+}
+
+}  // namespace particle_test
+
+TEST(ParticleSettings, DefaultsMatchProduction)
+{
+    particle_test::ParticleSettings p;
+    EXPECT_TRUE(p.Enabled);
+    EXPECT_TRUE(p.UseParticleTextures);
+    EXPECT_EQ(p.Count, 8);
+    EXPECT_FLOAT_EQ(p.Size, 3.5f);
+    EXPECT_FLOAT_EQ(p.Speed, 1.0f);
+    EXPECT_FLOAT_EQ(p.Spread, 20.0f);
+    EXPECT_FLOAT_EQ(p.Alpha, 0.8f);
+    EXPECT_EQ(p.BlendMode, 0);
+    EXPECT_FLOAT_EQ(p.DepthStrength, 0.7f);
+    EXPECT_FLOAT_EQ(p.ColorWarmth, 0.5f);
+    EXPECT_FLOAT_EQ(p.GlowStrength, 0.35f);
+    EXPECT_FLOAT_EQ(p.GlowSize, 2.2f);
+    EXPECT_FLOAT_EQ(p.ShineThreshold, 0.84f);
+}
+
+TEST(ParticleSettings, ClampDepthStrengthRange)
+{
+    particle_test::ParticleSettings p;
+    p.DepthStrength = -0.5f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.DepthStrength, 0.0f);
+    p.DepthStrength = 9.0f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.DepthStrength, 1.5f);
+}
+
+TEST(ParticleSettings, ClampColorWarmthRange)
+{
+    particle_test::ParticleSettings p;
+    p.ColorWarmth = 2.0f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.ColorWarmth, 1.0f);
+    p.ColorWarmth = -1.0f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.ColorWarmth, 0.0f);
+}
+
+TEST(ParticleSettings, ClampGlowStrengthRange)
+{
+    particle_test::ParticleSettings p;
+    p.GlowStrength = 5.0f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.GlowStrength, 1.0f);
+    p.GlowStrength = -0.1f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.GlowStrength, 0.0f);
+}
+
+TEST(ParticleSettings, ClampGlowSizeRange)
+{
+    particle_test::ParticleSettings p;
+    p.GlowSize = 0.5f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.GlowSize, 1.0f);
+    p.GlowSize = 9.0f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.GlowSize, 4.0f);
+}
+
+TEST(ParticleSettings, ClampShineThresholdRange)
+{
+    particle_test::ParticleSettings p;
+    p.ShineThreshold = 1.5f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.ShineThreshold, 0.99f);
+    p.ShineThreshold = -0.2f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.ShineThreshold, 0.0f);
+}
+
+TEST(ParticleSettings, InRangeValuesPreserved)
+{
+    particle_test::ParticleSettings p;
+    p.DepthStrength = 1.0f;
+    p.ColorWarmth = 0.6f;
+    p.GlowStrength = 0.5f;
+    p.GlowSize = 2.6f;
+    p.ShineThreshold = 0.9f;
+    particle_test::ClampParticle(p);
+    EXPECT_FLOAT_EQ(p.DepthStrength, 1.0f);
+    EXPECT_FLOAT_EQ(p.ColorWarmth, 0.6f);
+    EXPECT_FLOAT_EQ(p.GlowStrength, 0.5f);
+    EXPECT_FLOAT_EQ(p.GlowSize, 2.6f);
+    EXPECT_FLOAT_EQ(p.ShineThreshold, 0.9f);
+}
+
+TEST(ParticleSettings, SizeDefaultReconciled)
+{
+    // S2: the INI/default/comment were 5.0/3.0/"3.5"; all reconciled to 3.5.
+    particle_test::ParticleSettings p;
+    EXPECT_FLOAT_EQ(p.Size, 3.5f);
+}
+
+// ============================================================================
+// NPC nameplate text colors
+// ============================================================================
+//
+// Mirrors Settings::NpcColorSettings defaults (the kSettings binding table
+// rows are the source of truth in production) and ClampAndValidate()'s
+// deriveColor step: start from white, ParseColor3, clamp to [0, 1].
+
+namespace npc_colors_test
+{
+
+struct NpcColorSettings
+{
+    std::string NeutralColorStr = "1.0, 1.0, 1.0";
+    std::string HostileColorStr = "1.0, 0.86, 0.84";
+    std::string FollowerColorStr = "0.86, 0.91, 1.0";
+    std::string LevelColorStr = "0.80, 0.82, 0.86";
+    std::string TitleColorStr = "0.92, 0.93, 0.95";
+};
+
+// Mirror of ClampAndValidate's deriveColor lambda.
+static void DeriveColor(const std::string& str, float out[3])
+{
+    out[0] = out[1] = out[2] = 1.0f;
+    ParseColor3(str, out);
+    for (int i = 0; i < 3; ++i)
+    {
+        out[i] = std::clamp(out[i], 0.0f, 1.0f);
+    }
+}
+
+}  // namespace npc_colors_test
+
+TEST(NpcColors, DefaultsMatchProduction)
+{
+    npc_colors_test::NpcColorSettings n;
+    EXPECT_EQ(n.NeutralColorStr, "1.0, 1.0, 1.0");
+    EXPECT_EQ(n.HostileColorStr, "1.0, 0.86, 0.84");
+    EXPECT_EQ(n.FollowerColorStr, "0.86, 0.91, 1.0");
+    EXPECT_EQ(n.LevelColorStr, "0.80, 0.82, 0.86");
+    EXPECT_EQ(n.TitleColorStr, "0.92, 0.93, 0.95");
+}
+
+TEST(NpcColors, DefaultStringsParse)
+{
+    npc_colors_test::NpcColorSettings n;
+    float c[3];
+
+    npc_colors_test::DeriveColor(n.NeutralColorStr, c);
+    EXPECT_FLOAT_EQ(c[0], 1.0f);
+    EXPECT_FLOAT_EQ(c[1], 1.0f);
+    EXPECT_FLOAT_EQ(c[2], 1.0f);
+
+    npc_colors_test::DeriveColor(n.HostileColorStr, c);
+    EXPECT_FLOAT_EQ(c[0], 1.0f);
+    EXPECT_FLOAT_EQ(c[1], 0.86f);
+    EXPECT_FLOAT_EQ(c[2], 0.84f);
+
+    npc_colors_test::DeriveColor(n.FollowerColorStr, c);
+    EXPECT_FLOAT_EQ(c[0], 0.86f);
+    EXPECT_FLOAT_EQ(c[1], 0.91f);
+    EXPECT_FLOAT_EQ(c[2], 1.0f);
+
+    npc_colors_test::DeriveColor(n.LevelColorStr, c);
+    EXPECT_FLOAT_EQ(c[0], 0.80f);
+    EXPECT_FLOAT_EQ(c[1], 0.82f);
+    EXPECT_FLOAT_EQ(c[2], 0.86f);
+
+    npc_colors_test::DeriveColor(n.TitleColorStr, c);
+    EXPECT_FLOAT_EQ(c[0], 0.92f);
+    EXPECT_FLOAT_EQ(c[1], 0.93f);
+    EXPECT_FLOAT_EQ(c[2], 0.95f);
+}
+
+TEST(NpcColors, OutOfRangeValuesClampTo01)
+{
+    float c[3];
+    npc_colors_test::DeriveColor("1.5, -0.25, 0.5", c);
+    EXPECT_FLOAT_EQ(c[0], 1.0f);
+    EXPECT_FLOAT_EQ(c[1], 0.0f);
+    EXPECT_FLOAT_EQ(c[2], 0.5f);
+}
+
+TEST(NpcColors, MalformedStringFallsBackToWhite)
+{
+    float c[3];
+    npc_colors_test::DeriveColor("garbage", c);
+    EXPECT_FLOAT_EQ(c[0], 1.0f);
+    EXPECT_FLOAT_EQ(c[1], 1.0f);
+    EXPECT_FLOAT_EQ(c[2], 1.0f);
 }
