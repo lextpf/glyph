@@ -68,9 +68,21 @@ static void DrawStar6(ImDrawList* list,
     list->AddCircleFilled(pos, size * .3f, IM_COL32(255, 255, 255, coreAlpha / 2), 8);
 }
 
-// Draw soft glowing orb with gradient layers
-static void DrawSoftOrb(
-    ImDrawList* list, const ImVec2& pos, float size, int r, int g, int b, int baseAlpha)
+// Draw soft glowing orb with gradient layers. The outer layers carry the
+// primary color; the core is a secondary-tinted ~70%-white jewel rather than
+// pure white, so the procedural fallback echoes the warm-core/cool-edge read
+// of the textured path. (C2 -- this path is non-textured by definition, so it
+// never touches the pixel-art sprite.)
+static void DrawSoftOrb(ImDrawList* list,
+                        const ImVec2& pos,
+                        float size,
+                        int r,
+                        int g,
+                        int b,
+                        int r2,
+                        int g2,
+                        int b2,
+                        int baseAlpha)
 {
     // Multiple layers for smooth gradient falloff
     const int layers = 6;
@@ -82,8 +94,14 @@ static void DrawSoftOrb(
         layerAlpha = std::clamp(layerAlpha, 0, 255);
         list->AddCircleFilled(pos, radius, IM_COL32(r, g, b, layerAlpha), 16);
     }
-    // Bright core
-    list->AddCircleFilled(pos, size * .25f, IM_COL32(255, 255, 255, baseAlpha / 2), 12);
+    // Tinted-luminous core (~midway primary/secondary, then toward white).
+    int cr = (r + r2) / 2;
+    int cg = (g + g2) / 2;
+    int cb = (b + b2) / 2;
+    list->AddCircleFilled(pos,
+                          size * .25f,
+                          IM_COL32((cr + 255) / 2, (cg + 255) / 2, (cb + 255) / 2, baseAlpha / 2),
+                          12);
 }
 
 // Draw ethereal wisp with flowing trail
@@ -250,6 +268,112 @@ static void DrawSpark(ImDrawList* list,
     list->AddCircleFilled(pos, size * .4f, IM_COL32(255, 255, 220, baseAlpha), 8);
 }
 
+// Independent per-particle trait streams. Each enumerator is a hash salt;
+// using distinct salts guarantees traits are uncorrelated with each other,
+// unlike the previous linear (i * prime) patterns which correlated across
+// particles and traits.
+enum class Trait : uint32_t
+{
+    Radial = 1,       ///< Radial home position within the style's band
+    Speed = 2,        ///< Orbital/cycle speed multiplier
+    Direction = 3,    ///< Orbit direction selector
+    Depth = 4,        ///< Pseudo-depth (size + alpha modulation)
+    Size = 5,         ///< Base size multiplier
+    JitterAngle = 6,  ///< Static positional jitter direction
+    JitterDist = 7,   ///< Static positional jitter distance
+    Phase = 8,        ///< Angular phase jitter on top of the golden angle
+    Bob = 9,          ///< Independent phase for bobbing/secondary motion
+    HomeX = 10,       ///< Stratified horizontal home jitter for falling/flow types
+    Hue = 11          ///< Decorrelated micro temperature jitter for color
+};
+
+// Centralized sprite size multiplier. Every textured particle draws at
+// finalSize * kSpriteSizeMul (the crisp pixel-art quad); the additive glow
+// halo multiplies kSpriteSizeMul * glowSize on top of that. The legacy 6.0f
+// factor was tuned for 256px procedural sprites; the shipped 16px PNGs fill
+// the whole quad, so this keeps them at an ambient-sparkle scale.
+constexpr float kSpriteSizeMul = 2.5f;
+
+// 32-bit finalizer (triple xorshift-multiply) -- decorrelates consecutive
+// integers into uniformly distributed hash values.
+static uint32_t PMixU32(uint32_t v)
+{
+    v ^= v >> 16;
+    v *= 0x7FEB352Du;
+    v ^= v >> 15;
+    v *= 0x846CA68Bu;
+    v ^= v >> 16;
+    return v;
+}
+
+// Stateless per-particle trait in [0,1). Stable across frames (no flicker)
+// because it depends only on particle index, style slot, and salt.
+static float PTrait(int particleIndex, int styleIndex, Trait salt)
+{
+    uint32_t h =
+        PMixU32(static_cast<uint32_t>(particleIndex) +
+                PMixU32(static_cast<uint32_t>(styleIndex) + PMixU32(static_cast<uint32_t>(salt))));
+    return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
+}
+
+// Area-uniform radius in the annulus [bandFloor, 1]: equal particle density
+// per unit area instead of crowding the inner edge.
+static float AnnulusRadius(float bandFloor, float u)
+{
+    float f2 = bandFloor * bandFloor;
+    return std::sqrt(f2 + (1.0f - f2) * u);
+}
+
+// Cheap stable hash in [0,1) from a float seed. Used to give fall/drift
+// weather particles a per-particle horizontal home and phase offset without
+// adding state -- depends only on the particle's golden-angle seed.
+static float PHash01(float seed)
+{
+    float s = std::sin(seed) * 43758.5453f;
+    return s - std::floor(s);
+}
+
+// Inner band edge when a style renders alone and may fill the nameplate
+// interior. With multiple styles enabled the shared band formula keeps the
+// styles radially separated instead. Only the orbiting weather types
+// (Firefly/Dust/Mote) consult the radial band; fall/rise/flow types lay
+// themselves out across the full aura and ignore it.
+static float SoloBandFloor(Settings::ParticleStyle style)
+{
+    switch (style)
+    {
+        case Settings::ParticleStyle::Spark:
+            return .58f;  // embers launch from the text edge
+        case Settings::ParticleStyle::Wisp:
+            return .45f;
+        case Settings::ParticleStyle::Firefly:
+            return .34f;
+        case Settings::ParticleStyle::Dust:
+        case Settings::ParticleStyle::Mote:
+            return .28f;  // motes fill the whole region
+        default:
+            return .30f;  // fall/rise/flow types span the aura
+    }
+}
+
+// Fraction of particles travelling in the reverse direction. Mixed directions
+// break the rigid same-way look; only the orbiting/flow types use it.
+static float CounterRotateChance(Settings::ParticleStyle style)
+{
+    switch (style)
+    {
+        case Settings::ParticleStyle::Firefly:
+        case Settings::ParticleStyle::Dust:
+        case Settings::ParticleStyle::Mote:
+        case Settings::ParticleStyle::Aurora:
+            return .5f;
+        case Settings::ParticleStyle::Wisp:
+            return .3f;  // mostly one flow direction with a few drifters
+        default:
+            return .0f;
+    }
+}
+
 // Shared per-particle state passed to each style's render function.
 struct ParticleContext
 {
@@ -257,140 +381,197 @@ struct ParticleContext
     ImVec2 center;
     float radiusX, radiusY;
     float alpha, particleSize, timeScaled;
-    int texStyleId, texCount;
+    int texStyleId;
     bool hasTextures;
     int particleIndex;
+    int particleCount;
+    int styleIndex;  ///< Index among enabled styles; needed by PTrait salts
     float golden, phase;
-    float minRadius, radialAnchor;
+    float minRadius;     ///< Inner edge of this style's radial band [0,1]
+    float radialAnchor;  ///< Absolute home radius in [minRadius, 1], area-uniform
     float jitterAngle, jitterDist;
     float alphaVariation;
+    float speedVar;  ///< Per-particle speed multiplier [.72, 1.28]
+    float dirSign;   ///< Orbit direction: +1 or -1
+    float depth;     ///< Pseudo-depth [0,1]: 0 = far (small/dim), 1 = near
+    float sizeVar;   ///< Per-particle base size multiplier [.85, 1.15]
+    float bobPhase;  ///< Independent phase for bobbing/secondary motion
     int r, g, b;
     int r2, g2, b2;  // Secondary gradient color
     bool hasSecondaryColor;
     ParticleTextures::BlendMode texBlendMode;
+
+    // Premium-pass live knobs (F6/C4/G5), shared per-plate air current (F3).
+    float depthStrength;   ///< Scales the whole 3D read (F1/F2); 0 = flat sheet
+    float warmth;          ///< Scales color temperature mix + apex pulse (C1/C3)
+    float glowStrength;    ///< Additive backlight halo alpha multiplier (G1)
+    float glowSize;        ///< Halo radius as a multiple of the crisp sprite (G1)
+    float shineThreshold;  ///< Sine threshold for the rare specular glint (G3)
+    float airX, airY;      ///< Shared per-plate air current, depth-weighted (F3)
+
+    // F1: widen depth into a real near/far range, scaled live by depthStrength.
+    // Far ~0.62x/0.55x, near ~1.28x/1.10x at strength 1; strength 0 -> 1.0.
+    float DepthSizeScale() const
+    {
+        float raw = .62f + .66f * depth;
+        return 1.0f + (raw - 1.0f) * depthStrength;
+    }
+    float DepthAlphaScale() const
+    {
+        float raw = .55f + .55f * depth;
+        return 1.0f + (raw - 1.0f) * depthStrength;
+    }
+    // F2: depth parallax on motion AMPLITUDE only (never the sin time argument).
+    // Far ~0.55x amplitude, near ~1.25x.
+    float DepthParallaxScale() const { return 1.0f + (.55f + .70f * depth - 1.0f) * depthStrength; }
 };
 
-// Twinkling stars with multi-frequency twinkle and rotation.
-static void RenderStarParticle(const ParticleContext& ctx)
+// G1/G2/G3: draw an additive cool-secondary BACKLIGHT halo behind the crisp
+// pixel sprite, then the sprite itself, then -- rarely -- a tiny eased specular
+// glint on top. The halo and glint are separate additive sprites that reuse the
+// same point-sampled DrawSpriteWithIndex path (no extra ImGui blend-callback
+// splits beyond one more textured quad), so the crisp 16px core always wins the
+// read. The procedural fallback routes to DrawSoftOrb instead.
+static void DrawHaloThenSprite(
+    const ParticleContext& ctx, const ImVec2& pos, float finalSize, int a, float rotation)
 {
-    float orbit = ctx.phase + ctx.timeScaled * .5f;
-    float radiusWave = .5f + .5f * std::sin(ctx.golden);
-    float radiusMod =
-        ctx.minRadius + (1.0f - ctx.minRadius) * (.72f * ctx.radialAnchor + .28f * radiusWave);
-    float x = ctx.center.x + std::cos(orbit) * ctx.radiusX * radiusMod +
-              std::cos(ctx.jitterAngle) * ctx.radiusX * ctx.jitterDist;
-    float y = ctx.center.y + std::sin(orbit) * ctx.radiusY * radiusMod +
-              std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist;
-
-    float twinkle1 = std::sin(ctx.timeScaled * 3.0f + ctx.golden * 3.0f);
-    float twinkle2 = std::sin(ctx.timeScaled * 5.0f + ctx.golden * 2.0f) * .3f;
-    float twinkle = .5f + .5f * (twinkle1 + twinkle2) / 1.3f;
-    if (twinkle < .1f)
+    if (!ctx.hasTextures)
     {
+        DrawSoftOrb(ctx.list, pos, finalSize, ctx.r, ctx.g, ctx.b, ctx.r2, ctx.g2, ctx.b2, a);
         return;
     }
 
-    float finalAlpha = ctx.alpha * (.3f + .7f * twinkle) * ctx.alphaVariation;
-    float breathe = 1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f);
-    float finalSize = ctx.particleSize * breathe;
-    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
-    int glowA = std::clamp((int)(finalAlpha * 60.0f), 0, 255);
+    const float coreSize = finalSize * kSpriteSizeMul;
 
-    // Gradient color from tier left/right
-    float phaseLerp = .5f + .5f * std::sin(ctx.phase);
-    int sr, sg, sb;
-    if (ctx.hasSecondaryColor)
+    // G1/G2: additive backlight, slightly wider near-camera.  `a` already carries
+    // the depth-alpha (DepthAlphaScale, applied once in the caller), so the halo
+    // inherits near-blooms-more without re-applying it.  Gated to visible particles.
+    if (ctx.glowStrength > .0f && a > 24)
     {
-        float brightness = twinkle * .6f + .4f;
-        sr = std::clamp((int)(ctx.r + (ctx.r2 - ctx.r) * phaseLerp * brightness), 0, 255);
-        sg = std::clamp((int)(ctx.g + (ctx.g2 - ctx.g) * phaseLerp * brightness), 0, 255);
-        sb = std::clamp((int)(ctx.b + (ctx.b2 - ctx.b) * phaseLerp * brightness), 0, 255);
-    }
-    else
-    {
-        float brightness = twinkle * .6f + .4f;
-        sr = std::clamp((int)(80 + 175 * brightness * brightness), 0, 255);
-        sg = std::clamp((int)(120 + 135 * brightness), 0, 255);
-        sb = std::clamp((int)(180 + 75 * brightness), 0, 255);
-    }
-
-    float rotation = ctx.timeScaled * .5f + ctx.golden;
-
-    if (ctx.hasTextures)
-    {
-        float prevRotation = rotation - .15f;
-        int trailA = std::clamp(static_cast<int>(a * .25f), 0, 255);
-        ParticleTextures::DrawSpriteWithIndex(ctx.list,
-                                              ImVec2(x, y),
-                                              finalSize * 6.0f,
-                                              ctx.texStyleId,
-                                              ctx.particleIndex,
-                                              IM_COL32(ctx.r, ctx.g, ctx.b, trailA),
-                                              ctx.texBlendMode,
-                                              prevRotation);
-        ParticleTextures::DrawSpriteWithIndex(ctx.list,
-                                              ImVec2(x, y),
-                                              finalSize * 6.0f,
-                                              ctx.texStyleId,
-                                              ctx.particleIndex,
-                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
-                                              ctx.texBlendMode,
-                                              rotation);
-    }
-    else
-    {
-        if (ctx.particleIndex % 3 == 0)
+        int ha = std::clamp((int)(a * ctx.glowStrength), 0, 255);
+        if (ha > 2)
         {
-            DrawStar6(ctx.list,
-                      ImVec2(x, y),
-                      finalSize,
-                      IM_COL32(sr, sg, sb, a),
-                      IM_COL32(sr, sg, sb, glowA),
-                      rotation);
+            float haloSize = coreSize * ctx.glowSize * (1.0f + .15f * ctx.depth);
+            ParticleTextures::DrawSpriteWithIndex(ctx.list,
+                                                  pos,
+                                                  haloSize,
+                                                  ctx.texStyleId,
+                                                  ctx.particleIndex,
+                                                  IM_COL32(ctx.r2, ctx.g2, ctx.b2, ha),
+                                                  ParticleTextures::BlendMode::Additive,
+                                                  rotation);
         }
-        else
+    }
+
+    // The crisp pixel sprite, point-sampled, in the chosen INI blend mode.
+    ParticleTextures::DrawSpriteWithIndex(ctx.list,
+                                          pos,
+                                          coreSize,
+                                          ctx.texStyleId,
+                                          ctx.particleIndex,
+                                          IM_COL32(ctx.r, ctx.g, ctx.b, a),
+                                          ctx.texBlendMode,
+                                          rotation);
+
+    // G3: rare eased specular twinkle, modulating ONLY the halo layer -- a slow
+    // glint catching the key light, never a strobe and never the crisp quad.
+    if (ctx.glowStrength > .0f && a > 24)
+    {
+        float tw = std::sin(ctx.timeScaled * .9f * ctx.speedVar + ctx.golden * 3.7f);
+        float shine = SmoothStep((tw - ctx.shineThreshold) * 7.0f);
+        if (shine > .02f)
         {
-            DrawStar4(ctx.list,
-                      ImVec2(x, y),
-                      finalSize * .9f,
-                      IM_COL32(sr, sg, sb, a),
-                      IM_COL32(sr, sg, sb, glowA),
-                      rotation);
-        }
-        if (twinkle > .85f)
-        {
-            float flashSize = finalSize * .3f * (twinkle - .85f) / .15f;
-            ctx.list->AddCircleFilled(ImVec2(x, y), flashSize, IM_COL32(220, 240, 255, a / 2), 8);
+            int sa = std::clamp((int)(a * shine * .5f), 0, 255);
+            if (sa > 2)
+            {
+                ParticleTextures::DrawSpriteWithIndex(
+                    ctx.list,
+                    pos,
+                    coreSize * .5f,
+                    ctx.texStyleId,
+                    ctx.particleIndex,
+                    IM_COL32((ctx.r2 + 255) / 2, (ctx.g2 + 255) / 2, (ctx.b2 + 255) / 2, sa),
+                    ParticleTextures::BlendMode::Additive,
+                    rotation);
+            }
         }
     }
 }
 
-// Yellowish sparks that shoot outward with trailing embers.
+// Lazily wandering glow that blinks in place: a slow differential orbit plus
+// an incommensurate-sine drift, with a firefly blink that is mostly soft and
+// occasionally pulses bright. No spin -- the sprite stays upright so pixels
+// stay crisp.
+static void RenderFireflyParticle(const ParticleContext& ctx)
+{
+    float omega = .12f * ctx.speedVar * ctx.dirSign / (.6f + .4f * ctx.radialAnchor);
+    float orbit = ctx.phase + ctx.timeScaled * omega;
+
+    float par = ctx.DepthParallaxScale();  // F2: scales amplitude only
+    float wanderX = (std::sin(ctx.timeScaled * .47f * ctx.speedVar + ctx.golden) +
+                     .6f * std::sin(ctx.timeScaled * .83f + ctx.golden * 1.7f)) *
+                    .07f * par;
+    float wanderY = (std::sin(ctx.timeScaled * .53f * ctx.speedVar + ctx.golden * 2.1f) +
+                     .6f * std::sin(ctx.timeScaled * .71f + ctx.bobPhase)) *
+                    .07f * par;
+    float radiusMod =
+        ctx.radialAnchor * (.9f + .06f * par * std::sin(ctx.timeScaled * .3f + ctx.golden));
+    // F3: shared per-plate air current, depth-weighted so near motes drift more.
+    float x = ctx.center.x + std::cos(orbit) * ctx.radiusX * radiusMod + wanderX * ctx.radiusX +
+              ctx.airX * ctx.depth * ctx.radiusX;
+    float y = ctx.center.y + std::sin(orbit) * ctx.radiusY * radiusMod + wanderY * ctx.radiusY +
+              ctx.airY * ctx.depth * ctx.radiusY;
+
+    float blink = std::sin(ctx.timeScaled * 2.4f * ctx.speedVar + ctx.golden * 3.0f);
+    float glow = .35f + .65f * (.5f + .5f * blink);
+    float finalAlpha = ctx.alpha * glow * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .04f)
+    {
+        return;
+    }
+    float finalSize = ctx.particleSize * (.92f + .12f * glow) * ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+
+    // C3: whisper candle-warm pulse at the glow apex (Firefly glow only).
+    ParticleContext warm = ctx;
+    warm.r = std::min(255, ctx.r + (int)(14 * glow * ctx.warmth));
+    DrawHaloThenSprite(warm, ImVec2(x, y), finalSize, a, .0f);
+}
+
+// Ember ballistics: sparks launch fast from the text edge, decelerate
+// radially while buoyancy takes over, then cool, shrink, and fade. Trails
+// align with the actual velocity direction.
 static void RenderSparkParticle(const ParticleContext& ctx)
 {
-    float sparkTime = ctx.timeScaled * 2.0f + ctx.golden;
-    float sparkPhase = std::fmod(sparkTime, TWO_PI);
-    float life = sparkPhase / TWO_PI;
+    float sparkTime = ctx.timeScaled * 1.6f * ctx.speedVar + ctx.golden;
+    float life = std::fmod(sparkTime, TWO_PI) * INV_TWO_PI;
 
-    float sparkMinDist = std::clamp(ctx.minRadius - .05f, .52f, .85f);
-    float dist = sparkMinDist + life * (1.0f - sparkMinDist);
+    // Ease-out launch: fast at birth, decelerating outward
+    float launch = 1.0f - (1.0f - life) * (1.0f - life);
+    float sparkMinDist = std::clamp(ctx.minRadius - .05f, .42f, .85f);
+    float dist = sparkMinDist + launch * (1.0f - sparkMinDist);
     float baseAngle = ctx.phase + std::sin(ctx.golden * 2.0f) * .5f;
     float curveAngle = baseAngle + life * .3f * std::sin(ctx.golden);
 
+    // Buoyant rise accelerates as the radial launch dies off
+    float rise = life * life * .55f;
     float x = ctx.center.x + std::cos(curveAngle) * ctx.radiusX * dist +
               std::cos(ctx.jitterAngle) * ctx.radiusX * ctx.jitterDist * .5f;
-    float y = ctx.center.y + std::sin(curveAngle) * ctx.radiusY * dist - life * ctx.radiusY * .4f +
+    float y = ctx.center.y + std::sin(curveAngle) * ctx.radiusY * dist - rise * ctx.radiusY +
               std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist * .5f;
 
+    float fadeIn = SmoothStep(life * (1.0f / .14f));  // no full-alpha pop at birth
     float flicker = .8f + .2f * std::sin(ctx.timeScaled * 15.0f + ctx.golden * 5.0f);
-    float finalAlpha = ctx.alpha * (1.0f - life * life) * flicker * ctx.alphaVariation;
+    float finalAlpha = ctx.alpha * fadeIn * (1.0f - life * life) * flicker * ctx.alphaVariation *
+                       ctx.DepthAlphaScale();
     if (finalAlpha < .05f)
     {
         return;
     }
 
-    float finalSize =
-        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
+    // Embers shrink as they cool
+    float cooling = 1.08f - .45f * life;
+    float finalSize = ctx.particleSize * cooling * ctx.sizeVar * ctx.DepthSizeScale();
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
 
     float heatFade = 1.0f - life * .5f;
@@ -398,10 +579,18 @@ static void RenderSparkParticle(const ParticleContext& ctx)
     int sg = std::clamp((int)(220 * heatFade - life * 80), 120, 220);
     int sb = std::clamp((int)(80 - life * 60), 20, 80);
 
+    // Analytic velocity (d/d(life)) so trails oppose the true motion:
+    // radial speed decays as 2(1-life), rise speed grows as 2*.55*life.
+    float dDist = 2.0f * (1.0f - life) * (1.0f - sparkMinDist);
+    float dRise = 1.1f * life;
+    float vx = std::cos(curveAngle) * ctx.radiusX * dDist;
+    float vy = std::sin(curveAngle) * ctx.radiusY * dDist - ctx.radiusY * dRise;
+    float moveAngle = std::atan2(vy, vx);
+
     if (ctx.hasTextures)
     {
-        float trailDx = -std::cos(curveAngle);
-        float trailDy = -std::sin(curveAngle);
+        float trailDx = -std::cos(moveAngle);
+        float trailDy = -std::sin(moveAngle);
         float trailSpacing = finalSize * 3.6f;
         for (int t = 2; t >= 1; --t)
         {
@@ -409,61 +598,69 @@ static void RenderSparkParticle(const ParticleContext& ctx)
             float tx = x + trailDx * trailSpacing * tf;
             float ty = y + trailDy * trailSpacing * tf;
             int trailA = std::clamp(static_cast<int>(a * (.3f - .1f * t)), 0, 255);
+            // Trail sprites stay crisp; the halo/glint pass is reserved for the
+            // ember head so trails do not bloom into blobs.
             ParticleTextures::DrawSpriteWithIndex(ctx.list,
                                                   ImVec2(tx, ty),
-                                                  finalSize * 6.0f,
+                                                  finalSize * kSpriteSizeMul,
                                                   ctx.texStyleId,
                                                   ctx.particleIndex,
                                                   IM_COL32(ctx.r, ctx.g, ctx.b, trailA),
                                                   ctx.texBlendMode,
-                                                  curveAngle);
+                                                  moveAngle);
         }
-        ParticleTextures::DrawSpriteWithIndex(ctx.list,
-                                              ImVec2(x, y),
-                                              finalSize * 6.0f,
-                                              ctx.texStyleId,
-                                              ctx.particleIndex,
-                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
-                                              ctx.texBlendMode,
-                                              curveAngle);
+        DrawHaloThenSprite(ctx, ImVec2(x, y), finalSize, a, moveAngle);
     }
     else
     {
-        DrawSpark(ctx.list, ImVec2(x, y), finalSize, curveAngle, sr, sg, sb, a, life);
+        DrawSpark(ctx.list, ImVec2(x, y), finalSize, moveAngle, sr, sg, sb, a, life);
     }
 }
 
-// Ethereal flowing wisps with pale/blue tint and trailing echoes.
+// Serpentine wisps on incommensurate Lissajous paths: x and y oscillate at
+// irrational-ratio frequencies so the weave never visibly repeats. Trails
+// follow the exact analytic velocity.
 static void RenderWispParticle(const ParticleContext& ctx)
 {
-    float wispTime = ctx.timeScaled * .3f;
-    float wave1 = std::sin(wispTime + ctx.golden) * .3f;
-    float wave2 = std::sin(wispTime * 1.7f + ctx.golden * 1.3f) * .15f;
-    float orbit = ctx.phase + wispTime + wave1 + wave2;
+    float wx = .42f * ctx.speedVar * ctx.dirSign;
+    float wy = .30f * ctx.speedVar * (1.0f + .07f * std::sin(ctx.golden));
+    float waveX = .30f * std::sin(ctx.timeScaled * .31f * ctx.speedVar + ctx.golden);
+    float waveY = .22f * std::sin(ctx.timeScaled * .43f * ctx.speedVar + ctx.golden * 1.3f);
+    float thetaX = ctx.phase + ctx.timeScaled * wx + waveX;
+    float thetaY = ctx.phase * 1.7f + ctx.timeScaled * wy + waveY;
 
-    float radiusWave = .5f + .5f * std::sin(ctx.golden + wispTime * .5f);
     float radiusMod =
-        ctx.minRadius + (1.0f - ctx.minRadius) * (.78f * ctx.radialAnchor + .22f * radiusWave);
-    float x = ctx.center.x + std::cos(orbit) * ctx.radiusX * radiusMod +
+        ctx.radialAnchor * (.95f + .05f * std::sin(ctx.golden + ctx.timeScaled * .25f));
+    float bob = .05f * std::sin(ctx.timeScaled * .8f + ctx.bobPhase);
+    float x = ctx.center.x + std::cos(thetaX) * ctx.radiusX * radiusMod +
               std::cos(ctx.jitterAngle) * ctx.radiusX * ctx.jitterDist;
-    float y = ctx.center.y + std::sin(orbit * .7f) * ctx.radiusY * radiusMod +
+    float y = ctx.center.y + std::sin(thetaY) * ctx.radiusY * radiusMod + bob * ctx.radiusY +
               std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist;
 
-    float pulse = .52f + .28f * std::sin(wispTime * 2.0f + ctx.golden * 2.0f);
-    float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation * .82f;
+    float pulse = .52f + .28f * std::sin(ctx.timeScaled * .6f * ctx.speedVar + ctx.golden * 2.0f);
+    float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation * .82f * ctx.DepthAlphaScale();
     if (finalAlpha < .03f)
     {
         return;
     }
-    float finalSize =
-        ctx.particleSize * (.88f + .06f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
+    float finalSize = ctx.particleSize *
+                      (.88f + .06f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f)) *
+                      ctx.sizeVar * ctx.DepthSizeScale();
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
 
     int wr = std::min(255, ctx.r + 24);
     int wg = std::min(255, ctx.g + 30);
     int wb = std::min(255, ctx.b + 36);
 
-    float moveAngle = orbit + wave1 * 2.0f;
+    // Chain-rule velocity of the Lissajous + bob path
+    float dThetaX = wx + .30f * .31f * ctx.speedVar *
+                             std::cos(ctx.timeScaled * .31f * ctx.speedVar + ctx.golden);
+    float dThetaY = wy + .22f * .43f * ctx.speedVar *
+                             std::cos(ctx.timeScaled * .43f * ctx.speedVar + ctx.golden * 1.3f);
+    float vx = -std::sin(thetaX) * ctx.radiusX * radiusMod * dThetaX;
+    float vy = std::cos(thetaY) * ctx.radiusY * radiusMod * dThetaY +
+               ctx.radiusY * .04f * std::cos(ctx.timeScaled * .8f + ctx.bobPhase);
+    float moveAngle = std::atan2(vy, vx);
     float trailLength = 1.12f + .32f * std::sin(ctx.golden);
 
     if (ctx.hasTextures)
@@ -472,22 +669,19 @@ static void RenderWispParticle(const ParticleContext& ctx)
         float ex = x - std::cos(moveAngle) * echoDist;
         float ey = y - std::sin(moveAngle) * echoDist;
         int echoA = std::clamp(static_cast<int>(a * .24f), 0, 255);
+        // Echo is a crisp trailing ghost (kSpriteSizeMul * 0.8 preserves its
+        // historical 4.8/6.0 ratio); the halo/glint pass rides the main body.
         ParticleTextures::DrawSpriteWithIndex(ctx.list,
                                               ImVec2(ex, ey),
-                                              finalSize * 4.8f,
+                                              finalSize * (kSpriteSizeMul * .8f),
                                               ctx.texStyleId,
                                               ctx.particleIndex,
                                               IM_COL32(ctx.r, ctx.g, ctx.b, echoA),
                                               ctx.texBlendMode,
                                               moveAngle);
-        ParticleTextures::DrawSpriteWithIndex(ctx.list,
-                                              ImVec2(x, y),
-                                              finalSize * 5.8f,
-                                              ctx.texStyleId,
-                                              ctx.particleIndex,
-                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
-                                              ctx.texBlendMode,
-                                              moveAngle);
+        // Main body: preserve Wisp's 5.8/6.0 ratio by pre-scaling finalSize so
+        // the crisp quad still lands at finalSize * .9667 * kSpriteSizeMul.
+        DrawHaloThenSprite(ctx, ImVec2(x, y), finalSize * (5.8f / 6.0f), a, moveAngle);
     }
     else
     {
@@ -495,136 +689,252 @@ static void RenderWispParticle(const ParticleContext& ctx)
     }
 }
 
-// Orbiting magical rune symbols with pulsing surge.
-static void RenderRuneParticle(const ParticleContext& ctx)
+// Shared falling-particle layout. Returns screen position for a particle that
+// loops top->bottom through the aura, distributed across its full width by a
+// stable per-particle horizontal home. `fallRate` sets speed, `swayAmp` the
+// horizontal oscillation, `swayRate` its frequency. `edge` is filled with a
+// top/bottom fade factor and `fall` with the [0,1) vertical progress.
+static ImVec2 FallLayout(const ParticleContext& ctx,
+                         float fallRate,
+                         float swayAmp,
+                         float swayRate,
+                         float& fall,
+                         float& edge)
 {
-    float runeOrbit = ctx.phase + ctx.timeScaled * .4f;
-    float wobble = std::sin(ctx.timeScaled + ctx.golden) * .1f;
-    float floatY = std::sin(ctx.timeScaled * 1.5f + ctx.golden * 2.0f) * ctx.radiusY * .08f;
+    // M2: stratified jittered cell -> one particle per equal-width column, full
+    // width including the right edge. Independent integer-hash salts (HomeX,
+    // Phase) keep home and fall phase decorrelated so columns don't lock-step.
+    float cell = ((float)ctx.particleIndex + .5f) / (float)ctx.particleCount;
+    float jit =
+        (PTrait(ctx.particleIndex, ctx.styleIndex, Trait::HomeX) - .5f) / (float)ctx.particleCount;
+    float homeX = (cell + jit) * 2.0f - 1.0f;
+    float phaseOff = PTrait(ctx.particleIndex, ctx.styleIndex, Trait::Phase);
 
-    float x = ctx.center.x + std::cos(runeOrbit + wobble) * ctx.radiusX * .9f +
-              std::cos(ctx.jitterAngle) * ctx.radiusX * ctx.jitterDist;
-    float y = ctx.center.y + std::sin(runeOrbit + wobble) * ctx.radiusY * .65f + floatY +
-              std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist;
+    // F4: depth-biased terminal velocity (near flakes fall a touch faster) on a
+    // wider per-particle spread. M1 owns the eased descent below; these only
+    // multiply the rate, so they layer rather than fight.
+    float rateVar = .6f + .8f * PTrait(ctx.particleIndex, ctx.styleIndex, Trait::JitterDist);
+    fall = std::fmod(
+        ctx.timeScaled * fallRate * ctx.speedVar * rateVar * (.85f + .30f * ctx.depth) + phaseOff,
+        1.0f);
 
-    float pulse = .7f + .3f * std::sin(ctx.timeScaled * 2.0f + ctx.golden);
-    float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation;
-    float finalSize =
-        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
-    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    // M1: two incommensurate sway octaves + slow FBM cross-drift so the lateral
+    // path bends instead of tracing one clean sine. F2 scales the sway AMPLITUDE
+    // by depth (parallax) without touching any sin time argument.
+    float par = ctx.DepthParallaxScale();
+    float ph = PHash01(ctx.golden * 2.3f + 1.7f) * TWO_PI;
+    float sway = swayAmp * par *
+                 (.7f * std::sin(ctx.timeScaled * swayRate + ctx.golden * 3.0f) +
+                  .3f * std::sin(ctx.timeScaled * swayRate * 1.93f + ph));
+    float drift = (FBMNoise(ctx.golden * .7f, fall * 2.0f + ctx.timeScaled * .05f, 3) - .5f) * par;
 
-    if (ctx.hasTextures)
-    {
-        float surgeCycle = std::sin(ctx.timeScaled * .35f + ctx.golden * 2.5f);
-        float surgeT = std::clamp((surgeCycle - .7f) / .3f, .0f, 1.0f);
-        int surgedA = std::clamp(static_cast<int>(a * (1.0f + .4f * surgeT)), 0, 255);
-        ParticleTextures::DrawSpriteWithIndex(ctx.list,
-                                              ImVec2(x, y),
-                                              finalSize * 6.0f,
-                                              ctx.texStyleId,
-                                              ctx.particleIndex,
-                                              IM_COL32(ctx.r, ctx.g, ctx.b, surgedA),
-                                              ctx.texBlendMode,
-                                              runeOrbit + wobble);
-    }
-    else
-    {
-        DrawRune(ctx.list, ImVec2(x, y), finalSize, ctx.r, ctx.g, ctx.b, a, ctx.particleIndex);
-    }
+    // M1: gentle non-constant descent (air resistance hesitation), whisper-level.
+    float fy = Saturate(fall + .06f * std::sin(fall * TWO_PI + ctx.golden));
+
+    edge = (std::min)(SmoothStep(fall * 6.0f), SmoothStep((1.0f - fall) * 6.0f));
+    float x = ctx.center.x + (homeX + sway + drift * swayAmp * .6f) * ctx.radiusX;
+    float y = ctx.center.y + (-1.0f + 2.0f * fy) * ctx.radiusY;
+    return ImVec2(x, y);
 }
 
-// Soft glowing orbs with breathing motion.
-static void RenderOrbParticle(const ParticleContext& ctx)
+// Helper: draw the type's sprite (crisp core + additive backlight halo + rare
+// glint), or a soft orb fallback if no texture loaded. See DrawHaloThenSprite.
+static void DrawWeatherSprite(
+    const ParticleContext& ctx, const ImVec2& pos, float finalSize, int a, float rotation)
 {
-    float orbTime = ctx.timeScaled * .4f;
-    float orbit = ctx.phase + orbTime;
-
-    float breathe = .85f + .15f * std::sin(orbTime * 1.5f + ctx.golden);
-    float floatY = std::sin(orbTime * 2.0f + ctx.golden * 1.5f) * ctx.radiusY * .1f;
-
-    float radiusWave = .5f + .5f * std::sin(ctx.golden);
-    float radiusMod =
-        (ctx.minRadius + (1.0f - ctx.minRadius) * (.74f * ctx.radialAnchor + .26f * radiusWave)) *
-        breathe;
-    float x = ctx.center.x + std::cos(orbit) * ctx.radiusX * radiusMod +
-              std::cos(ctx.jitterAngle) * ctx.radiusX * ctx.jitterDist;
-    float y = ctx.center.y + std::sin(orbit * .8f) * ctx.radiusY * radiusMod + floatY +
-              std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist;
-
-    float glow = .5f + .5f * std::sin(orbTime * 2.0f + ctx.golden * 2.0f);
-    float finalAlpha = ctx.alpha * glow * ctx.alphaVariation;
-    float finalSize =
-        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
-    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
-
-    if (ctx.hasTextures)
-    {
-        ParticleTextures::DrawSpriteWithIndex(ctx.list,
-                                              ImVec2(x, y),
-                                              finalSize * 7.0f,
-                                              ctx.texStyleId,
-                                              ctx.particleIndex,
-                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
-                                              ctx.texBlendMode,
-                                              .0f);
-    }
-    else
-    {
-        DrawSoftOrb(ctx.list, ImVec2(x, y), finalSize, ctx.r, ctx.g, ctx.b, a);
-    }
+    DrawHaloThenSprite(ctx, pos, finalSize, a, rotation);
 }
 
-// Crystalline shapes with slow rotation, floating, and facet flash.
-static void RenderCrystalParticle(const ParticleContext& ctx)
+// Fast straight downpour with a touch of wind drift. The streak sprite stays
+// axis-aligned (no spin) so its pixels read crisp as it falls.
+static void RenderRainParticle(const ParticleContext& ctx)
 {
-    float crystalTime = ctx.timeScaled * .3f;
-    float orbit = ctx.phase + crystalTime;
+    float fall, edge;
+    ImVec2 pos = FallLayout(ctx, 1.10f, .05f, 1.4f, fall, edge);
+    pos.x += .14f * (fall - .5f) * ctx.radiusX;  // wind drift accumulates with the fall
 
-    // Gentle floating with angular wobble
-    float wobble = std::sin(crystalTime * 1.2f + ctx.golden) * .08f;
-    float floatY = std::sin(crystalTime * 1.8f + ctx.golden * 1.5f) * ctx.radiusY * .1f;
-
-    float radiusWave = .5f + .5f * std::sin(ctx.golden);
-    float radiusMod =
-        (ctx.minRadius + (1.0f - ctx.minRadius) * (.76f * ctx.radialAnchor + .24f * radiusWave));
-    float x = ctx.center.x + std::cos(orbit + wobble) * ctx.radiusX * radiusMod +
-              std::cos(ctx.jitterAngle) * ctx.radiusX * ctx.jitterDist;
-    float y = ctx.center.y + std::sin(orbit * .85f + wobble) * ctx.radiusY * radiusMod + floatY +
-              std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist;
-
-    // Slow rotation
-    float rotation = crystalTime * .4f + ctx.golden;
-
-    // Facet flash: brief brightness pulse at specific phase
-    float flashCycle = std::sin(crystalTime * 2.0f + ctx.golden * 3.0f);
-    float flash = std::clamp((flashCycle - .85f) / .15f, .0f, 1.0f);
-
-    float pulse = .7f + .3f * std::sin(crystalTime * 1.5f + ctx.golden * 2.0f);
-    float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation * (1.0f + flash * .3f);
-    float finalSize =
-        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
+    float finalAlpha = ctx.alpha * edge * (.7f + .3f * ctx.alphaVariation) * ctx.DepthAlphaScale();
+    if (finalAlpha < .04f)
+    {
+        return;
+    }
+    float finalSize = ctx.particleSize * ctx.sizeVar * ctx.DepthSizeScale();
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    DrawWeatherSprite(ctx, pos, finalSize, a, .0f);
+}
 
-    if (ctx.hasTextures)
+// Slow flakes that sway side to side as they settle.
+static void RenderSnowParticle(const ParticleContext& ctx)
+{
+    float fall, edge;
+    ImVec2 pos = FallLayout(ctx, .32f, .16f, .9f, fall, edge);
+
+    float finalAlpha = ctx.alpha * edge * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .04f)
     {
-        ParticleTextures::DrawSpriteWithIndex(ctx.list,
-                                              ImVec2(x, y),
-                                              finalSize * 6.0f,
-                                              ctx.texStyleId,
-                                              ctx.particleIndex,
-                                              IM_COL32(ctx.r, ctx.g, ctx.b, a),
-                                              ctx.texBlendMode,
-                                              rotation);
+        return;
     }
-    else
+    float finalSize = ctx.particleSize *
+                      (.92f + .08f * std::sin(ctx.timeScaled * 1.1f + ctx.golden * 2.0f)) *
+                      ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    DrawWeatherSprite(ctx, pos, finalSize, a, .0f);
+}
+
+// Puffs that start low, rise, expand, and dissolve.
+static void RenderSmokeParticle(const ParticleContext& ctx)
+{
+    // M2: stratified home (scaled to the narrower smoke column) + decorrelated
+    // rise phase from an independent integer-hash salt.
+    float cell = ((float)ctx.particleIndex + .5f) / (float)ctx.particleCount;
+    float jit =
+        (PTrait(ctx.particleIndex, ctx.styleIndex, Trait::HomeX) - .5f) / (float)ctx.particleCount;
+    float homeX = ((cell + jit) * 2.0f - 1.0f) * .7f;
+    float phaseOff = PTrait(ctx.particleIndex, ctx.styleIndex, Trait::Phase);
+    float rise = std::fmod(ctx.timeScaled * .26f * ctx.speedVar + phaseOff, 1.0f);
+    float drift = .22f * std::sin(ctx.timeScaled * .5f + ctx.golden * 2.0f) * rise;
+    float x = ctx.center.x + (homeX + drift) * ctx.radiusX;
+    float y = ctx.center.y + (.85f - 1.85f * rise) * ctx.radiusY;  // bottom -> top
+
+    float fade = SmoothStep(rise * 4.0f) * SmoothStep((1.0f - rise) * 3.0f);
+    float finalAlpha = ctx.alpha * fade * .8f * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .03f)
     {
-        // Procedural: simple hexagonal shape with glow
-        int glowA = std::clamp((int)(finalAlpha * 40.0f), 0, 255);
-        ctx.list->AddCircleFilled(
-            ImVec2(x, y), finalSize * 1.5f, IM_COL32(ctx.r, ctx.g, ctx.b, glowA), 6);
-        ctx.list->AddCircleFilled(ImVec2(x, y), finalSize, IM_COL32(ctx.r, ctx.g, ctx.b, a), 6);
-        ctx.list->AddCircleFilled(ImVec2(x, y), finalSize * .3f, IM_COL32(255, 255, 255, a / 2), 6);
+        return;
     }
+    // expands as it rises
+    float finalSize = ctx.particleSize * (.7f + 1.1f * rise) * ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    DrawWeatherSprite(ctx, ImVec2(x, y), finalSize, a, .0f);
+}
+
+// Leaves that tumble down with a wide sway and a gentle flutter rotation.
+static void RenderLeafParticle(const ParticleContext& ctx)
+{
+    float fall, edge;
+    ImVec2 pos = FallLayout(ctx, .42f, .24f, 1.1f, fall, edge);
+
+    float finalAlpha = ctx.alpha * edge * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .04f)
+    {
+        return;
+    }
+    float finalSize = ctx.particleSize * ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    float rotation = .5f * std::sin(ctx.timeScaled * 1.3f * ctx.speedVar + ctx.golden);  // flutter
+    DrawWeatherSprite(ctx, pos, finalSize, a, rotation);
+}
+
+// Petals drifting down with a broad sway and a slow continuous spin.
+static void RenderCherryBlossomParticle(const ParticleContext& ctx)
+{
+    float fall, edge;
+    ImVec2 pos = FallLayout(ctx, .34f, .26f, .8f, fall, edge);
+
+    float finalAlpha = ctx.alpha * edge * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .04f)
+    {
+        return;
+    }
+    float finalSize = ctx.particleSize * ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    float rotation = ctx.timeScaled * .5f * ctx.dirSign * ctx.speedVar + ctx.golden;  // slow spin
+    DrawWeatherSprite(ctx, pos, finalSize, a, rotation);
+}
+
+// A shimmering band that flows horizontally near the top of the aura, riding a
+// slow vertical wave. No spin -- it reads as a curtain of light.
+static void RenderAuroraParticle(const ParticleContext& ctx)
+{
+    // M2: stratified flow start-offset (one band slot per particle) + an
+    // independent integer-hash salt for the vertical band offset.
+    float cell = ((float)ctx.particleIndex + .5f) / (float)ctx.particleCount;
+    float jit =
+        (PTrait(ctx.particleIndex, ctx.styleIndex, Trait::HomeX) - .5f) / (float)ctx.particleCount;
+    float startOff = cell + jit;
+    float flow =
+        std::fmod(ctx.timeScaled * .18f * ctx.speedVar * ctx.dirSign + startOff + 1.0f, 1.0f);
+    float bandY =
+        -.40f + .30f * PTrait(ctx.particleIndex, ctx.styleIndex, Trait::Bob);  // upper third
+    float par = ctx.DepthParallaxScale();                                      // F2: amplitude only
+    float wave = .12f * par * std::sin(flow * TWO_PI * 1.5f + ctx.timeScaled * .6f + ctx.golden);
+    // F3: shared per-plate air current, depth-weighted.
+    float x =
+        ctx.center.x + (-1.0f + 2.0f * flow) * ctx.radiusX + ctx.airX * ctx.depth * ctx.radiusX;
+    float y = ctx.center.y + (bandY + wave) * ctx.radiusY + ctx.airY * ctx.depth * ctx.radiusY;
+
+    float edge = (std::min)(SmoothStep(flow * 6.0f), SmoothStep((1.0f - flow) * 6.0f));
+    float shimmer = .5f + .5f * std::sin(ctx.timeScaled * 1.5f + ctx.golden * 2.0f);
+    float finalAlpha =
+        ctx.alpha * edge * (.45f + .55f * shimmer) * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .03f)
+    {
+        return;
+    }
+    float finalSize =
+        ctx.particleSize * (.95f + .12f * shimmer) * ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    DrawWeatherSprite(ctx, ImVec2(x, y), finalSize, a, .0f);
+}
+
+// Near-still motes: a very slow orbit plus a tiny two-axis drift, gently
+// twinkling. The faint glint sprite suits the dim, dusty mood.
+static void RenderDustParticle(const ParticleContext& ctx)
+{
+    float orbit = ctx.phase + ctx.timeScaled * .04f * ctx.speedVar * ctx.dirSign;
+    float par = ctx.DepthParallaxScale();  // F2: amplitude only
+    float driftX = .04f * par * std::sin(ctx.timeScaled * .20f + ctx.golden);
+    float driftY = .04f * par * std::sin(ctx.timeScaled * .17f + ctx.bobPhase);
+    // F3: shared per-plate air current, depth-weighted.
+    float x = ctx.center.x + (std::cos(orbit) * ctx.radialAnchor + driftX) * ctx.radiusX +
+              ctx.airX * ctx.depth * ctx.radiusX;
+    float y = ctx.center.y + (std::sin(orbit) * ctx.radialAnchor + driftY) * ctx.radiusY +
+              ctx.airY * ctx.depth * ctx.radiusY;
+
+    float twinkle = .4f + .6f * (.5f + .5f * std::sin(ctx.timeScaled * .7f + ctx.golden * 2.0f));
+    float finalAlpha = ctx.alpha * twinkle * .7f * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .03f)
+    {
+        return;
+    }
+    float finalSize = ctx.particleSize * .85f * ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    DrawWeatherSprite(ctx, ImVec2(x, y), finalSize, a, .0f);
+}
+
+// Soft luminous motes drifting on a lazy Brownian wander with a breathing
+// glow -- the calm, premium "ambient sparkle" layer.
+static void RenderMoteParticle(const ParticleContext& ctx)
+{
+    float omega = .10f * ctx.speedVar * ctx.dirSign / (.6f + .4f * ctx.radialAnchor);
+    float orbit = ctx.phase + ctx.timeScaled * omega;
+    float par = ctx.DepthParallaxScale();  // F2: amplitude only
+    float wanderX = (std::sin(ctx.timeScaled * .43f * ctx.speedVar + ctx.golden) +
+                     .6f * std::sin(ctx.timeScaled * .67f + ctx.golden * 1.7f)) *
+                    .05f * par;
+    float wanderY = (std::sin(ctx.timeScaled * .49f * ctx.speedVar + ctx.golden * 2.1f) +
+                     .6f * std::sin(ctx.timeScaled * .59f + ctx.bobPhase)) *
+                    .05f * par;
+    float radiusMod =
+        ctx.radialAnchor * (.94f + .06f * par * std::sin(ctx.timeScaled * .5f + ctx.golden));
+    // F3: shared per-plate air current, depth-weighted.
+    float x = ctx.center.x + std::cos(orbit) * ctx.radiusX * radiusMod + wanderX * ctx.radiusX +
+              ctx.airX * ctx.depth * ctx.radiusX;
+    float y = ctx.center.y + std::sin(orbit * .9f) * ctx.radiusY * radiusMod +
+              wanderY * ctx.radiusY + ctx.airY * ctx.depth * ctx.radiusY;
+
+    float glow = .5f + .5f * std::sin(ctx.timeScaled * .7f * ctx.speedVar + ctx.golden * 2.0f);
+    float finalAlpha = ctx.alpha * (.4f + .6f * glow) * ctx.alphaVariation * ctx.DepthAlphaScale();
+    if (finalAlpha < .03f)
+    {
+        return;
+    }
+    float finalSize = ctx.particleSize * (.92f + .14f * glow) * ctx.sizeVar * ctx.DepthSizeScale();
+    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
+    // C3: whisper candle-warm pulse at the glow apex (Mote glow only).
+    ParticleContext warm = ctx;
+    warm.r = std::min(255, ctx.r + (int)(14 * glow * ctx.warmth));
+    DrawHaloThenSprite(warm, ImVec2(x, y), finalSize, a, .0f);
 }
 
 void DrawParticleAura(const ParticleAuraParams& params)
@@ -667,111 +977,138 @@ void DrawParticleAura(const ParticleAuraParams& params)
 
     float timeScaled = params.time * params.speed;
 
+    // F3: shared per-plate air current computed ONCE (2 sins/plate, amortized
+    // across every particle). Skipped for Spark (ballistic) and the directional
+    // fall/rise types -- only the orbiting/flow types read airX/airY.
+    float airX = .055f * std::sin(timeScaled * .13f);
+    float airY = .045f * std::sin(timeScaled * .11f + 1.7f);
+
+    // Radial band for this style: with several styles enabled each one gets
+    // its own annulus so the styles stay readable instead of mushing together.
+    float styleBandT = (params.enabledStyleCount > 0)
+                           ? (static_cast<float>(params.styleIndex) + .5f) /
+                                 static_cast<float>(params.enabledStyleCount)
+                           : .5f;
+    float bandFloor = std::clamp(.58f + .20f * styleBandT, .58f, .88f);
+    if (params.enabledStyleCount <= 1)
+    {
+        bandFloor = SoloBandFloor(params.style);
+    }
+    float counterChance = CounterRotateChance(params.style);
+
     for (int i = 0; i < params.particleCount; ++i)
     {
         // Quasi-random angular placement via the golden angle (~137.508 deg),
         // minimal clustering. Constants:
         //   2.399963f  = golden angle in radians (~ pi(3-sqrt(5)))
-        //   0.618034f  = 1/phi (golden ratio conjugate), low-discrepancy jitter
-        //   97, 13, 31 = primes for per-style offset, prevent pattern repetition
+        //   97         = prime per-style offset, prevents pattern repetition
         float golden = (float)(i + params.styleIndex * 97) * 2.399963f;
-        float hashJitter = std::fmod((float)(i * 7 + params.styleIndex * 13) * .6180339887f, 1.0f);
-        float phase = golden + hashJitter * 1.2f;
+        float phase = golden + PTrait(i, params.styleIndex, Trait::Phase) * 1.2f;
 
-        float styleBandT = (params.enabledStyleCount > 0)
-                               ? (static_cast<float>(params.styleIndex) + .5f) /
-                                     static_cast<float>(params.enabledStyleCount)
-                               : .5f;
-        float minRadius = std::clamp(.58f + .20f * styleBandT, .58f, .88f);
-        float radialSeed =
-            std::fmod(static_cast<float>(i) * .6180339887f + styleBandT * .31f, 1.0f);
-        // sqrt() converts uniform [0,1] to area-uniform disk distribution (standard disk sampling)
-        float radialAnchor = std::sqrt(radialSeed);
-
-        float jitterAngle =
-            std::fmod((float)(i * 17 + params.styleIndex * 31) * .3819660113f, 1.0f) * TWO_PI;
-        float jitterDist =
-            std::fmod((float)(i * 23 + params.styleIndex * 7) * .6180339887f, 1.0f) * .25f;
+        float radialAnchor = AnnulusRadius(bandFloor, PTrait(i, params.styleIndex, Trait::Radial));
+        float speedVar = .72f + .56f * PTrait(i, params.styleIndex, Trait::Speed);
+        float dirSign =
+            (PTrait(i, params.styleIndex, Trait::Direction) < counterChance) ? -1.0f : 1.0f;
+        float depth = PTrait(i, params.styleIndex, Trait::Depth);
+        float sizeVar = .85f + .30f * PTrait(i, params.styleIndex, Trait::Size);
+        float jitterAngle = PTrait(i, params.styleIndex, Trait::JitterAngle) * TWO_PI;
+        float jitterDist = PTrait(i, params.styleIndex, Trait::JitterDist) * .22f;
+        float bobPhase = PTrait(i, params.styleIndex, Trait::Bob) * TWO_PI;
 
         float alphaVariation = .6f + .4f * (.5f + .5f * std::sin(golden * 1.7f + timeScaled * .3f));
 
-        int r = baseR, g = baseG, b = baseB;
-        // Hue rotation in RGB space using Rec. 709 luminance weights (0.213, 0.715, 0.072).
-        // The 3x3 rotation matrix preserves perceived brightness while shifting hue.
-        {
-            float hueShift = std::sin(golden * 2.3f + timeScaled * .25f) * .08f;
-            float satMod = 1.0f + .08f * std::sin(golden * 1.5f);
+        // C1: depth-keyed warm(primary)<->cool(secondary) temperature lerp that
+        // finally CONSUMES the dead secondary color, plus a tiny decorrelated
+        // micro temperature jitter. This replaces the old Rec.709 hue-rotation +
+        // Rec.601 satmod block (a net perf win, and it harmonizes particles with
+        // the tier hero/highlight instead of rotating away from the palette).
+        // Far motes sit in the deeper primary, near ones lean to the luminous
+        // highlight. `warmth` (C4) scales the whole mix; 0 = monochrome tier.
+        float tMix = (.20f + .55f * depth) * params.colorWarmth;
+        int r = std::clamp(baseR + (int)((baseR2 - baseR) * tMix), 0, 255);
+        int g = std::clamp(baseG + (int)((baseG2 - baseG) * tMix), 0, 255);
+        int b = std::clamp(baseB + (int)((baseB2 - baseB) * tMix), 0, 255);
+        // Decorrelated micro temp jitter via an independent salt: warm push R,
+        // cool pull B -- never a full hue spin.
+        float hj = (PTrait(i, params.styleIndex, Trait::Hue) - .5f) * 2.0f;
+        r = std::clamp(r + (int)(8 * hj * params.colorWarmth), 0, 255);
+        b = std::clamp(b - (int)(8 * hj * params.colorWarmth), 0, 255);
 
-            float hueAngle = hueShift * TWO_PI;
-            float cosH = std::cos(hueAngle);
-            float sinH = std::sin(hueAngle);
-
-            float newR = baseR * (.213f + .787f * cosH - .213f * sinH) +
-                         baseG * (.213f - .213f * cosH + .143f * sinH) +
-                         baseB * (.213f - .213f * cosH - .928f * sinH);
-            float newG = baseR * (.715f - .715f * cosH - .715f * sinH) +
-                         baseG * (.715f + .285f * cosH + .140f * sinH) +
-                         baseB * (.715f - .715f * cosH + .283f * sinH);
-            float newB = baseR * (.072f - .072f * cosH + .928f * sinH) +
-                         baseG * (.072f - .072f * cosH - .283f * sinH) +
-                         baseB * (.072f + .928f * cosH + .072f * sinH);
-
-            // Saturation adjustment using Rec. 601 luminance weights (intentionally different
-            // from the Rec. 709 rotation above -- Rec. 601 produces more visually uniform results
-            // for saturation scaling in the [0-255] integer domain)
-            float gray = .299f * newR + .587f * newG + .114f * newB;
-            r = std::clamp((int)(gray + (newR - gray) * satMod), 0, 255);
-            g = std::clamp((int)(gray + (newG - gray) * satMod), 0, 255);
-            b = std::clamp((int)(gray + (newB - gray) * satMod), 0, 255);
-        }
-
-        ParticleContext ctx{params.list,
-                            params.center,
-                            params.radiusX,
-                            params.radiusY,
-                            alpha,
-                            params.particleSize,
-                            timeScaled,
-                            texStyleId,
-                            texCount,
-                            hasTextures,
-                            i,
-                            golden,
-                            phase,
-                            minRadius,
-                            radialAnchor,
-                            jitterAngle,
-                            jitterDist,
-                            alphaVariation,
-                            r,
-                            g,
-                            b,
-                            baseR2,
-                            baseG2,
-                            baseB2,
-                            hasSecondaryColor,
-                            texBlend};
+        ParticleContext ctx{.list = params.list,
+                            .center = params.center,
+                            .radiusX = params.radiusX,
+                            .radiusY = params.radiusY,
+                            .alpha = alpha,
+                            .particleSize = params.particleSize,
+                            .timeScaled = timeScaled,
+                            .texStyleId = texStyleId,
+                            .hasTextures = hasTextures,
+                            .particleIndex = i,
+                            .particleCount = params.particleCount,
+                            .styleIndex = params.styleIndex,
+                            .golden = golden,
+                            .phase = phase,
+                            .minRadius = bandFloor,
+                            .radialAnchor = radialAnchor,
+                            .jitterAngle = jitterAngle,
+                            .jitterDist = jitterDist,
+                            .alphaVariation = alphaVariation,
+                            .speedVar = speedVar,
+                            .dirSign = dirSign,
+                            .depth = depth,
+                            .sizeVar = sizeVar,
+                            .bobPhase = bobPhase,
+                            .r = r,
+                            .g = g,
+                            .b = b,
+                            .r2 = baseR2,
+                            .g2 = baseG2,
+                            .b2 = baseB2,
+                            .hasSecondaryColor = hasSecondaryColor,
+                            .texBlendMode = texBlend,
+                            .depthStrength = params.depthStrength,
+                            .warmth = params.colorWarmth,
+                            .glowStrength = params.glowStrength,
+                            .glowSize = params.glowSize,
+                            .shineThreshold = params.shineThreshold,
+                            .airX = airX,
+                            .airY = airY};
 
         switch (params.style)
         {
-            case Settings::ParticleStyle::Stars:
+            case Settings::ParticleStyle::Firefly:
             default:
-                RenderStarParticle(ctx);
+                RenderFireflyParticle(ctx);
                 break;
-            case Settings::ParticleStyle::Sparks:
+            case Settings::ParticleStyle::Rain:
+                RenderRainParticle(ctx);
+                break;
+            case Settings::ParticleStyle::Snow:
+                RenderSnowParticle(ctx);
+                break;
+            case Settings::ParticleStyle::Smoke:
+                RenderSmokeParticle(ctx);
+                break;
+            case Settings::ParticleStyle::Spark:
                 RenderSparkParticle(ctx);
                 break;
-            case Settings::ParticleStyle::Wisps:
+            case Settings::ParticleStyle::Wisp:
                 RenderWispParticle(ctx);
                 break;
-            case Settings::ParticleStyle::Runes:
-                RenderRuneParticle(ctx);
+            case Settings::ParticleStyle::Leaf:
+                RenderLeafParticle(ctx);
                 break;
-            case Settings::ParticleStyle::Orbs:
-                RenderOrbParticle(ctx);
+            case Settings::ParticleStyle::Aurora:
+                RenderAuroraParticle(ctx);
                 break;
-            case Settings::ParticleStyle::Crystals:
-                RenderCrystalParticle(ctx);
+            case Settings::ParticleStyle::CherryBlossom:
+                RenderCherryBlossomParticle(ctx);
+                break;
+            case Settings::ParticleStyle::Dust:
+                RenderDustParticle(ctx);
+                break;
+            case Settings::ParticleStyle::Mote:
+                RenderMoteParticle(ctx);
                 break;
         }
     }
