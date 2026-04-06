@@ -161,4 +161,15 @@ void DrawOutlineInternal(ImDrawList* list,
                          float w,
                          bool fastOutlines);
 
+/// Blend three colors continuously using smoothstep transitions.
+/// Produces a seamless gradient A->Mid->B with no visible breakpoints.
+/// @param t  Interpolation value [0, 1].
+inline ImU32 ThreeColorGradient(ImU32 colA, ImU32 colMid, ImU32 colB, float t)
+{
+    t = Saturate(t);
+    float s1 = SmoothStep(Saturate(t * 2.0f));
+    float s2 = SmoothStep(Saturate(t * 2.0f - 1.0f));
+    return LerpColorU32(LerpColorU32(colA, colMid, s1), colB, s2);
+}
+
 }  // namespace TextEffects
