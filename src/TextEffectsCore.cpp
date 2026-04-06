@@ -32,6 +32,12 @@ ImU32 LerpColorU32(ImU32 a, ImU32 b, float t)
     return IM_COL32(rr, rg, rb, ra);
 }
 
+float EaseOutExpo(float t)
+{
+    t = Saturate(t);
+    return t >= 1.0f ? 1.0f : 1.0f - std::pow(2.0f, -10.0f * t);
+}
+
 // Fast 4-directional outline (4 draw calls)
 void DrawOutline4Internal(ImDrawList* list,
                           ImFont* font,
@@ -48,7 +54,11 @@ void DrawOutline4Internal(ImDrawList* list,
     list->AddText(font, size, ImVec2(pos.x, pos.y + w), outline, text);
 }
 
-// 8-directional outline (smoother, 8 draw calls)
+// Smooth outline ring: stamp the text around a circle of radius w with the tap
+// count scaled to the circumference (~1 stamp / 2 px), so the contour stays a
+// smooth even ring at any width instead of reading as a fixed 8-point star
+// (the old "spiky/chippy" look).  The half-step phase keeps taps off the
+// cardinal axes; the cap bounds cost for wide outlines / long strings.
 void DrawOutline8Internal(ImDrawList* list,
                           ImFont* font,
                           float size,
@@ -57,17 +67,14 @@ void DrawOutline8Internal(ImDrawList* list,
                           ImU32 outline,
                           float w)
 {
-    const float d = w * .70710678118f;  // Diagonal offset (w / sqrt(2))
-    // Cardinal directions
-    list->AddText(font, size, ImVec2(pos.x - w, pos.y), outline, text);
-    list->AddText(font, size, ImVec2(pos.x + w, pos.y), outline, text);
-    list->AddText(font, size, ImVec2(pos.x, pos.y - w), outline, text);
-    list->AddText(font, size, ImVec2(pos.x, pos.y + w), outline, text);
-    // Diagonal directions for smoother appearance
-    list->AddText(font, size, ImVec2(pos.x - d, pos.y - d), outline, text);
-    list->AddText(font, size, ImVec2(pos.x + d, pos.y - d), outline, text);
-    list->AddText(font, size, ImVec2(pos.x - d, pos.y + d), outline, text);
-    list->AddText(font, size, ImVec2(pos.x + d, pos.y + d), outline, text);
+    const int n = std::clamp(static_cast<int>(std::ceil(TWO_PI * w * .5f)), 8, 24);
+    const float step = TWO_PI / static_cast<float>(n);
+    for (int i = 0; i < n; ++i)
+    {
+        const float a = (static_cast<float>(i) + .5f) * step;
+        list->AddText(
+            font, size, ImVec2(pos.x + std::cos(a) * w, pos.y + std::sin(a) * w), outline, text);
+    }
 }
 
 // Draw outline using fastOutlines flag to pick 4-dir or 8-dir
@@ -119,8 +126,9 @@ void DrawOutlineGlow(ImDrawList* list,
         // Normalized ring position: 0 = innermost, 1 = outermost
         float ringT = (float)(ring - 1) / (float)(std::max)(rings - 1, 1);
 
-        // Quadratic spacing growth for wider outer rings
-        float ringScale = glowScale * (1.0f + ringT * ringT * 2.0f);
+        // Near-linear spacing growth so the (few) rings overlap into one
+        // continuous halo instead of separating into distinct spiky shells.
+        float ringScale = glowScale * (1.0f + ringT * .6f);
         float ringOffset = outlineWidth * ringScale;
 
         // Gaussian alpha falloff: smooth decay without visible stepping
