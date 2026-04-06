@@ -14,5 +14,8 @@ cbuffer CompositeCB : register(b0)
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
 {
     float4 c = InputTex.Sample(Sampler, uv);
-    return float4(c.rgb * Intensity, c.a * Intensity);
+    // Scale bloom by intensity; soft clamp prevents harsh edges
+    // while keeping the glow visibly bright.
+    float3 bloom = saturate(c.rgb * Intensity);
+    return float4(bloom, c.a * Intensity);
 }
