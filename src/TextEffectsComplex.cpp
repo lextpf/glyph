@@ -24,52 +24,9 @@ static inline float Hash(float x, float y)
     return static_cast<float>(hash & 0xFFFFFF) / 16777216.0f;  // [0, 1)
 }
 
-// 2D value noise with quintic interpolation
-static inline float ValueNoise(float x, float y)
-{
-    // Get integer and fractional parts
-    float ix = std::floor(x);
-    float iy = std::floor(y);
-    float fx = x - ix;
-    float fy = y - iy;
-
-    // Quintic interpolation curve for smoother results
-    fx = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
-    fy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
-
-    // Sample four corners and interpolate
-    float a = Hash(ix, iy);
-    float b = Hash(ix + 1.0f, iy);
-    float c = Hash(ix, iy + 1.0f);
-    float d = Hash(ix + 1.0f, iy + 1.0f);
-
-    // Bilinear interpolation
-    float ab = a + (b - a) * fx;
-    float cd = c + (d - c) * fx;
-    return ab + (cd - ab) * fy;
-}
-
-// Fractal Brownian Motion
-static inline float FBMNoise(float x, float y, int octaves, float persistence = .5f)
-{
-    // Cap octaves to prevent excessive computation and float overflow in frequency
-    octaves = std::min(octaves, 8);
-
-    float total = .0f;
-    float amplitude = 1.0f;
-    float frequency = 1.0f;
-    float maxValue = .0f;
-
-    for (int i = 0; i < octaves; i++)
-    {
-        total += ValueNoise(x * frequency, y * frequency) * amplitude;
-        maxValue += amplitude;
-        amplitude *= persistence;
-        frequency *= 2.0f;
-    }
-
-    return total / maxValue;
-}
+// ValueNoise and FBMNoise are shared with the particle drift; they now live
+// inline in TextEffectsInternal.hpp. The file-local Hash above is kept because
+// the crystalline/frost shaders below sample it directly on the integer grid.
 
 void AddTextAurora(ImDrawList* list,
                    ImFont* font,
@@ -125,7 +82,7 @@ void AddTextAurora(ImDrawList* list,
         float swayFactor = std::sin(swayedX * TWO_PI * waves + time) * .5f + .5f;
 
         // Blend all factors (whisper: cap aurora amplitude)
-        static constexpr float kAmplitudeCap = .35f;
+        static constexpr float kAmplitudeCap = .30f;
         float t =
             Saturate((combined * .6f + curtain * .25f + swayFactor * .15f) * intensity + shimmer) *
             kAmplitudeCap;
@@ -233,7 +190,7 @@ void AddTextSparkle(ImDrawList* list,
 
         // Whisper: cap sparkle amplitude so each twinkle reads as a glint,
         // not a flare.
-        static constexpr float kAmplitudeCap = .35f;
+        static constexpr float kAmplitudeCap = .28f;
         totalSparkle = Saturate(totalSparkle * intensity) * kAmplitudeCap;
         colorShift = Saturate(colorShift);
 
@@ -281,7 +238,7 @@ void AddTextEnchant(ImDrawList* list,
         float combined = (energy * .6f + energy2 * .4f);
 
         // Whisper: cap amplitude so enchant reads as a faint magical fabric.
-        static constexpr float kAmplitudeCap = .30f;
+        static constexpr float kAmplitudeCap = .26f;
 
         // Pulsing highlight at noise peaks (smooth transition)
         float highlight =
@@ -507,6 +464,79 @@ void AddTextGlow(ImDrawList* list,
             list->AddText(
                 font, size, ImVec2(pos.x + offsets[i][0], pos.y + offsets[i][1]), col, text);
         }
+    }
+}
+
+// Perf: draws 1 + (samples-1) AddText calls per string (<= 24). Skips far/low
+// alpha labels at the call site. Feathered disc, not a hollow ring.
+void AddTextSoftShadow(ImDrawList* list,
+                       ImFont* font,
+                       float size,
+                       const ImVec2& pos,
+                       const char* text,
+                       ImU32 shadowColor,
+                       float dirX,
+                       float dirY,
+                       float distance,
+                       float softness,
+                       float opacity,
+                       int samples)
+{
+    if (!list || !font || !text || !text[0] || opacity <= .01f)
+    {
+        return;
+    }
+
+    const int baseA = (shadowColor >> IM_COL32_A_SHIFT) & 0xFF;
+    if (baseA < 4)
+    {
+        return;
+    }
+    const int r = (shadowColor >> IM_COL32_R_SHIFT) & 0xFF;
+    const int g = (shadowColor >> IM_COL32_G_SHIFT) & 0xFF;
+    const int b = (shadowColor >> IM_COL32_B_SHIFT) & 0xFF;
+
+    const float cx = pos.x + dirX * distance;
+    const float cy = pos.y + dirY * distance;
+
+    samples = std::clamp(samples, 1, 24);
+
+    // Target peak opacity at full sample overlap. Preserves the per-frame fade
+    // carried in the shadow color's alpha, scaled by the master opacity.
+    const float peak = Saturate((baseA / 255.0f) * opacity);
+
+    // Degenerate cases collapse to a single crisp offset copy.
+    if (samples <= 1 || softness <= .01f)
+    {
+        const int a = std::clamp((int)(peak * 255.0f + .5f), 0, 255);
+        if (a >= 3)
+        {
+            list->AddText(font, size, ImVec2(cx, cy), IM_COL32(r, g, b, a), text);
+        }
+        return;
+    }
+
+    // Per-sample alpha solved so N fully-overlapping samples accumulate to the
+    // target peak under alpha-over compositing: a = 1 - (1 - peak)^(1/N).
+    const float perSample = 1.0f - std::pow(1.0f - peak, 1.0f / (float)samples);
+    const int a = std::clamp((int)(perSample * 255.0f + .5f), 0, 255);
+    if (a < 1)
+    {
+        return;
+    }
+    const ImU32 col = IM_COL32(r, g, b, a);
+
+    // Central tap plus a sunflower (golden-angle) disc so coverage is even for
+    // any sample count -- a filled soft shadow rather than a hollow ring.
+    list->AddText(font, size, ImVec2(cx, cy), col, text);
+    const int ringSamples = samples - 1;
+    for (int i = 0; i < ringSamples; ++i)
+    {
+        const float frac = ((float)i + .5f) / (float)ringSamples;
+        const float rad = softness * std::sqrt(frac);
+        const float ang = (float)i * 2.3999632f;  // golden angle (radians)
+        list->AddText(
+            font, size, ImVec2(cx + std::cos(ang) * rad, cy + std::sin(ang) * rad), col, text);
     }
 }
 
