@@ -29,9 +29,12 @@
  * | `[Display]`        | Format string for nameplate composition  |
  * | `[Appearance]`     | NPC appearance template settings         |
  *
- * @note All struct members have explicit C++ initializers that serve as
- * fallback defaults when the corresponding INI key is absent. Load() overwrites
- * these with values from `glyph.ini` when the key is present.
+ * @note Runtime defaults are defined in the `kSettings` binding table in
+ * `Settings.cpp`.  `Load()` calls `ResetToDefaults()` first, which applies
+ * the `kSettings` defaults to every field, then parses `glyph.ini` to
+ * overwrite any keys that are present.  Struct member initializers shown
+ * below are compile-time placeholders only and may differ from the
+ * operative `kSettings` values.
  *
  * ## :material-refresh: Hot Reload
  *
@@ -141,8 +144,8 @@ struct Segment
  *
  * **Effect Categories:**
  * - Static: None, Gradient, VerticalGradient, DiagonalGradient, RadialGradient
- * - Animated: Shimmer, ChromaticShimmer, PulseGradient, RainbowWave, ConicRainbow, Aurora
- * - Complex: Sparkle, Plasma, Scanline
+ * - Animated: Shimmer, ChromaticShimmer, Ember, RainbowWave, ConicRainbow, Aurora
+ * - Complex: Sparkle, Plasma, Scanline, Enchant, Frost
  *
  * @see EffectParams, TextEffects::ApplyVertexEffect
  */
@@ -329,7 +332,7 @@ struct ShadowOutlineSettings
 
     // Outline Glow (white halo behind outline)
     bool OutlineGlowEnabled = false;   ///< Enable white glow behind text outline
-    float OutlineGlowScale = 1.6f;     ///< Glow radius as multiplier of outline width
+    float OutlineGlowScale = 1.4f;     ///< Glow radius as multiplier of outline width
     float OutlineGlowAlpha = .1f;      ///< Peak glow ring opacity 0-1
     int OutlineGlowRings = 2;          ///< Concentric glow rings (1-3)
     float OutlineGlowR = 1.0f;         ///< Glow color red
@@ -360,6 +363,17 @@ struct GlowSettings
     int Samples = 8;        ///< Quality samples 8-16
 };
 GlowSettings& Glow();
+
+/// Shine overlay effect settings (static top-edge highlight).
+struct ShineSettings
+{
+    bool Enabled = false;    ///< Enable shine overlay on text
+    float Intensity = .35f;  ///< Peak brightness at top edge 0-1
+    float Falloff = 2.0f;    ///< Vertical falloff exponent (higher = sharper)
+    float TextGlowAlpha =
+        .0f;  ///< Translucent text body alpha reduction 0-1 (0=opaque, 1=fully translucent)
+};
+ShineSettings& Shine();
 
 /// Typewriter reveal effect settings.
 struct TypewriterSettings
