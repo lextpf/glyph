@@ -19,13 +19,14 @@
  *
  * Textures are loaded from `Data/SKSE/Plugins/glyph/particles/<type>/`:
  *
- * | Subfolder | Style Index | Description          |
- * |-----------|:-----------:|----------------------|
- * | `stars/`  | 0           | Star sparkle sprites |
- * | `sparks/` | 1           | Spark effect sprites |
- * | `wisps/`  | 2           | Wisp glow sprites    |
- * | `runes/`  | 3           | Magical rune symbols |
- * | `orbs/`   | 4           | Soft glowing orbs    |
+ * | Subfolder    | Style Index | Description             |
+ * |--------------|:-----------:|-------------------------|
+ * | `stars/`     | 0           | Star sparkle sprites    |
+ * | `sparks/`    | 1           | Spark effect sprites    |
+ * | `wisps/`     | 2           | Wisp glow sprites       |
+ * | `runes/`     | 3           | Magical rune symbols    |
+ * | `orbs/`      | 4           | Soft glowing orbs       |
+ * | `crystals/`  | 5           | Crystalline shape sprites |
  *
  * ## :material-image-filter-hdr: Texture Pipeline
  *
@@ -57,9 +58,13 @@
 namespace ParticleTextures
 {
 /// Blend modes for particle sprite rendering.
+///
+/// @note These enum values differ from the INI integer convention
+/// (Settings: 0=Additive, 1=Screen, 2=Alpha).  DrawParticleAura
+/// remaps the INI integer to this enum before calling DrawSpriteWithIndex.
 enum class BlendMode
 {
-    Alpha = 0,     ///< Standard alpha blending (default)
+    Alpha = 0,     ///< Standard alpha blending
     Additive = 1,  ///< Additive blending for bright, glowing particles
     Screen = 2     ///< Screen-like blend for softer luminous sprites
 };
@@ -131,6 +136,14 @@ void DrawSpriteWithIndex(ImDrawList* list,
  * @param dl ImGui draw list
  */
 void PushAdditiveBlend(ImDrawList* dl);
+
+/**
+ * Push screen blend state onto the draw list via callback.
+ * Screen blend: src + dst*(1-src_color). Brightens the background
+ * through colored pixels; black pixels are invisible.
+ * @param dl ImGui draw list
+ */
+void PushScreenBlend(ImDrawList* dl);
 
 /**
  * Reset blend state to ImGui defaults.

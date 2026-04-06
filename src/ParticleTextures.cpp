@@ -615,22 +615,33 @@ static float WispCrescent(float nx, float ny)
     return std::clamp(shape1 * .6f + shape2 * .35f + edge + glow, .0f, 1.0f);
 }
 
-// Organic cloud puff with depth (5 overlapping blobs)
-static float WispCloud(float nx, float ny)
+// Curling fern frond with tapering width and secondary frondlet
+static float WispFernCurl(float nx, float ny)
 {
-    float g1 = PGaussian(std::sqrt((nx - .08f) * (nx - .08f) + (ny + .08f) * (ny + .08f)), .28f);
-    float g2 = PGaussian(std::sqrt((nx + .12f) * (nx + .12f) + (ny - .06f) * (ny - .06f)), .22f);
-    float g3 = PGaussian(std::sqrt((nx - .04f) * (nx - .04f) + (ny + .18f) * (ny + .18f)), .2f);
-    float g4 = PGaussian(std::sqrt((nx + .06f) * (nx + .06f) + (ny - .12f) * (ny - .12f)), .18f);
-    float g5 = PGaussian(std::sqrt((nx - .15f) * (nx - .15f) + (ny - .05f) * (ny - .05f)), .15f);
-    // Blend: max for shape definition, average for soft infill
-    float peak = (std::max)((std::max)(g1, g2), (std::max)(g3, (std::max)(g4, g5)));
-    float avg = (g1 + g2 + g3 + g4 + g5) * .2f;
-    float combined = peak * .5f + avg * .5f;
-    // Subtle bright center
     float r = std::sqrt(nx * nx + ny * ny);
-    float center = PGaussian(r, .1f) * .15f;
-    return std::clamp(combined + center, .0f, 1.0f);
+    float angle = std::atan2(ny, nx);
+    // Fern spine: tighter logarithmic spiral than WispSpiral
+    float spiralAngle = angle - r * 6.0f;
+    spiralAngle = spiralAngle - std::floor(spiralAngle / (2.0f * PROC_PI) + .5f) * 2.0f * PROC_PI;
+    float spiralDist = std::abs(spiralAngle) * r;
+    // Width tapers: thick near center, thin at tip
+    float width = (std::max)(.02f, .12f - r * .1f);
+    float spine = PGaussian(spiralDist, width);
+    // Visible from r=0.08 to r=0.65
+    float radialFade = PSmoothstep(.05f, .12f, r) * PSmoothstep(.65f, .4f, r);
+    // Secondary frondlet at faster winding rate
+    float spiral2Angle = angle - r * 8.0f + 1.2f;
+    spiral2Angle =
+        spiral2Angle - std::floor(spiral2Angle / (2.0f * PROC_PI) + .5f) * 2.0f * PROC_PI;
+    float spiral2Dist = std::abs(spiral2Angle) * r;
+    float frondlet = PGaussian(spiral2Dist, .05f) * PSmoothstep(.15f, .25f, r) *
+                     PSmoothstep(.45f, .35f, r) * .35f;
+    // Curl tip highlight at center
+    float curlTip = PGaussian(r, .06f) * .4f;
+    float core = PGaussian(r, .06f) * .25f;
+    float glow = PGaussian(r, .35f) * .06f;
+    return std::clamp(
+        spine * radialFade * .85f + frondlet * radialFade + curlTip + core + glow, .0f, 1.0f);
 }
 
 // Flowing S-curve tendril with secondary branch
@@ -669,20 +680,111 @@ static float WispSpiral(float nx, float ny)
     return std::clamp(spiral * radialFade * .8f + core + glow, .0f, 1.0f);
 }
 
-// Very diffuse, soft smoke blob
-static float WispSmoke(float nx, float ny)
+// Moth silhouette with paired wing lobes and thin antennae
+static float WispMoth(float nx, float ny)
 {
-    // 7 large, widely-spaced overlapping gaussians
-    float g1 = PGaussian(std::sqrt((nx - .05f) * (nx - .05f) + (ny + .05f) * (ny + .05f)), .35f);
-    float g2 = PGaussian(std::sqrt((nx + .1f) * (nx + .1f) + (ny - .08f) * (ny - .08f)), .3f);
-    float g3 = PGaussian(std::sqrt((nx - .08f) * (nx - .08f) + (ny + .12f) * (ny + .12f)), .28f);
-    float g4 = PGaussian(std::sqrt((nx + .04f) * (nx + .04f) + (ny - .04f) * (ny - .04f)), .32f);
-    float g5 = PGaussian(std::sqrt((nx - .12f) * (nx - .12f) + (ny - .06f) * (ny - .06f)), .25f);
-    float g6 = PGaussian(std::sqrt((nx + .08f) * (nx + .08f) + (ny + .1f) * (ny + .1f)), .22f);
-    float g7 = PGaussian(std::sqrt((nx - .02f) * (nx - .02f) + (ny - .15f) * (ny - .15f)), .2f);
-    float combined = (g1 + g2 + g3 + g4 + g5 + g6 + g7) / 7.0f;
-    // Very soft, no hard peaks
-    return std::clamp(combined * .85f, .0f, 1.0f);
+    float r = std::sqrt(nx * nx + ny * ny);
+    // Left wing: offset and horizontally squeezed ellipse
+    float lwx = (nx + .18f) * 1.6f;
+    float lwDist = std::sqrt(lwx * lwx + ny * ny);
+    float leftWing = PSmoothstep(.35f, .18f, lwDist);
+    // Right wing: mirrored
+    float rwx = (nx - .18f) * 1.6f;
+    float rwDist = std::sqrt(rwx * rwx + ny * ny);
+    float rightWing = PSmoothstep(.35f, .18f, rwDist);
+    // Wing edge glow (bright rim at shape boundary)
+    float leftEdge = PGaussian(lwDist - .27f, .04f) * .4f;
+    float rightEdge = PGaussian(rwDist - .27f, .04f) * .4f;
+    // Thin vertical body at center
+    float body = PGaussian(nx, .04f) * PGaussian(ny, .2f) * .5f;
+    // Diverging antennae from top-center
+    float ant1 = PLineAlpha(PLineDist(nx, ny, .0f, -.05f, -.2f, -.4f), .012f, .01f) * .35f;
+    float ant2 = PLineAlpha(PLineDist(nx, ny, .0f, -.05f, .2f, -.4f), .012f, .01f) * .35f;
+    // Antenna tip dots
+    float tipL =
+        PGaussian(std::sqrt((nx + .2f) * (nx + .2f) + (ny + .4f) * (ny + .4f)), .025f) * .3f;
+    float tipR =
+        PGaussian(std::sqrt((nx - .2f) * (nx - .2f) + (ny + .4f) * (ny + .4f)), .025f) * .3f;
+    float wings = (std::max)(leftWing, rightWing) * .55f + leftEdge + rightEdge;
+    float core = PGaussian(r, .06f) * .3f;
+    return std::clamp(wings + body + ant1 + ant2 + tipL + tipR + core, .0f, 1.0f);
+}
+
+// Water droplet with bright caustic crescent and specular highlight
+static float WispDewdrop(float nx, float ny)
+{
+    float r = std::sqrt(nx * nx + ny * ny);
+    // Soft ring outline
+    float ring = PGaussian(std::abs(r - .4f), .05f) * .5f;
+    // Caustic crescent inside the droplet (offset subtracted circles)
+    float cx = nx + .12f;
+    float cy = ny + .12f;
+    float cd = std::sqrt(cx * cx + cy * cy);
+    float caustic = PSmoothstep(.3f, .18f, r) * (1.0f - PSmoothstep(.35f, .2f, cd));
+    // Soft inner body fill
+    float body = PGaussian(r, .3f) * .3f;
+    // Specular highlight dot (upper-left)
+    float specX = nx + .12f;
+    float specY = ny + .15f;
+    float specDist = std::sqrt(specX * specX + specY * specY);
+    float specular = PGaussian(specDist, .06f) * .6f;
+    // Subtle downward gravity glow
+    float gravity = PGaussian(nx, .2f) * PSmoothstep(-.1f, .3f, ny) * PGaussian(r, .4f) * .15f;
+    float core = PGaussian(r, .06f) * .25f;
+    float glow = PGaussian(r, .5f) * .06f;
+    return std::clamp(ring + caustic * .65f + body + specular + gravity + core + glow, .0f, 1.0f);
+}
+
+// Bright offset core with three diverging trail lines
+static float WispFirefly(float nx, float ny)
+{
+    // Off-center core
+    float ox = nx + .1f;
+    float oy = ny - .05f;
+    float offR = std::sqrt(ox * ox + oy * oy);
+    // Bright concentrated core
+    float core = std::pow(PGaussian(offR, .05f), .4f) * .7f;
+    float innerGlow = PGaussian(offR, .15f) * .35f;
+    // Three trail lines radiating from core at asymmetric angles
+    // Fade trails outward from core center
+    float radFade = PSmoothstep(.0f, .15f, offR);
+    float radFadeShort = PSmoothstep(.0f, .1f, offR);
+    float t1 = PLineAlpha(PLineDist(nx, ny, -.1f, .05f, .35f, -.3f), .018f, .015f);
+    float t2 = PLineAlpha(PLineDist(nx, ny, -.1f, .05f, .3f, .4f), .015f, .012f);
+    float t3 = PLineAlpha(PLineDist(nx, ny, -.1f, .05f, -.45f, .15f), .012f, .01f) * .5f;
+
+    float trails = t1 * radFade * .4f + t2 * radFade * .35f + t3 * radFadeShort * .2f;
+    float outerGlow = PGaussian(offR, .4f) * .08f;
+    return std::clamp(core + innerGlow + trails + outerGlow, .0f, 1.0f);
+}
+
+// Cluster of 5 pollen motes drifting along a gentle arc
+static float WispPollenDrift(float nx, float ny)
+{
+    float r = std::sqrt(nx * nx + ny * ny);
+    // 5 mote positions along a gentle arc
+    const float mx[] = {-.18f, -.08f, .02f, .1f, .06f};
+    const float my[] = {-.22f, -.08f, .05f, .18f, .32f};
+    const float ms[] = {.06f, .05f, .07f, .045f, .055f};
+    float motes = .0f;
+    for (int i = 0; i < 5; ++i)
+    {
+        float dx = nx - mx[i];
+        float dy = ny - my[i];
+        float d = std::sqrt(dx * dx + dy * dy);
+        float moteCore = std::pow(PGaussian(d, ms[i] * .4f), .5f) * .5f;
+        float moteHalo = PGaussian(d, ms[i]) * .6f;
+        motes = (std::max)(motes, moteCore + moteHalo);
+    }
+    // Faint connecting glow between consecutive motes
+    float connGlow = .0f;
+    for (int i = 0; i < 4; ++i)
+    {
+        float seg = PLineDist(nx, ny, mx[i], my[i], mx[i + 1], my[i + 1]);
+        connGlow = (std::max)(connGlow, PGaussian(seg, .06f) * .12f);
+    }
+    float overallGlow = PGaussian(r, .4f) * .05f;
+    return std::clamp(motes + connGlow + overallGlow, .0f, 1.0f);
 }
 
 // ---- Runes ----
@@ -1026,7 +1128,14 @@ static const PPixelFn kStarGens[] = {
     Star4Cross, Star6Point, StarDiamond, StarFlare, StarCompass, StarPinwheel, StarNova};
 static const PPixelFn kSparkGens[] = {
     SparkEmber, SparkFlash, SparkShard, SparkComet, SparkCrackle, SparkFirefly};
-static const PPixelFn kWispGens[] = {WispCrescent, WispCloud, WispTendril, WispSpiral, WispSmoke};
+static const PPixelFn kWispGens[] = {WispCrescent,
+                                     WispFernCurl,
+                                     WispTendril,
+                                     WispSpiral,
+                                     WispMoth,
+                                     WispDewdrop,
+                                     WispFirefly,
+                                     WispPollenDrift};
 static const PPixelFn kRuneGens[] = {
     RuneWard, RuneTriangle, RuneDiamond, RuneRings, RunePentagram, RuneEye};
 static const PPixelFn kOrbGens[] = {OrbGaussian, OrbRinged, OrbHalo, OrbPulsar, OrbNebula};
@@ -1041,7 +1150,7 @@ struct GenArray
 static const GenArray kAllGens[NUM_TYPES] = {
     {kStarGens, 7},     // Stars
     {kSparkGens, 6},    // Sparks
-    {kWispGens, 5},     // Wisps
+    {kWispGens, 8},     // Wisps
     {kRuneGens, 6},     // Runes
     {kOrbGens, 5},      // Orbs
     {kCrystalGens, 4},  // Crystals
@@ -1521,6 +1630,14 @@ void PushAdditiveBlend(ImDrawList* dl)
     if (dl && s_AdditiveBlend)
     {
         dl->AddCallback(SetBlendCallback, s_AdditiveBlend.Get());
+    }
+}
+
+void PushScreenBlend(ImDrawList* dl)
+{
+    if (dl && s_ScreenBlend)
+    {
+        dl->AddCallback(SetBlendCallback, s_ScreenBlend.Get());
     }
 }
 
