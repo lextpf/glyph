@@ -111,7 +111,9 @@ graph LR
 
 ### Tier System
 
-Customizable tiers with unique visual styles per level range:
+Customizable tiers with unique visual styles per level range. Tier palettes
+and effects style the **player** nameplate (and special titles); NPCs render
+simple white-leaning text so the world stays readable (see *NPC Colors*).
 
 | Tier |   Default Title   | Style                      |
 |------|-------------------|----------------------------|
@@ -127,7 +129,7 @@ Customizable tiers with unique visual styles per level range:
 - 🌟 **Glow effects** - Soft bloom for readability
 - ⌨️ **Typewriter reveal** - Characters appear one-by-one
 - 🌿 **Side ornaments** - Ornate scrollwork for high tiers
-- ✨ **Particle auras** - Stars, sparks, wisps, runes, orbs
+- ✨ **Particle auras** - Hand-made pixel-art weather sprites: fireflies, rain, snow, smoke, sparks, wisps, leaves, aurora, cherry blossoms, dust, motes
 
 ## Technology Stack
 
@@ -199,11 +201,11 @@ graph LR
     end
 
     subgraph Particles["💫 Particle Aura"]
-        STAR["⭐ Stars"]:::particles
-        SPARK["🔥 Sparks"]:::particles
-        WISP["👻 Wisps"]:::particles
-        RUNE["🔮 Runes"]:::particles
-        ORB["🔵 Orbs"]:::particles
+        FIREFLY["🪰 Firefly"]:::particles
+        RAINSNOW["🌧️ Rain / Snow"]:::particles
+        SMOKE["💨 Smoke / Spark"]:::particles
+        FLORA["🍃 Leaf / Cherry blossom"]:::particles
+        AURORA["🌌 Aurora / Wisp / Mote"]:::particles
     end
 
     subgraph Tiers["🏅 Tier Definitions"]
@@ -216,6 +218,60 @@ graph LR
         PLUGIN["📦 TemplatePlugin"]:::template
     end
 ```
+
+### NPC Colors
+
+NPC nameplates use flat, white-leaning text — the tier palettes apply only
+to the player and special titles. The name color follows the actor's
+relationship to the player; merely talkable civilians stay plain white.
+
+```ini
+NpcNeutralColor  = 1.0, 1.0, 1.0      ; neutral + talkable civilians
+NpcHostileColor  = 1.0, 0.72, 0.68    ; slight warm lean for hostiles
+NpcFollowerColor = 0.72, 0.84, 1.0    ; slight cool lean for teammates
+NpcLevelColor    = 0.82, 0.84, 0.88   ; dimmed silver level readout
+NpcTitleColor    = 0.92, 0.93, 0.95   ; soft white title text
+```
+
+### Status Icon Badges
+
+Relationship, threat, and creature type render as a compact strip of icon
+indicators centered above the title row (replacing the old text info row).
+Icons are [Font Awesome](https://fontawesome.com/) **duotone SVGs**
+rasterized at load time (via nanosvg) from `IconFolder` — each `Icon*`
+value is an SVG file name without the extension, so any icon dropped into
+the folder works. Duotone layer opacities are preserved and the badge's
+semantic color is applied as a tint.
+
+> **Note:** the duotone icon set used during development is Font Awesome
+> Pro and is **not** part of this repository. Point `IconFolder` at any
+> folder of FA-style SVGs (Font Awesome Free's duotone-compatible SVG
+> downloads work too).
+
+```ini
+[Icons]
+IconFolder      = Data/SKSE/Plugins/glyph/duotone
+IconsEnabled    = true
+IconScale       = 1.0         ; badge size relative to the level font
+IconDeadlyPulse = true        ; subtle pulse on the Deadly skull
+; Icon names are SVG file names (no extension); empty hides a badge.
+; Indicators render left-to-right: relationship, threat, creature.
+IconFollower = shield-halved      ; relationship (light blue)
+IconAlly     = handshake          ; relationship (green)
+IconHostile  = skull-crossbones   ; relationship (red)
+IconWeak     = caret-down         ; threat (gray)
+IconStrong   = caret-up           ; threat (orange)
+IconDeadly   = skull              ; threat (red, pulsing)
+IconBeast    = paw                ; creature
+IconUndead   = ghost
+IconDaedra   = fire
+IconDragon   = dragon
+; Colors as R,G,B floats: IconFollowerColor, IconAllyColor, IconHostileColor,
+; IconWeakColor, IconStrongColor, IconDeadlyColor, IconCreatureColor
+```
+
+The legacy text row is still available: set `InfoFormat` explicitly (e.g.
+`InfoFormat = "%r?","  • %d?","  • %c?"`) and it renders as before.
 
 ## Building
 
@@ -347,6 +403,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) f
 - [Claude](https://claude.ai/) - AI coding assistant by Anthropic
 - [Codex](https://openai.com/index/openai-codex/) - AI coding assistant by OpenAI
 - [Sora](https://openai.com/sora/) - Graphics generation
+- [Font Awesome](https://fontawesome.com/) - Status badge icon artwork (duotone SVGs; Pro assets are not redistributed with this project)
+- [NanoSVG](https://github.com/memononen/nanosvg) - SVG parsing and rasterization for badge icons
 
 
 
