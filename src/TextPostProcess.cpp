@@ -535,8 +535,8 @@ void OnResize(uint32_t width, uint32_t height)
 
     s_FullWidth = width;
     s_FullHeight = height;
-    s_BlurWidth = (std::max)(width * 3u / 4u, 1u);
-    s_BlurHeight = (std::max)(height * 3u / 4u, 1u);
+    s_BlurWidth = (std::max)(width / 2u, 1u);
+    s_BlurHeight = (std::max)(height / 2u, 1u);
 
     bool ok = CreateRenderTarget(s_BlurWidth, s_BlurHeight, s_RT_A, s_RTV_A, s_SRV_A) &&
               CreateRenderTarget(s_BlurWidth, s_BlurHeight, s_RT_B, s_RTV_B, s_SRV_B);
@@ -547,7 +547,7 @@ void OnResize(uint32_t width, uint32_t height)
     }
     else
     {
-        logger::info("TextPostProcess: Render targets created ({}x{} 3/4-res from {}x{})",
+        logger::info("TextPostProcess: Render targets created ({}x{} 1/2-res from {}x{})",
                      s_BlurWidth,
                      s_BlurHeight,
                      width,
@@ -650,7 +650,7 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
 
     // Bias slightly wider so the background glow diffuses into a soft veil
     // instead of resolving as a hard plate behind the text.
-    const float sigma = (std::max)(0.90f, s_GlowRadius * .36f);
+    const float sigma = (std::max)(1.0f, s_GlowRadius * .48f);
 
     // Unbind RT A as target, we'll read from it
     ID3D11RenderTargetView* nullRTV = nullptr;
