@@ -400,4 +400,41 @@ void AddTextOutline4ConicRainbow(ImDrawList* list,
     }
 }
 
+void AddTextShineOverlay(ImDrawList* list,
+                         ImFont* font,
+                         float size,
+                         const ImVec2& pos,
+                         const char* text,
+                         float intensity,
+                         float falloff,
+                         ImU32 shineColor)
+{
+    TextVertexSetup s;
+    if (!TextVertexSetup::Begin(s, list, font, size, pos, text))
+    {
+        return;
+    }
+
+    // Extract shine color RGB, we'll modulate alpha per-vertex
+    const int sr = (shineColor >> IM_COL32_R_SHIFT) & 0xFF;
+    const int sg = (shineColor >> IM_COL32_G_SHIFT) & 0xFF;
+    const int sb = (shineColor >> IM_COL32_B_SHIFT) & 0xFF;
+
+    for (int i = s.vtxStart; i < s.vtxEnd; ++i)
+    {
+        const float v = s.normalizedY(list->VtxBuffer[i].pos.y);
+
+        // Top-edge highlight: brightest at top (v=0), fading down
+        float shine = std::pow(1.0f - Saturate(v), falloff) * intensity;
+
+        // Slight horizontal variation for natural feel
+        const float t = s.normalizedX(list->VtxBuffer[i].pos.x);
+        float hMod = 1.0f - .15f * (2.0f * t - 1.0f) * (2.0f * t - 1.0f);
+        shine *= hMod;
+
+        const int a = (int)std::clamp(shine * 255.0f, .0f, 255.0f);
+        list->VtxBuffer[i].col = IM_COL32(sr, sg, sb, a);
+    }
+}
+
 }  // namespace TextEffects

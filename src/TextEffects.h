@@ -18,8 +18,8 @@
  * ## :material-palette-swatch-variant: Effect Categories
  *
  * - **Gradients**: Horizontal, Vertical, Diagonal, Radial
- * - **Animated**: Shimmer, Pulse, RainbowWave, ConicRainbow
- * - **Complex**: Aurora, Sparkle, Plasma, Scanline
+ * - **Animated**: Shimmer, ChromaticShimmer, Ember, RainbowWave, ConicRainbow, Aurora
+ * - **Complex**: Sparkle, Plasma, Scanline, Enchant, Frost
  * - **Utility**: Outline, Glow
  *
  * ## :material-sort-variant: Rendering Order
@@ -111,6 +111,15 @@ void DrawOutline(ImDrawList* list,
                  ImU32 outline,
                  float w,
                  bool fastOutlines);
+
+/// Parameters for shine overlay effect (static top-edge highlight).
+struct ShineParams
+{
+    bool enabled = false;
+    float intensity = .35f;     ///< Peak brightness at top edge
+    float falloff = 2.0f;       ///< Vertical falloff exponent
+    float textGlowAlpha = .0f;  ///< Text body translucency 0-1 (0=opaque, 1=fully see-through)
+};
 
 /// Parameters for wave displacement effect.
 struct WaveParams
@@ -411,20 +420,22 @@ void AddTextRadialGradient(ImDrawList* list,
                            ImVec2* overrideCenter = nullptr);
 
 /**
- * Draw text with pulsing brightness.
+ * Draw text with warm ember/fire flickering effect.
  *
- * Gradient colors oscillate in brightness over time using sine wave modulation.
+ * Creates an organic heat glow using multiple overlapping sine-noise layers
+ * with per-character phase variation.  Bright spots use a warm highlight
+ * derived from the first color, and a vertical heat gradient makes the
+ * bottom of the text appear hotter.
  *
  * @param list ImGui draw list to render to.
  * @param font Font to use for rendering.
  * @param size Font size in pixels.
  * @param pos Top-left position for text.
  * @param text Null-terminated UTF-8 string to render.
- * @param a First gradient color.
- * @param b Second gradient color.
- * @param time Current time in seconds (typically from ImGui::GetTime()).
- * @param freqHz Pulse frequency in Hz (cycles per second).
- * @param amp Pulse amplitude [0, 1] (0 = no pulse, 1 = full range).
+ * @param colA First gradient color (warm base).
+ * @param colB Second gradient color (cool base).
+ * @param speed Flicker animation speed multiplier.
+ * @param intensity Brightness of the warm highlights [0, 1].
  *
  * @pre list != nullptr
  * @pre font != nullptr
@@ -819,7 +830,28 @@ void AddTextScanline(ImDrawList* list,
                      float width,
                      float intensity);
 
-/// Draw text with flowing magical energy effect using FBM noise.
+/**
+ * Draw text with flowing magical energy effect.
+ *
+ * Uses Fractal Brownian Motion (FBM) noise to create smooth, organic
+ * energy patterns that flow across the text surface.  Two offset noise
+ * layers combine for a richer, non-repeating flow.
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position for text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param colA First energy color.
+ * @param colB Second energy color.
+ * @param speed Animation speed multiplier.
+ * @param scale Noise scale (higher = finer detail).
+ * @param intensity Color blend intensity [0, 1].
+ *
+ * @pre list != nullptr
+ * @pre font != nullptr
+ * @pre text != nullptr
+ */
 void AddTextEnchant(ImDrawList* list,
                     ImFont* font,
                     float size,
@@ -831,7 +863,27 @@ void AddTextEnchant(ImDrawList* list,
                     float scale,
                     float intensity);
 
-/// Draw text with crystalline frost pattern and sparkle flashes.
+/**
+ * Draw text with crystalline frost pattern and sparkle flashes.
+ *
+ * Combines a creeping frost overlay (hash-based crystalline noise)
+ * with twinkling sparkle highlights for an icy appearance.
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position for text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param colA First frost color.
+ * @param colB Second frost color.
+ * @param density Frost coverage [0, 1] (higher = more ice).
+ * @param speed Animation speed multiplier.
+ * @param sparkleIntensity Brightness of sparkle flashes [0, 1].
+ *
+ * @pre list != nullptr
+ * @pre font != nullptr
+ * @pre text != nullptr
+ */
 void AddTextFrost(ImDrawList* list,
                   ImFont* font,
                   float size,
@@ -842,6 +894,21 @@ void AddTextFrost(ImDrawList* list,
                   float density,
                   float speed,
                   float sparkleIntensity);
+
+/// Draw a static top-edge shine overlay on top of already-rendered text.
+/// Simulates overhead lighting by brightening vertices near the top of
+/// each glyph. Intended to be rendered with additive blending.
+/// @param intensity Peak brightness at top edge [0, 1].
+/// @param falloff   Vertical falloff exponent (higher = sharper highlight edge).
+/// @param shineColor Highlight tint color (typically white).
+void AddTextShineOverlay(ImDrawList* list,
+                         ImFont* font,
+                         float size,
+                         const ImVec2& pos,
+                         const char* text,
+                         float intensity,
+                         float falloff,
+                         ImU32 shineColor);
 
 /**
  * Draw soft glow/bloom effect behind text.

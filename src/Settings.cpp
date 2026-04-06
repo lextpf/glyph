@@ -109,6 +109,12 @@ GlowSettings& Glow()
     return s;
 }
 
+ShineSettings& Shine()
+{
+    static ShineSettings s;
+    return s;
+}
+
 TypewriterSettings& Typewriter()
 {
     static TypewriterSettings s;
@@ -229,6 +235,12 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"GlowRadius",             "", &Glow().Radius,                    4.0f,     MinFloat{.0f}},
     {"GlowIntensity",          "", &Glow().Intensity,                 .5f,      ClampFloat{.0f, 1.0f}},
     {"GlowSamples",            "", &Glow().Samples,                   8,        ClampInt{1, 64}},
+
+    // Shine Overlay
+    {"EnableShine",            "", &Shine().Enabled,                  false,    NoClamping{}},
+    {"ShineIntensity",         "", &Shine().Intensity,                .35f,     ClampFloat{.0f, 1.0f}},
+    {"ShineFalloff",           "", &Shine().Falloff,                  2.0f,     ClampFloat{.5f, 8.0f}},
+    {"TextGlowAlpha",          "", &Shine().TextGlowAlpha,            .0f,      ClampFloat{.0f, 1.0f}},
 
     // Typewriter
     {"EnableTypewriter",       "", &Typewriter().Enabled,             false,    NoClamping{}},
