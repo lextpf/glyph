@@ -76,4 +76,26 @@ void BeginGlowCapture(const ImDrawList* dl, const ImDrawCmd* cmd);
  * Add to draw list after all glow text draws.
  */
 void EndGlowAndComposite(const ImDrawList* dl, const ImDrawCmd* cmd);
+
+/**
+ * Set Color Divide parameters for the current frame.
+ * Call before rendering begins.
+ *
+ * @param strength Blend strength [0, 1] (0=normal composite, 1=full divide)
+ */
+void SetDivideParams(float strength);
+
+/**
+ * ImDrawCallback: snapshot the backbuffer, then switch render target to
+ * the divide capture RT and clear it.
+ * Add to draw list before all nametag draws (outermost bracket).
+ */
+void BeginDivideCapture(const ImDrawList* dl, const ImDrawCmd* cmd);
+
+/**
+ * ImDrawCallback: composite the captured nametag RT onto the backbuffer
+ * using Photoshop-style Color Divide (background / foreground).
+ * Add to draw list after all nametag draws.
+ */
+void EndDivideAndComposite(const ImDrawList* dl, const ImDrawCmd* cmd);
 }  // namespace TextPostProcess
