@@ -37,26 +37,10 @@
 
 // SKSE message handler - key lifecycle states:
 // - kDataLoaded: register console commands, retry NiOverride
-// - kPostLoadGame / kNewGame: queue pending appearance template apply
+// - kPostLoadGame / kNewGame: no auto-apply; the appearance template is applied
+//   only via the 'glyph appearance on' console command.
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
-    auto readTemplateSettingsSnapshot = []()
-    {
-        struct Snapshot
-        {
-            bool enabled = false;
-            std::string formID;
-            std::string plugin;
-        } snapshot;
-
-        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
-        const auto& app = Settings::Appearance();
-        snapshot.enabled = app.UseTemplateAppearance;
-        snapshot.formID = app.TemplateFormID;
-        snapshot.plugin = app.TemplatePlugin;
-        return snapshot;
-    };
-
     switch (a_msg->type)
     {
         case SKSE::MessagingInterface::kPostLoad:
@@ -76,37 +60,16 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
             break;
 
         case SKSE::MessagingInterface::kPostLoadGame:
-            // Loading a save, player should be available soon
+            // Loading a save. The appearance template is never auto-applied;
+            // trigger it on demand with the 'glyph appearance on' console command.
             logger::debug("Post load game event received");
-            if (readTemplateSettingsSnapshot().enabled)
-            {
-                AppearanceTemplate::ResetAppliedFlag();
-                AppearanceTemplate::SetPendingAppearanceApply();
-            }
-            // Test overlay interface after game load
             AppearanceTemplate::TestOverlayOnPlayer();
             break;
 
         case SKSE::MessagingInterface::kNewGame:
-            // New game, player won't exist until after character creation
-            {
-                const auto snapshot = readTemplateSettingsSnapshot();
-                logger::debug("New game event received - will apply after character creation");
-                logger::info("UseTemplateAppearance={}, FormID={}, Plugin={}",
-                             snapshot.enabled,
-                             snapshot.formID,
-                             snapshot.plugin);
-                if (snapshot.enabled)
-                {
-                    AppearanceTemplate::ResetAppliedFlag();
-                    AppearanceTemplate::SetPendingAppearanceApply();
-                    logger::info("Pending appearance flag set to TRUE");
-                }
-                else
-                {
-                    logger::warn("UseTemplateAppearance is FALSE, not setting pending flag");
-                }
-            }
+            // New game. The appearance template is never auto-applied; trigger it
+            // on demand with the 'glyph appearance on' console command.
+            logger::debug("New game event received");
             break;
     }
 }
