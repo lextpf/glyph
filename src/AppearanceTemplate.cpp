@@ -374,6 +374,16 @@ bool ApplyIfConfigured()
            ApplyResult::Applied;
 }
 
+bool ApplyConfiguredNow()
+{
+    ApplyConfig cfg = BuildConfigFromSettings();
+    // Force-apply: ignore the UseTemplateAppearance gate and any prior applied
+    // state so the console command always applies the INI-configured target.
+    cfg.useTemplateAppearance = true;
+    SetAppliedState(false);
+    return ApplyTemplateCore(cfg, /*forceApply=*/true) == ApplyResult::Applied;
+}
+
 bool ApplyWithTarget(const std::string& formIdStr, const std::string& pluginName)
 {
     ApplyConfig cfg = BuildConfigFromSettings();
@@ -386,183 +396,4 @@ bool ApplyWithTarget(const std::string& formIdStr, const std::string& pluginName
     return ApplyTemplateCore(cfg, /*forceApply=*/true) == ApplyResult::Applied;
 }
 
-static std::atomic<bool> s_pendingAppearanceApply{false};
-static std::atomic<int> s_checkCount{0};
-static std::atomic<int> s_readyStreak{0};
-static std::atomic<int> s_applyAttempts{0};
-
-void SetPendingAppearanceApply()
-{
-    s_pendingAppearanceApply.store(true);
-    s_checkCount.store(0);
-    s_readyStreak.store(0);
-    s_applyAttempts.store(0);
-}
-
-// @author Claude (https://github.com/claude)
-// SKSE kPostLoadGame / kNewGame fire long before the player is *visually*
-// ready: cell still attaching, player 3D may be unloaded, Race / Fader menus
-// may be active, and tint / FaceGen swaps in that window flicker or get
-// clobbered by the engine's own init. No clean SKSE "fully loaded" event,
-// so we poll.
-//
-// Two counters:
-//   s_checkCount  - total polls since the apply was requested (diagnostic
-//                   logging cadence only).
-//   s_readyStreak - consecutive polls where the readiness predicate is TRUE;
-//                   reset on any FALSE to debounce transient unloads (e.g.
-//                   a one-frame menu).
-//
-// 120-frame stable streak (~2s at 60fps) is the empirical minimum where
-// outfit / FaceGen copies stick across fade-in. Lower values let the engine
-// re-apply the player's default tint a few frames in and revert FaceGen.
-void CheckPendingAppearanceTemplate()
-{
-    static std::atomic<bool> loggedOnce{false};
-    if (!loggedOnce.exchange(true, std::memory_order_relaxed))
-    {
-        logger::info("CheckPendingAppearanceTemplate called for first time");
-    }
-
-    if (!s_pendingAppearanceApply.load())
-    {
-        return;
-    }
-
-    int count = s_checkCount.fetch_add(1) + 1;
-
-    auto player = RE::PlayerCharacter::GetSingleton();
-    auto playerBase = player ? player->GetActorBase() : nullptr;
-    auto* playerCell = player ? player->GetParentCell() : nullptr;
-    bool isCellAttached = playerCell && playerCell->IsAttached();
-    bool is3DLoaded = player ? player->Is3DLoaded() : false;
-    bool gameActive = true;
-    if (auto* main = RE::Main::GetSingleton())
-    {
-        gameActive = main->gameActive;
-    }
-
-    const char* blockingMenu = nullptr;
-    if (auto* ui = RE::UI::GetSingleton())
-    {
-        static constexpr const char* BLOCKING_MENUS[] = {
-            "Loading Menu",
-            "Main Menu",
-            "Fader Menu",
-            "RaceSex Menu",
-            "MessageBoxMenu",
-            "Menu",
-            "TweenMenu",
-        };
-        for (const auto* menu : BLOCKING_MENUS)
-        {
-            if (ui->IsMenuOpen(menu))
-            {
-                blockingMenu = menu;
-                break;
-            }
-        }
-    }
-
-    const bool ready = gameActive && player != nullptr && playerBase != nullptr && isCellAttached &&
-                       is3DLoaded && blockingMenu == nullptr;
-
-    int readyStreak = 0;
-    if (ready)
-    {
-        readyStreak = s_readyStreak.fetch_add(1) + 1;
-    }
-    else
-    {
-        s_readyStreak.store(0);
-    }
-
-    const bool shouldLog = (count % 60 == 0) || (ready && readyStreak == 1);
-    if (shouldLog)
-    {
-        logger::debug(
-            "Appearance check #{}: player={}, base={}, cellAttached={}, 3D={}, gameActive={}, "
-            "blockingMenu={}, readyStreak={}",
-            count,
-            player != nullptr,
-            playerBase != nullptr,
-            isCellAttached,
-            is3DLoaded,
-            gameActive,
-            blockingMenu ? blockingMenu : "<none>",
-            readyStreak);
-    }
-
-    constexpr int REQUIRED_READY_STREAK = 120;
-    if (ready && readyStreak >= REQUIRED_READY_STREAK)
-    {
-        logger::info("Player ready after {} checks, applying appearance template", count);
-        s_pendingAppearanceApply.store(false);
-        s_checkCount.store(0);
-        s_readyStreak.store(0);
-        if (auto* task = SKSE::GetTaskInterface())
-        {
-            task->AddTask(
-                []()
-                {
-                    constexpr int MAX_RETRYABLE_ATTEMPTS = 6;
-                    ApplyResult result =
-                        ApplyTemplateCore(BuildConfigFromSettings(), /*forceApply=*/false);
-                    if (result == ApplyResult::RetryableFailure)
-                    {
-                        int attempts = s_applyAttempts.fetch_add(1) + 1;
-                        if (attempts < MAX_RETRYABLE_ATTEMPTS)
-                        {
-                            logger::info(
-                                "AppearanceTemplate: Transient apply failure, retrying ({}/{})",
-                                attempts,
-                                MAX_RETRYABLE_ATTEMPTS);
-                            s_pendingAppearanceApply.store(true);
-                            s_checkCount.store(0);
-                            s_readyStreak.store(0);
-                        }
-                        else
-                        {
-                            logger::warn(
-                                "AppearanceTemplate: Giving up after {} transient apply retries",
-                                attempts);
-                            s_applyAttempts.store(0);
-                        }
-                    }
-                    else
-                    {
-                        s_applyAttempts.store(0);
-                    }
-                });
-        }
-        else
-        {
-            constexpr int MAX_RETRYABLE_ATTEMPTS = 6;
-            ApplyResult result = ApplyTemplateCore(BuildConfigFromSettings(), /*forceApply=*/false);
-            if (result == ApplyResult::RetryableFailure)
-            {
-                int attempts = s_applyAttempts.fetch_add(1) + 1;
-                if (attempts < MAX_RETRYABLE_ATTEMPTS)
-                {
-                    logger::info("AppearanceTemplate: Transient apply failure, retrying ({}/{})",
-                                 attempts,
-                                 MAX_RETRYABLE_ATTEMPTS);
-                    s_pendingAppearanceApply.store(true);
-                    s_checkCount.store(0);
-                    s_readyStreak.store(0);
-                }
-                else
-                {
-                    logger::warn("AppearanceTemplate: Giving up after {} transient apply retries",
-                                 attempts);
-                    s_applyAttempts.store(0);
-                }
-            }
-            else
-            {
-                s_applyAttempts.store(0);
-            }
-        }
-    }
-}
 }  // namespace AppearanceTemplate

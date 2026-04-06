@@ -143,6 +143,20 @@ void ResetAppliedFlag();
 bool ApplyWithTarget(const std::string& formIdStr, const std::string& pluginName);
 
 /**
+ * @brief Force-apply the template appearance using the INI-configured target,
+ * bypassing the `UseTemplateAppearance` gate and the per-session "already
+ * applied" guard.
+ *
+ * Equivalent to ApplyWithTarget() but reads the FormID/plugin from the INI
+ * `[Appearance]` section instead of taking them as arguments. Intended for the
+ * no-arg `glyph appearance on` console command so a manual apply always runs
+ * regardless of settings (the template is never auto-applied).
+ *
+ * @return true on successful apply.
+ */
+bool ApplyConfiguredNow();
+
+/**
  * @brief Returns true if a template appearance has been applied in the
  * current session.
  *
@@ -201,23 +215,6 @@ void UpdatePlayerAppearance();
  * @return true if races are compatible, false otherwise
  */
 bool IsRaceCompatible(RE::TESNPC* templateNPC);
-
-/**
- * @brief Poll for player readiness and apply pending appearance template.
- *
- * Called each frame from the render hook. If a pending apply was requested
- * (via SetPendingAppearanceApply), waits until the player is fully loaded
- * and then applies the template.
- */
-void CheckPendingAppearanceTemplate();
-
-/**
- * @brief Request that the appearance template be applied when the player is ready.
- *
- * Sets the pending flag so that CheckPendingAppearanceTemplate() will apply
- * the template once the player character is fully initialized.
- */
-void SetPendingAppearanceApply();
 
 /**
  * @brief No-op stub. Overlay system not implemented.
