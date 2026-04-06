@@ -184,11 +184,12 @@ void HandleAppearanceStatus()
 
 void HandleAppearanceOn(const std::vector<std::string>& tokens, size_t argIdx)
 {
-    // No target args: use INI-configured FormID/plugin.
+    // No target args: force-apply the INI-configured FormID/plugin. Uses
+    // ApplyConfiguredNow so it works even with UseTemplateAppearance disabled --
+    // the template is never auto-applied, so the console command is the trigger.
     if (argIdx >= tokens.size())
     {
-        AppearanceTemplate::ResetAppliedFlag();
-        ReportApplyResult(AppearanceTemplate::ApplyIfConfigured());
+        ReportApplyResult(AppearanceTemplate::ApplyConfiguredNow());
         return;
     }
 
