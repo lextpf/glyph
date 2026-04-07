@@ -279,6 +279,25 @@ static void ComputeTierColors(LabelStyle& style,
         Vivify(style.RcTitle, style.Rc);
     }
 
+    // Global saturation boost: pull all text body colors away from gray
+    if (snap.textSaturationBoost > .0f)
+    {
+        const float s = 1.0f + snap.textSaturationBoost;
+        auto BoostSat = [s](ImVec4& c)
+        {
+            float gray = c.x * .299f + c.y * .587f + c.z * .114f;
+            c.x = std::clamp(gray + (c.x - gray) * s, .0f, 1.0f);
+            c.y = std::clamp(gray + (c.y - gray) * s, .0f, 1.0f);
+            c.z = std::clamp(gray + (c.z - gray) * s, .0f, 1.0f);
+        };
+        BoostSat(style.LcName);
+        BoostSat(style.RcName);
+        BoostSat(style.LcLevel);
+        BoostSat(style.RcLevel);
+        BoostSat(style.LcTitle);
+        BoostSat(style.RcTitle);
+    }
+
     // Pack colors to ImU32
     style.colL = ImGui::ColorConvertFloat4ToU32(
         ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, alpha));

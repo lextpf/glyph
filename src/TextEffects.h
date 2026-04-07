@@ -116,9 +116,10 @@ void DrawOutline(ImDrawList* list,
 struct ShineParams
 {
     bool enabled = false;
-    float intensity = .35f;     ///< Peak brightness at top edge
-    float falloff = 2.0f;       ///< Vertical falloff exponent
-    float textGlowAlpha = .0f;  ///< Text body translucency 0-1 (0=opaque, 1=fully see-through)
+    float intensity = .35f;       ///< Peak brightness at top edge
+    float falloff = 2.0f;         ///< Vertical falloff exponent
+    float textGlowAlpha = .0f;    ///< Text body translucency 0-1 (0=opaque, 1=fully see-through)
+    float innerTextAlpha = 1.0f;  ///< Text body alpha multiplier 0-1 (applied after effects)
 };
 
 /// Parameters for wave displacement effect.

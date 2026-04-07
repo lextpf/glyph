@@ -304,6 +304,8 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"ScaleSettleTime",        "", &AnimColor().ScaleSettleTime,      .46f,     MinFloat{.01f}},
     {"PositionSettleTime",     "", &AnimColor().PositionSettleTime,   .38f,     MinFloat{.01f}},
     {"TierVibrancyBoost",      "", &AnimColor().TierVibrancyBoost,    .0f,      ClampFloat{.0f, 1.0f}},
+    {"InnerTextAlpha",         "", &AnimColor().InnerTextAlpha,        1.0f,     ClampFloat{.0f, 1.0f}},
+    {"TextSaturationBoost",    "", &AnimColor().TextSaturationBoost,   .0f,      ClampFloat{.0f, 2.0f}},
 
     // Visual sub-settings (via Visual() singleton)
     {"EnableDistanceOutlineScale", "", &Visual().EnableDistanceOutlineScale, false, NoClamping{}},
