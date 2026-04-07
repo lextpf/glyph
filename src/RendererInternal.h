@@ -129,6 +129,8 @@ struct RenderSettingsSnapshot
     float strengthMin = .0f;
     float strengthMax = .0f;
     float tierVibrancyBoost = .0f;
+    float innerTextAlpha = 1.0f;
+    float textSaturationBoost = .0f;
 
     // Smoothing
     float alphaSettleTime = .0f;

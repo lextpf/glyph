@@ -505,6 +505,7 @@ static void DrawLabel(const ActorDrawData& d,
                     float ghostAlpha =
                         snap.visual.TrailAlpha * std::pow(1.0f - t, snap.visual.TrailFalloff);
                     ghostAlpha *= style.alpha;
+                    ghostAlpha *= snap.innerTextAlpha;
                     if (ghostAlpha < .01f)
                     {
                         continue;
@@ -923,6 +924,8 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.strengthMin = ac.StrengthMin;
     snap.strengthMax = ac.StrengthMax;
     snap.tierVibrancyBoost = ac.TierVibrancyBoost;
+    snap.innerTextAlpha = ac.InnerTextAlpha;
+    snap.textSaturationBoost = ac.TextSaturationBoost;
     snap.alphaSettleTime = ac.AlphaSettleTime;
     snap.scaleSettleTime = ac.ScaleSettleTime;
     snap.positionSettleTime = ac.PositionSettleTime;

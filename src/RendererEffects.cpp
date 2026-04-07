@@ -18,6 +18,60 @@ struct EffectArgs
 
 namespace
 {
+static void ApplyTextTransparency(ImDrawList* drawList,
+                                  int vtxStart,
+                                  float innerTextAlpha,
+                                  float textGlowAlpha)
+{
+    if (!drawList)
+    {
+        return;
+    }
+
+    const int vtxEnd = drawList->VtxBuffer.Size;
+    if (vtxStart < 0 || vtxStart >= vtxEnd)
+    {
+        return;
+    }
+
+    const bool reduceAlpha = innerTextAlpha < 1.0f;
+    const bool glowText = textGlowAlpha > .0f;
+    if (!reduceAlpha && !glowText)
+    {
+        return;
+    }
+
+    const float alphaKeep = 1.0f - textGlowAlpha;
+    const float brightnessBoost = 1.0f + textGlowAlpha * 2.0f;
+    for (int i = vtxStart; i < vtxEnd; ++i)
+    {
+        ImU32 c = drawList->VtxBuffer[i].col;
+        int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
+        int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
+        int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
+        int ca = (c >> IM_COL32_A_SHIFT) & 0xFF;
+        const float lum = (cr * .299f + cg * .587f + cb * .114f) / 255.0f;
+        const bool isTextFill = lum >= .15f;
+
+        // Only fade the bright text body. Dark outline/shadow pixels stay solid
+        // so transparency does not destroy readability.
+        if (reduceAlpha && isTextFill)
+        {
+            ca = (int)std::clamp(ca * innerTextAlpha, .0f, 255.0f);
+        }
+
+        if (glowText && isTextFill)
+        {
+            cr = (int)std::min(cr * brightnessBoost, 255.0f);
+            cg = (int)std::min(cg * brightnessBoost, 255.0f);
+            cb = (int)std::min(cb * brightnessBoost, 255.0f);
+            ca = (int)std::clamp(ca * alphaKeep, .0f, 255.0f);
+        }
+
+        drawList->VtxBuffer[i].col = IM_COL32(cr, cg, cb, ca);
+    }
+}
+
 static void ApplyNone(
     ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
 {
@@ -481,34 +535,11 @@ void ApplyTextEffect(ImDrawList* drawList,
                                                  args.fastOutlines);
     }
 
-    // Translucent glowing text: boost brightness then reduce alpha so text
-    // looks like a self-luminous light source, not dim transparent glass.
-    // Dark outlines (luminance < 0.15) keep full alpha and original color.
-    if (shine && shine->textGlowAlpha > .0f)
+    if (shine)
     {
-        const int vtxTextEnd = drawList->VtxBuffer.Size;
-        const float alphaKeep = 1.0f - shine->textGlowAlpha;
-        const float brightnessBoost = 1.0f + shine->textGlowAlpha * 2.0f;
-        for (int i = vtxBefore; i < vtxTextEnd; ++i)
-        {
-            ImU32 c = drawList->VtxBuffer[i].col;
-            int cr = (c >> IM_COL32_R_SHIFT) & 0xFF;
-            int cg = (c >> IM_COL32_G_SHIFT) & 0xFF;
-            int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
-            int ca = (c >> IM_COL32_A_SHIFT) & 0xFF;
-
-            float lum = (cr * .299f + cg * .587f + cb * .114f) / 255.0f;
-            if (lum < .15f)
-            {
-                continue;
-            }
-
-            cr = (int)std::min(cr * brightnessBoost, 255.0f);
-            cg = (int)std::min(cg * brightnessBoost, 255.0f);
-            cb = (int)std::min(cb * brightnessBoost, 255.0f);
-            ca = (int)std::clamp(ca * alphaKeep, .0f, 255.0f);
-            drawList->VtxBuffer[i].col = IM_COL32(cr, cg, cb, ca);
-        }
+        // Apply transparency to every vertex emitted for this text path so
+        // simple fallback renders behave the same as effect-driven ones.
+        ApplyTextTransparency(drawList, vtxBefore, shine->innerTextAlpha, shine->textGlowAlpha);
     }
 
     // Additive shine overlay (static top-edge highlight)
@@ -626,7 +657,8 @@ static TextEffects::WaveParams BuildWaveParams(const RenderSettingsSnapshot& sna
 static TextEffects::ShineParams BuildShineParams(const RenderSettingsSnapshot& snap)
 {
     TextEffects::ShineParams shine;
-    shine.enabled = snap.enableShine || snap.textGlowAlpha > .0f;
+    shine.innerTextAlpha = snap.innerTextAlpha;
+    shine.enabled = snap.enableShine || snap.textGlowAlpha > .0f || shine.innerTextAlpha < 1.0f;
     shine.textGlowAlpha = snap.textGlowAlpha;
     if (!shine.enabled)
     {
@@ -1199,6 +1231,7 @@ void DrawTitleText(ImDrawList* dl,
         dColV.w = lodTitleAlphaFinal;
         ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
         ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlphaFinal));
+        const int vtxBefore = dl->VtxBuffer.Size;
         TextEffects::AddTextOutline4(dl,
                                      layout.fontTitle,
                                      layout.titleFontSize,
@@ -1209,6 +1242,7 @@ void DrawTitleText(ImDrawList* dl,
                                      style.titleOutlineWidth,
                                      fastOutlines,
                                      titleGlow.enabled ? &titleGlow : nullptr);
+        ApplyTextTransparency(dl, vtxBefore, snap.innerTextAlpha, snap.textGlowAlpha);
     }
 }
 
@@ -1350,6 +1384,7 @@ void DrawMainLineSegments(ImDrawList* dl,
                 dColV.w = style.alpha;
                 ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
                 ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, style.alpha));
+                const int vtxBefore = dl->VtxBuffer.Size;
                 TextEffects::AddTextOutline4(dl,
                                              seg.font,
                                              seg.fontSize,
@@ -1360,6 +1395,7 @@ void DrawMainLineSegments(ImDrawList* dl,
                                              segOutlineWidth,
                                              fastOutlines,
                                              mainGlow.enabled ? &mainGlow : nullptr);
+                ApplyTextTransparency(dl, vtxBefore, snap.innerTextAlpha, snap.textGlowAlpha);
             }
         }
 
