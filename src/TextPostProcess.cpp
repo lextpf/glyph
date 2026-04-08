@@ -41,10 +41,12 @@ cbuffer BlurCB : register(b0) {
     float  Sigma;
     float  _Pad;
 };
-static const int HALF_KERNEL = 6;
+static const int HALF_KERNEL = 16;
 float Gauss(float x, float s) { return exp(-0.5 * (x * x) / (s * s)); }
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
-    float sigma = max(Sigma, 0.001);
+    // Clamp sigma so the kernel always covers >= 3 sigma (99.7% of the
+    // distribution).  Prevents boxy edges when GlowRadius is large.
+    float sigma = clamp(Sigma, 0.001, HALF_KERNEL / 3.0);
     float4 sum  = InputTex.Sample(Sampler, uv) * Gauss(0, sigma);
     float  wSum = Gauss(0, sigma);
     [unroll] for (int i = 1; i <= HALF_KERNEL; ++i) {
@@ -100,11 +102,14 @@ cbuffer CompositeCB : register(b0) {
 };
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
     float4 c = InputTex.Sample(Sampler, uv);
-    // Scale bloom by intensity; soft clamp prevents harsh edges
-    // while keeping the glow visibly bright.
-    float3 bloom = c.rgb * Intensity;
-    bloom = saturate(bloom);
-    return float4(bloom, c.a * Intensity);
+    // Scale bloom RGB by intensity.  Alpha is NOT scaled here because the
+    // blend state uses SRC_ALPHA.
+    float3 bloom = saturate(c.rgb * (Intensity * 0.82));
+    // Shape alpha with an intensity-scaled exponent: at low intensity the
+    // glow fades softly, at high intensity it keeps a punchy bright core.
+    float exponent = lerp(1.35, 2.35, Intensity);
+    float glowAlpha = saturate(pow(c.a, exponent) * 0.88);
+    return float4(bloom, glowAlpha);
 }
 )";
 
@@ -163,6 +168,7 @@ static ComPtr<ID3D11Buffer> s_BlurCB;
 static ComPtr<ID3D11Buffer> s_CompositeCB;
 static ComPtr<ID3D11SamplerState> s_LinearClampSampler;
 static ComPtr<ID3D11BlendState> s_AdditiveBlend;
+static ComPtr<ID3D11BlendState> s_ScreenBlend;
 static ComPtr<ID3D11RasterizerState> s_NoCullRS;
 
 // Saved main RT (between Begin/End callbacks)
@@ -285,6 +291,7 @@ static void ReleaseResources()
     s_DivideCB.Reset();
     s_LinearClampSampler.Reset();
     s_AdditiveBlend.Reset();
+    s_ScreenBlend.Reset();
     s_NoCullRS.Reset();
     s_SavedRTV.Reset();
     s_SavedDSV.Reset();
@@ -466,6 +473,25 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
         return false;
     }
 
+    // Screen blend state: output = src + dst * (1 - src)
+    // Capped at 1.0 — avoids the harsh white clipping of pure additive on
+    // bright backgrounds while still producing a natural light-emission look.
+    D3D11_BLEND_DESC screenDesc{};
+    screenDesc.RenderTarget[0].BlendEnable = TRUE;
+    screenDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    screenDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_COLOR;
+    screenDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    screenDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    screenDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    screenDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    screenDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = device->CreateBlendState(&screenDesc, s_ScreenBlend.GetAddressOf());
+    if (FAILED(hr))
+    {
+        ReleaseResources();
+        return false;
+    }
+
     // No-cull rasterizer state for fullscreen triangle
     D3D11_RASTERIZER_DESC rsDesc{};
     rsDesc.FillMode = D3D11_FILL_SOLID;
@@ -622,7 +648,9 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     // RT A now contains the glow text rendered at half-res.
     // Apply separable Gaussian blur: A -> B (horizontal), B -> A (vertical).
 
-    const float sigma = s_GlowRadius * .5f;  // radius to sigma
+    // Use a tighter radius-to-sigma mapping so high GlowRadius values stay
+    // controlled instead of producing an overly diffuse blur.
+    const float sigma = (std::max)(0.75f, s_GlowRadius * .30f);
 
     // Unbind RT A as target, we'll read from it
     ID3D11RenderTargetView* nullRTV = nullptr;
@@ -715,7 +743,7 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
         s_Context->RSSetViewports(s_SavedViewportCount, &s_SavedViewport);
 
         s_Context->PSSetShader(s_CompositePS.Get(), nullptr, 0);
-        s_Context->OMSetBlendState(s_AdditiveBlend.Get(), blendFactor, 0xFFFFFFFF);
+        s_Context->OMSetBlendState(s_ScreenBlend.Get(), blendFactor, 0xFFFFFFFF);
 
         ID3D11ShaderResourceView* srv = s_SRV_A.Get();
         s_Context->PSSetShaderResources(0, 1, &srv);
