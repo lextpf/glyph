@@ -419,18 +419,24 @@ void AddTextShineOverlay(ImDrawList* list,
     const int sr = (shineColor >> IM_COL32_R_SHIFT) & 0xFF;
     const int sg = (shineColor >> IM_COL32_G_SHIFT) & 0xFF;
     const int sb = (shineColor >> IM_COL32_B_SHIFT) & 0xFF;
+    const float shapedFalloff = (std::max)(0.5f, falloff) * 3.4f;
+    const float intensityScale = .12f;
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
         const float v = s.normalizedY(list->VtxBuffer[i].pos.y);
 
-        // Top-edge highlight: brightest at top (v=0), fading down
-        float shine = std::pow(1.0f - Saturate(v), falloff) * intensity;
+        // Keep the shine tight to the top edge so it reads as a highlight
+        // instead of washing over the entire glyph face.
+        const float topBand = Saturate(1.0f - v * 2.2f);
+        float shine = std::pow(topBand, shapedFalloff) * intensity * intensityScale;
 
         // Slight horizontal variation for natural feel
         const float t = s.normalizedX(list->VtxBuffer[i].pos.x);
-        float hMod = 1.0f - .15f * (2.0f * t - 1.0f) * (2.0f * t - 1.0f);
+        float h = 2.0f * t - 1.0f;
+        float hMod = 1.0f - .45f * h * h;
         shine *= hMod;
+        shine = std::pow(Saturate(shine), 1.35f);
 
         const int a = (int)std::clamp(shine * 255.0f, .0f, 255.0f);
         list->VtxBuffer[i].col = IM_COL32(sr, sg, sb, a);
