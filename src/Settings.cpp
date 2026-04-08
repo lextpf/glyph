@@ -235,6 +235,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"GlowRadius",             "", &Glow().Radius,                    4.0f,     MinFloat{.0f}},
     {"GlowIntensity",          "", &Glow().Intensity,                 .5f,      ClampFloat{.0f, 1.0f}},
     {"GlowSamples",            "", &Glow().Samples,                   8,        ClampInt{1, 64}},
+    {"GlowDivideStrength",     "", &Glow().DivideStrength,            .0f,      ClampFloat{.0f, 1.0f}},
 
     // Shine Overlay
     {"EnableShine",            "", &Shine().Enabled,                  false,    NoClamping{}},
@@ -292,7 +293,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"AnimSpeedHighTier",      "", &AnimColor().AnimSpeedHighTier,   .10f,     NoClamping{}},
 
     // Color & Effects
-    {"ColorWashAmount",        "", &AnimColor().ColorWashAmount,      .15f,     ClampFloat{.0f, 1.0f}},
     {"NameColorMix",           "", &AnimColor().NameColorMix,         .65f,     ClampFloat{.0f, 1.0f}},
     {"EffectAlphaMin",         "", &AnimColor().EffectAlphaMin,       .20f,     ClampFloat{.0f, 1.0f}},
     {"EffectAlphaMax",         "", &AnimColor().EffectAlphaMax,       .60f,     ClampFloat{.0f, 1.0f}},
@@ -305,6 +305,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"PositionSettleTime",     "", &AnimColor().PositionSettleTime,   .38f,     MinFloat{.01f}},
     {"TierVibrancyBoost",      "", &AnimColor().TierVibrancyBoost,    .0f,      ClampFloat{.0f, 1.0f}},
     {"InnerTextAlpha",         "", &AnimColor().InnerTextAlpha,        1.0f,     ClampFloat{.0f, 1.0f}},
+    {"OutlineAlpha",           "", &AnimColor().OutlineAlpha,          1.0f,     ClampFloat{.0f, 1.0f}},
     {"TextSaturationBoost",    "", &AnimColor().TextSaturationBoost,   .0f,      ClampFloat{.0f, 2.0f}},
 
     // Visual sub-settings (via Visual() singleton)

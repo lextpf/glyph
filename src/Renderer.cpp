@@ -869,6 +869,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.glowRadius = gl.Radius;
     snap.glowIntensity = gl.Intensity;
     snap.glowSamples = gl.Samples;
+    snap.glowDivideStrength = gl.DivideStrength;
 
     const auto& sh = Settings::Shine();
     snap.enableShine = sh.Enabled;
@@ -917,7 +918,6 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.animSpeedLowTier = ac.AnimSpeedLowTier;
     snap.animSpeedMidTier = ac.AnimSpeedMidTier;
     snap.animSpeedHighTier = ac.AnimSpeedHighTier;
-    snap.colorWashAmount = ac.ColorWashAmount;
     snap.nameColorMix = ac.NameColorMix;
     snap.effectAlphaMin = ac.EffectAlphaMin;
     snap.effectAlphaMax = ac.EffectAlphaMax;
@@ -925,6 +925,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.strengthMax = ac.StrengthMax;
     snap.tierVibrancyBoost = ac.TierVibrancyBoost;
     snap.innerTextAlpha = ac.InnerTextAlpha;
+    snap.outlineAlpha = ac.OutlineAlpha;
     snap.textSaturationBoost = ac.TextSaturationBoost;
     snap.alphaSettleTime = ac.AlphaSettleTime;
     snap.scaleSettleTime = ac.ScaleSettleTime;
@@ -1053,6 +1054,7 @@ void Draw()
 
     // 3-channel splitter: [0]=glow (GPU blur), [1]=particles, [2]=text+shadow+outline
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    const bool gpuDivide = snap.glowDivideStrength > .0f && TextPostProcess::IsInitialized();
     ImDrawListSplitter splitter;
     splitter.Split(drawList, gpuGlow ? 3 : 2);
 
@@ -1061,6 +1063,14 @@ void Draw()
         TextPostProcess::SetGlowParams(snap.glowRadius, snap.glowIntensity);
         splitter.SetCurrentChannel(drawList, 0);
         drawList->AddCallback(TextPostProcess::BeginGlowCapture, nullptr);
+    }
+
+    // Color-divide capture: snapshot the back-buffer before any nametag text
+    // so the divide shader can read the original scene behind the text.
+    if (gpuDivide)
+    {
+        TextPostProcess::SetDivideParams(snap.glowDivideStrength);
+        drawList->AddCallback(TextPostProcess::BeginDivideCapture, nullptr);
     }
 
     for (auto& d : localSnap)
@@ -1076,6 +1086,14 @@ void Draw()
     }
 
     splitter.Merge(drawList);
+
+    // Color-divide composite: blend nametag text with the pre-snapshot using
+    // the Photoshop-style divide blend for a light-emission look.
+    if (gpuDivide)
+    {
+        drawList->AddCallback(TextPostProcess::EndDivideAndComposite, nullptr);
+        drawList->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+    }
 
     ImGui::End();
 

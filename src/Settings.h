@@ -237,7 +237,7 @@ struct TierDefinition
     Color3 highlightColor;          ///< RGB color for shimmer/sparkle highlights
 
     /// Per-element color overrides (optional - falls back to derived from leftColor/rightColor)
-    std::optional<Color3> titleLeftColor;   ///< Title gradient left (default: washed from name)
+    std::optional<Color3> titleLeftColor;   ///< Title gradient left (default: derived from name)
     std::optional<Color3> titleRightColor;  ///< Title gradient right
     std::optional<Color3> levelLeftColor;   ///< Level gradient left (default: mixed from name)
     std::optional<Color3> levelRightColor;  ///< Level gradient right
@@ -357,10 +357,11 @@ ShadowOutlineSettings& ShadowOutline();
 /// Glow effect settings.
 struct GlowSettings
 {
-    bool Enabled = false;   ///< Enable glow effect
-    float Radius = 4.0f;    ///< Glow spread in pixels
-    float Intensity = .5f;  ///< Glow brightness 0-1
-    int Samples = 8;        ///< Quality samples 8-16
+    bool Enabled = false;      ///< Enable glow effect
+    float Radius = 4.0f;       ///< Glow spread in pixels
+    float Intensity = .5f;     ///< Glow brightness 0-1
+    int Samples = 8;           ///< Quality samples 8-16
+    float DivideStrength = 0;  ///< Color-divide blend 0-1 (0 = additive glow, 1 = full divide)
 };
 GlowSettings& Glow();
 
@@ -449,7 +450,6 @@ struct AnimColorSettings
     float AnimSpeedLowTier = .35f;    ///< Speed for tiers 0-7
     float AnimSpeedMidTier = .20f;    ///< Speed for tier 8
     float AnimSpeedHighTier = .10f;   ///< Speed for tier 9+
-    float ColorWashAmount = .15f;     ///< Desaturation toward white 0-1
     float NameColorMix = .65f;        ///< Base color strength 0-1
     float EffectAlphaMin = .20f;      ///< Minimum effect alpha
     float EffectAlphaMax = .60f;      ///< Maximum effect alpha
@@ -460,6 +460,7 @@ struct AnimColorSettings
     float PositionSettleTime = .38f;  ///< Position settle time for NPCs in seconds
     float TierVibrancyBoost = .0f;    ///< Extra color saturation for high tiers 0-1
     float InnerTextAlpha = 1.0f;      ///< Text body alpha multiplier 0-1 (outlines unaffected)
+    float OutlineAlpha = 1.0f;        ///< Outline and shadow alpha multiplier 0-1
     float TextSaturationBoost = .0f;  ///< Extra color saturation for text body 0-2
 };
 AnimColorSettings& AnimColor();

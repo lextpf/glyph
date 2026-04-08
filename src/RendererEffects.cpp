@@ -41,8 +41,11 @@ static void ApplyTextTransparency(ImDrawList* drawList,
         return;
     }
 
-    const float alphaKeep = 1.0f - textGlowAlpha;
-    const float brightnessBoost = 1.0f + textGlowAlpha * 2.0f;
+    const float alphaKeep = 1.0f - textGlowAlpha * .20f;
+    const float brightnessBoost = 1.0f + textGlowAlpha * .30f;
+
+    // Only the bright text body should become translucent. Dark outline/shadow
+    // pixels stay solid so readability does not collapse when text glow is on.
     for (int i = vtxStart; i < vtxEnd; ++i)
     {
         ImU32 c = drawList->VtxBuffer[i].col;
@@ -51,10 +54,9 @@ static void ApplyTextTransparency(ImDrawList* drawList,
         int cb = (c >> IM_COL32_B_SHIFT) & 0xFF;
         int ca = (c >> IM_COL32_A_SHIFT) & 0xFF;
         const float lum = (cr * .299f + cg * .587f + cb * .114f) / 255.0f;
-        const bool isTextFill = lum >= .15f;
+        const int maxCh = std::max({cr, cg, cb});
+        const bool isTextFill = lum >= .22f && maxCh >= 80;
 
-        // Only fade the bright text body. Dark outline/shadow pixels stay solid
-        // so transparency does not destroy readability.
         if (reduceAlpha && isTextFill)
         {
             ca = (int)std::clamp(ca * innerTextAlpha, .0f, 255.0f);
@@ -62,9 +64,13 @@ static void ApplyTextTransparency(ImDrawList* drawList,
 
         if (glowText && isTextFill)
         {
-            cr = (int)std::min(cr * brightnessBoost, 255.0f);
-            cg = (int)std::min(cg * brightnessBoost, 255.0f);
-            cb = (int)std::min(cb * brightnessBoost, 255.0f);
+            // Scale all channels uniformly so the brightest channel just
+            // reaches 255 — this preserves hue instead of clipping individual
+            // channels to white independently.
+            float scale = (maxCh > 0) ? std::min(brightnessBoost, 255.0f / (float)maxCh) : 1.0f;
+            cr = (int)(cr * scale);
+            cg = (int)(cg * scale);
+            cb = (int)(cb * scale);
             ca = (int)std::clamp(ca * alphaKeep, .0f, 255.0f);
         }
 
@@ -535,20 +541,17 @@ void ApplyTextEffect(ImDrawList* drawList,
                                                  args.fastOutlines);
     }
 
+    // Apply text-body alpha shaping after all fill/outline vertices have been emitted.
     if (shine)
     {
-        // Apply transparency to every vertex emitted for this text path so
-        // simple fallback renders behave the same as effect-driven ones.
         ApplyTextTransparency(drawList, vtxBefore, shine->innerTextAlpha, shine->textGlowAlpha);
     }
 
-    // Additive shine overlay (static top-edge highlight)
+    // Top-edge shine overlay
     if (shine && shine->enabled && shine->intensity > .0f)
     {
-        ParticleTextures::PushAdditiveBlend(drawList);
         TextEffects::AddTextShineOverlay(
             drawList, font, fontSize, pos, text, shine->intensity, shine->falloff, IM_COL32_WHITE);
-        ParticleTextures::PopBlendState(drawList);
     }
 
     // Apply per-glyph wave displacement to all vertices added during this call
@@ -658,12 +661,8 @@ static TextEffects::ShineParams BuildShineParams(const RenderSettingsSnapshot& s
 {
     TextEffects::ShineParams shine;
     shine.innerTextAlpha = snap.innerTextAlpha;
-    shine.enabled = snap.enableShine || snap.textGlowAlpha > .0f || shine.innerTextAlpha < 1.0f;
     shine.textGlowAlpha = snap.textGlowAlpha;
-    if (!shine.enabled)
-    {
-        return shine;
-    }
+    shine.enabled = snap.enableShine;
     shine.intensity = snap.shineIntensity;
     shine.falloff = snap.shineFalloff;
     return shine;
@@ -1017,7 +1016,7 @@ void DrawOrnaments(ImDrawList* dl,
         ImGui::ColorConvertFloat4ToU32(ImVec4(style.Rc.x, style.Rc.y, style.Rc.z, style.alpha));
     ImU32 ornHighlight = ImGui::ColorConvertFloat4ToU32(
         ImVec4(tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.alpha));
-    ImU32 ornOutline = IM_COL32(0, 0, 0, (int)(style.alpha * 255.0f));
+    ImU32 ornOutline = IM_COL32(0, 0, 0, (int)(style.alpha * snap.outlineAlpha * 255.0f));
     float ornOutlineWidth = style.outlineWidth * (ornamentSize / layout.nameFontSize);
 
     ImU32 glowColor =
@@ -1030,6 +1029,8 @@ void DrawOrnaments(ImDrawList* dl,
     auto ornGlow = BuildOutlineGlow(snap, style);
     auto ornDual = BuildDualOutline(snap, style);
     auto ornShine = BuildShineParams(snap);
+    const bool ornNeedsTextAdjust =
+        snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
 
     auto drawOrnChar = [&](ImVec2 charPos, const char* ch)
     {
@@ -1078,7 +1079,7 @@ void DrawOrnaments(ImDrawList* dl,
                         ornGlow.enabled ? &ornGlow : nullptr,
                         ornDual.enabled ? &ornDual : nullptr,
                         nullptr,
-                        ornShine.enabled ? &ornShine : nullptr);
+                        ornNeedsTextAdjust ? &ornShine : nullptr);
     };
 
     const float ornAnchorY =
@@ -1201,6 +1202,8 @@ void DrawTitleText(ImDrawList* dl,
     auto titleDual = BuildDualOutline(snap, style);
     auto titleWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
     auto titleShine = BuildShineParams(snap);
+    const bool titleNeedsTextAdjust =
+        snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
 
     if (d.isPlayer)
     {
@@ -1223,14 +1226,15 @@ void DrawTitleText(ImDrawList* dl,
                         titleGlow.enabled ? &titleGlow : nullptr,
                         titleDual.enabled ? &titleDual : nullptr,
                         titleWave.enabled ? &titleWave : nullptr,
-                        titleShine.enabled ? &titleShine : nullptr);
+                        titleNeedsTextAdjust ? &titleShine : nullptr);
     }
     else
     {
-        ImVec4 dColV = WashColor(style.dispoCol, snap.colorWashAmount);
+        ImVec4 dColV = style.dispoCol;
         dColV.w = lodTitleAlphaFinal;
         ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
-        ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlphaFinal));
+        ImU32 npcOutline =
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, lodTitleAlphaFinal * snap.outlineAlpha));
         const int vtxBefore = dl->VtxBuffer.Size;
         TextEffects::AddTextOutline4(dl,
                                      layout.fontTitle,
@@ -1263,6 +1267,8 @@ void DrawMainLineSegments(ImDrawList* dl,
     auto mainDual = BuildDualOutline(snap, style);
     auto mainWave = BuildWaveParams(snap, style, (float)ImGui::GetTime());
     auto mainShine = BuildShineParams(snap);
+    const bool mainNeedsTextAdjust =
+        snap.enableShine || snap.textGlowAlpha > .0f || snap.innerTextAlpha < 1.0f;
 
     ImVec2 currentPos;
     currentPos.x = layout.startPos.x - layout.totalWidth * .5f +
@@ -1351,7 +1357,7 @@ void DrawMainLineSegments(ImDrawList* dl,
                             mainGlow.enabled ? &mainGlow : nullptr,
                             mainDual.enabled ? &mainDual : nullptr,
                             mainWave.enabled ? &mainWave : nullptr,
-                            mainShine.enabled ? &mainShine : nullptr);
+                            mainNeedsTextAdjust ? &mainShine : nullptr);
         }
         else
         {
@@ -1376,14 +1382,15 @@ void DrawMainLineSegments(ImDrawList* dl,
                                 mainGlow.enabled ? &mainGlow : nullptr,
                                 mainDual.enabled ? &mainDual : nullptr,
                                 mainWave.enabled ? &mainWave : nullptr,
-                                mainShine.enabled ? &mainShine : nullptr);
+                                mainNeedsTextAdjust ? &mainShine : nullptr);
             }
             else
             {
                 ImVec4 dColV = style.dispoCol;
                 dColV.w = style.alpha;
                 ImU32 dCol = ImGui::ColorConvertFloat4ToU32(dColV);
-                ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, style.alpha));
+                ImU32 npcOutline = ImGui::ColorConvertFloat4ToU32(
+                    ImVec4(0, 0, 0, style.alpha * snap.outlineAlpha));
                 const int vtxBefore = dl->VtxBuffer.Size;
                 TextEffects::AddTextOutline4(dl,
                                              seg.font,
