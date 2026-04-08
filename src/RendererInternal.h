@@ -62,6 +62,7 @@ struct RenderSettingsSnapshot
     float glowRadius = .0f;
     float glowIntensity = .0f;
     int glowSamples = 0;
+    float glowDivideStrength = .0f;
 
     // Outline Glow
     bool enableOutlineGlow = false;
@@ -122,7 +123,6 @@ struct RenderSettingsSnapshot
     float animSpeedLowTier = .0f;
     float animSpeedMidTier = .0f;
     float animSpeedHighTier = .0f;
-    float colorWashAmount = .0f;
     float nameColorMix = .0f;
     float effectAlphaMin = .0f;
     float effectAlphaMax = .0f;
@@ -130,6 +130,7 @@ struct RenderSettingsSnapshot
     float strengthMax = .0f;
     float tierVibrancyBoost = .0f;
     float innerTextAlpha = 1.0f;
+    float outlineAlpha = 1.0f;
     float textSaturationBoost = .0f;
 
     // Smoothing
@@ -332,10 +333,9 @@ struct RenderSeg
  * - **Pastelize**: Blend a color toward white based on the actor's level
  *   position within its tier.  Higher levels get more vivid (less pastel)
  *   colors.  Formula: `result = 1 + (color - 1) * t`.
- * - **Wash**: Desaturate a color toward white by a fixed amount
- *   (ColorWashAmount setting).  Used for name/title colors to soften them.
  * - **MixToWhite**: Blend color toward white by a fixed ratio.  Applied as
- *   a base color damping for lower tiers.
+ *   a base color
+ * damping for lower tiers.
  */
 
 /// All color, tier, and effect data computed once per label.
@@ -353,8 +353,8 @@ struct LabelStyle
     ImU32 shadowColor;           // Black shadow  (alpha-scaled)
 
     ImVec4 Lc, Rc;            ///< Tier left/right color (pasteled float).
-    ImVec4 LcName, RcName;    ///< Washed name color (float, for glow).
-    ImVec4 LcTitle, RcTitle;  ///< Washed title color (float, for glow).
+    ImVec4 LcName, RcName;    ///< Computed name color (float, for glow).
+    ImVec4 LcTitle, RcTitle;  ///< Computed title color (float, for glow).
     ImVec4 LcLevel, RcLevel;  ///< Softened level color (float, for glow).
     ImVec4 dispoCol;          ///< Disposition color.
     ImVec4 specialGlowColor;  ///< Special title glow color.
@@ -513,9 +513,6 @@ void QueueSnapshotUpdate_RenderThread();
 /// @param[out] outBottom  Bottommost glyph offset (pixels).
 void CalcTightYBoundsFromTop(
     ImFont* font, float fontSize, const char* text, float& outTop, float& outBottom);
-
-/// Desaturate a color toward white by @p washAmount.
-ImVec4 WashColor(ImVec4 base, float washAmount);
 
 /// Replace %n, %l, %t placeholders in a format string.  Uses single-pass
 /// replacement to avoid expanding placeholders embedded in substitution values.
