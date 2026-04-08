@@ -195,6 +195,11 @@ bool CopyHairAndSkin(RE::TESNPC* templateNPC, RE::TESNPC* playerBase, bool copyS
     playerBase->bodyTintColor = templateNPC->bodyTintColor;
     logger::info("AppearanceTemplate: Copied body tint color");
 
+    // Always copy skin form to keep body and face skin consistent
+    playerBase->skin = templateNPC->skin;
+    logger::info("AppearanceTemplate: Copied skin form ({})",
+                 templateNPC->skin ? "custom" : "race default");
+
     if (copySkin)
     {
         if (templateNPC->farSkin)
@@ -202,17 +207,6 @@ bool CopyHairAndSkin(RE::TESNPC* templateNPC, RE::TESNPC* playerBase, bool copyS
             playerBase->farSkin = templateNPC->farSkin;
             logger::info("AppearanceTemplate: Copied far skin");
         }
-
-        // Copy skin form if available
-        if (templateNPC->skin)
-        {
-            playerBase->skin = templateNPC->skin;
-            logger::info("AppearanceTemplate: Copied skin form");
-        }
-    }
-    else
-    {
-        logger::debug("AppearanceTemplate: Skin copy disabled (TemplateCopySkin = false)");
     }
 
     return true;
