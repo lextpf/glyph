@@ -62,9 +62,10 @@
  *
  * $$v_{new} = v_{old} + (v_{target} - v_{old}) \cdot \alpha$$
  *
- * where $\alpha = 1 - \epsilon^{\,\Delta t \,/\, T_{settle}}$ and $T_{settle}$
- * is the time for the value to reach within $\epsilon$ (default 1%) of the
- * target. This ensures identical visual behavior regardless of framerate.
+ * where $\alpha = 1 - \epsilon^{\,\Delta t \,/\, T_{settle}}$, $\epsilon = 0.01$
+ * (1% residual threshold, not machine epsilon), and $T_{settle}$ is the time
+ * for the value to settle within $\epsilon$ of the target. This ensures
+ * identical visual behavior regardless of framerate.
  *
  * ## :material-cube-scan: World-to-Screen Projection
  *
@@ -148,14 +149,12 @@ void TickRT();
  *
  * @post Return value is valid for current frame only.
  *
- * Overlay is hidden when:
- * - Game is loading or resetting
- * - Player is in menus (inventory, map, journal, etc.)
- * - Player cell is not attached
- * - Player is in combat
- * - Manually disabled via ToggleEnabled()
+ * Overlay is hidden when `GameState::CanDrawOverlay()` returns false
+ * (loading, menus, combat, unattached cell, etc.) or when manually
+ * disabled via `ToggleEnabled()`. The game-state check runs during
+ * `TickRT()` and its result is cached in an atomic flag.
  *
- * @see Draw, TickRT
+ * @see Draw, TickRT, GameState::CanDrawOverlay
  */
 bool IsOverlayAllowedRT();
 

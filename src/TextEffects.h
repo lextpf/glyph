@@ -286,6 +286,8 @@ inline void WithOutlineGlow(ImDrawList* list,
  * @param col Main text color (ImU32).
  * @param outline Outline color (typically black for contrast).
  * @param w Outline width in pixels.
+ * @param fastOutlines If true, uses 4-direction outlines; otherwise 8-direction.
+ * @param glow Optional outline glow parameters (nullptr = no glow).
  *
  * @pre list != nullptr
  * @pre font != nullptr
@@ -763,11 +765,10 @@ void AddTextSparkle(ImDrawList* list,
  * Draw text with classic plasma effect.
  *
  * Creates demoscene-style plasma using overlapping sine waves.
- * Two wave patterns create interference for organic movement:
- * $$t = \frac{\sin(x \cdot f_1 + time \cdot speed) + \sin(y \cdot f_2 + time \cdot speed)}{2} \cdot
- * 0.5 + 0.5$$
- *
- * The normalized value $t$ drives interpolation between the two colors.
+ * Six wave components (primary, diagonal, and radial from offset centers)
+ * combine for organic interference patterns. The summed value is normalized
+ * to $[0,\,1]$ via quintic smoothstep and drives a three-color gradient
+ * through `colA`, a 50/50 midpoint, and `colB`.
  *
  * @param list ImGui draw list to render to.
  * @param font Font to use for rendering.
