@@ -16,7 +16,7 @@
  *
  * ## :material-cogs: Settings
  *
- * Configure in glyph.ini under `[AppearanceTemplate]`:
+ * Configure in glyph.ini under `[Appearance]` (or `[AppearanceTemplate]`):
  *
  * ### :material-cogs: Core Settings
  * |               Setting | Type   | Default | Description                                      |
@@ -32,7 +32,7 @@
  * |-------------------------|--------|---------|-------------------------------------------------|
  * |     TemplateCopyFaceGen | bool   | true    | Copy FaceGen NIF/tint files (recommended)       |
  * |        TemplateCopySkin | bool   | false   | Copy skin textures                              |
- * |    TemplateCopyOverlays | bool   | false   | Copy RaceMenu overlays (requires NiOverride)    |
+ * |    TemplateCopyOverlays | bool   | false   | Copy RaceMenu overlays (not yet implemented)    |
  * |      TemplateCopyOutfit | bool   | false   | Copy equipped armor from template actor         |
  * | TemplateReapplyOnReload | bool   | false   | Re-apply appearance on hot reload               |
  * |   TemplateFaceGenPlugin | string | ""      | Override plugin for FaceGen paths (auto-detect) |
@@ -190,20 +190,19 @@ void CheckPendingAppearanceTemplate();
 void SetPendingAppearanceApply();
 
 /**
- * @brief Initialize overlay system (no-op, kept for compatibility).
+ * @brief No-op stub. Overlay system not implemented.
  */
 void QueryNiOverrideInterface();
 
 /**
- * @brief Retry overlay initialization (no-op, kept for compatibility).
+ * @brief No-op stub. Overlay system not implemented.
  */
 void RetryNiOverrideInterface();
 
 /**
- * @brief Test manual overlay extraction on player.
+ * @brief No-op stub. Overlay system not implemented.
  *
- * Scans player's 3D nodes for overlay geometry and logs results.
- * Used for debugging overlay integration. (not implemented)
+ * Logs "Overlay system not implemented" when called.
  */
 void TestOverlayOnPlayer();
 

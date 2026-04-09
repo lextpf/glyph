@@ -65,7 +65,7 @@ static void ApplyTextTransparency(ImDrawList* drawList,
         if (glowText && isTextFill)
         {
             // Scale all channels uniformly so the brightest channel just
-            // reaches 255 — this preserves hue instead of clipping individual
+            // reaches 255 - this preserves hue instead of clipping individual
             // channels to white independently.
             float scale = (maxCh > 0) ? std::min(brightnessBoost, 255.0f / (float)maxCh) : 1.0f;
             cr = (int)(cr * scale);

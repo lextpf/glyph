@@ -21,13 +21,22 @@
  * Settings are loaded from `Data/SKSE/Plugins/glyph.ini` using a simple
  * key-value format with section headers for tier definitions.
  *
- * | Section            | Purpose                                  |
- * |--------------------|------------------------------------------|
- * | `[General]`        | Core settings, fonts, distances          |
- * | `[TierN]`          | Per-tier colors, effects, ornaments      |
- * | `[SpecialTitleN]`  | Keyword-based title overrides            |
- * | `[Display]`        | Format string for nameplate composition  |
- * | `[Appearance]`     | NPC appearance template settings         |
+ * | Section              | Purpose                                  |
+ * |----------------------|------------------------------------------|
+ * | `[General]`          | Core settings, fonts, distances          |
+ * | `[TierN]`            | Per-tier colors, effects, ornaments      |
+ * | `[SpecialTitleN]`    | Keyword-based title overrides            |
+ * | `[Display]`          | Format string for nameplate composition  |
+ * | `[Appearance]`       | NPC appearance template settings         |
+ * | `[Visual]`           | LOD, overlap, motion trail, wave         |
+ * | `[Fonts]`            | Font paths and sizes                     |
+ * | `[Particles]`        | Particle aura settings                   |
+ * | `[Occlusion]`        | Line-of-sight culling settings           |
+ * | `[Debug]`            | Debug overlay toggle                     |
+ *
+ * @note Scalar settings are matched by key name regardless of which
+ * section they appear in.  `[AppearanceTemplate]` is also accepted
+ * as an alias for `[Appearance]`.
  *
  * @note Runtime defaults are defined in the `kSettings` binding table in
  * `Settings.cpp`.  `Load()` calls `ResetToDefaults()` first, which applies
@@ -39,18 +48,19 @@
  * ## :material-refresh: Hot Reload
  *
  * Settings can be reloaded at runtime by pressing the configured `ReloadKey`
- * (default: F7). This calls `Load()` and clears the actor cache.
+ * (default: disabled; set to a virtual key code, e.g. `118` for F7).
+ * This calls `Load()` and clears the actor cache.
  *
  * ## :material-blur-linear: Distance Fading
  *
  * Nameplate alpha fades based on distance $d$ from camera to actor using
- * a squared smoothstep for a gentle falloff:
+ * a squared quintic smoothstep for a gentle falloff:
  *
  * $$t = \text{clamp}\!\left(\frac{d - d_{start}}{d_{end} - d_{start}},\; 0,\; 1\right)$$
  *
- * $$\text{smoothstep}(t) = 3t^2 - 2t^3$$
+ * $$\text{smoothstep}(t) = 6t^5 - 15t^4 + 10t^3$$
  *
- * $$\alpha = 1 - \text{smoothstep}(t)^2$$
+ * $$\alpha = \left(1 - \text{smoothstep}(t)\right)^2$$
  *
  * This produces near-full opacity at close range, a gradual falloff through
  * mid-range, and rapid fadeout approaching `FadeEndDistance`.
@@ -158,9 +168,9 @@ enum class EffectType
     RadialGradient,    ///< Radial gradient from center (param1 = gamma)
     Shimmer,           ///< Moving highlight band (param1 = width, param2 = strength)
     ChromaticShimmer,  ///< Chromatic aberration shimmer (param1-4 for tuning)
-    Ember,             ///< Warm flickering glow (param1 = speed, param2 = intensity)
-    RainbowWave,       ///< Animated rainbow (param1-5 for hue/speed/saturation)
-    ConicRainbow,      ///< Circular rainbow rotation (param1-4 for tuning)
+    Ember,  ///< Warm flickering glow (param1 = speed, param2 = intensity). INI alias: PulseGradient
+    RainbowWave,   ///< Animated rainbow (param1-5 for hue/speed/saturation)
+    ConicRainbow,  ///< Circular rainbow rotation (param1-4 for tuning)
     Aurora,  ///< Northern lights effect (param1 = speed, param2 = waves, param3 = intensity, param4
              ///< = sway)
     Sparkle,   ///< Glittering stars (param1 = density, param2 = speed, param3 = intensity)
@@ -360,7 +370,7 @@ struct GlowSettings
     bool Enabled = false;      ///< Enable glow effect
     float Radius = 4.0f;       ///< Glow spread in pixels
     float Intensity = .5f;     ///< Glow brightness 0-1
-    int Samples = 8;           ///< Quality samples 8-16
+    int Samples = 8;           ///< Quality samples 1-64 (recommended: 8-16)
     float DivideStrength = 0;  ///< Color-divide blend 0-1 (0 = additive glow, 1 = full divide)
 };
 GlowSettings& Glow();

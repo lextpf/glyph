@@ -187,40 +187,40 @@ struct RenderSettingsSnapshot
 /// Stores smoothed values and state for position, alpha, and effects.
 struct ActorCache
 {
-    ImVec2 smooth{};               // Smoothed screen position (result of moving average)
-    float alphaSmooth = 1.0f;      // Smoothed alpha for fade transitions
-    float textSizeScale = 1.0f;    // Smoothed font scale for distance-based sizing
-    float occlusionSmooth = 1.0f;  // Smoothed occlusion (1.0=visible, 0.0=hidden)
+    ImVec2 smooth{};               ///< Smoothed screen position (result of moving average)
+    float alphaSmooth = 1.0f;      ///< Smoothed alpha for fade transitions
+    float textSizeScale = 1.0f;    ///< Smoothed font scale for distance-based sizing
+    float occlusionSmooth = 1.0f;  ///< Smoothed occlusion (1.0=visible, 0.0=hidden)
 
-    bool initialized = false;    // True after first frame of data
-    uint32_t lastSeenFrame = 0;  // Frame counter when actor was last in snapshot
+    bool initialized = false;    ///< True after first frame of data
+    uint32_t lastSeenFrame = 0;  ///< Frame counter when actor was last in snapshot
 
-    uint32_t lastOcclusionCheckFrame = 0;  // Frame when LOS was last checked
-    bool cachedOccluded = false;           // Cached LOS result
-    bool wasOccluded = false;              // Previous frame's occlusion state
+    uint32_t lastOcclusionCheckFrame = 0;  ///< Frame when LOS was last checked
+    bool cachedOccluded = false;           ///< Cached LOS result
+    bool wasOccluded = false;              ///< Previous frame's occlusion state
 
     static constexpr int HISTORY_SIZE = RenderConstants::POSITION_HISTORY_SIZE;
-    ImVec2 posHistory[HISTORY_SIZE]{};
-    int historyIndex = 0;
-    bool historyFilled = false;
+    ImVec2 posHistory[HISTORY_SIZE]{};  ///< Circular buffer of raw screen positions
+    int historyIndex = 0;               ///< Current write index in posHistory
+    bool historyFilled = false;         ///< True once posHistory has wrapped at least once
 
-    float typewriterTime = .0f;       // Seconds since actor first appeared
-    bool typewriterComplete = false;  // True when reveal animation finished
+    float typewriterTime = .0f;       ///< Seconds since actor first appeared
+    bool typewriterComplete = false;  ///< True when reveal animation finished
 
-    float entrancePhase = .0f;  // 0=start, 1=complete
-    float exitPhase = .0f;      // 0=visible, 1=fully exited
-    bool entranceDone = false;  // True when entrance animation finished
+    float entrancePhase = .0f;  ///< Entrance animation progress (0=start, 1=complete)
+    float exitPhase = .0f;      ///< Exit animation progress (0=visible, 1=fully exited)
+    bool entranceDone = false;  ///< True when entrance animation finished
 
-    // Motion trail history (separate from posHistory used for smoothing)
+    /// Motion trail history (separate from posHistory used for smoothing).
     static constexpr int TRAIL_HISTORY_SIZE = 8;
-    ImVec2 trailHistory[TRAIL_HISTORY_SIZE]{};
-    int trailIndex = 0;
-    bool trailFilled = false;
+    ImVec2 trailHistory[TRAIL_HISTORY_SIZE]{};  ///< Trail ghost positions
+    int trailIndex = 0;                         ///< Current write index in trailHistory
+    bool trailFilled = false;                   ///< True once trailHistory has wrapped
 
-    std::string cachedName;       // Last known name (to detect changes)
-    std::string cachedNameLower;  // Pre-lowered name for special title matching
+    std::string cachedName;       ///< Last known name (to detect changes)
+    std::string cachedNameLower;  ///< Pre-lowered name for special title matching
 
-    // Add position sample to history and return smoothed average.
+    /// Add position sample to history and return smoothed average.
     ImVec2 AddAndGetSmoothed(const ImVec2& pos)
     {
         posHistory[historyIndex] = pos;
@@ -249,82 +249,94 @@ struct ActorCache
 /// Actor disposition.
 enum class Disposition : std::uint8_t
 {
-    Neutral,      // Neutral NPCs (white/gray)
-    Enemy,        // Hostile NPCs (red)
-    AllyOrFriend  // Friendly/allied NPCs (blue)
+    Neutral,      ///< Neutral NPCs (white/gray)
+    Enemy,        ///< Hostile NPCs (red)
+    AllyOrFriend  ///< Friendly/allied NPCs (blue)
 };
 
 /// Data for rendering a single actor's nameplate.
 struct ActorDrawData
 {
-    uint32_t formID{0};                       // Actor's form ID (unique identifier)
-    RE::NiPoint3 worldPos{};                  // World position above actor's head
-    std::string name;                         // Display name (capitalized)
-    uint16_t level{0};                        // Actor's level
-    float distToPlayer{.0f};                  // Distance to player in units
-    Disposition dispo{Disposition::Neutral};  // Disposition towards player
-    bool isPlayer{false};                     // Whether this is the player character
-    bool isOccluded{false};                   // Whether actor is occluded from view
+    uint32_t formID{0};                       ///< Actor's form ID (unique identifier)
+    RE::NiPoint3 worldPos{};                  ///< World position above actor's head
+    std::string name;                         ///< Display name (capitalized)
+    uint16_t level{0};                        ///< Actor's level
+    float distToPlayer{.0f};                  ///< Distance to player in units
+    Disposition dispo{Disposition::Neutral};  ///< Disposition towards player
+    bool isPlayer{false};                     ///< Whether this is the player character
+    bool isOccluded{false};                   ///< Whether actor is occluded from view
 };
 
 /// Cached line-of-sight result for an actor, checked periodically rather than
 /// every frame.
 struct OcclusionCacheEntry
 {
-    uint32_t lastCheckFrame{0};
-    bool cachedOccluded{false};
+    uint32_t lastCheckFrame{0};  ///< Frame when LOS was last checked
+    bool cachedOccluded{false};  ///< Cached LOS result from that check
 };
 
 /// Encapsulates all mutable renderer state into a single struct.
 struct RendererState
 {
-    // Cache
-    std::unordered_map<uint32_t, ActorCache> cache;
-    uint32_t frame = 0;
+    /// @name Cache
+    /// @{
+    std::unordered_map<uint32_t, ActorCache> cache;  ///< Per-actor animation cache, keyed by formID
+    uint32_t frame = 0;                              ///< Render-thread frame counter
+    /// @}
 
-    // Snapshot & Thread Safety
-    std::vector<ActorDrawData> snapshot;
-    std::mutex snapshotLock;
-    std::atomic<bool> updateQueued{false};
-    std::atomic<bool> pauseSnapshotUpdates{false};
-    std::atomic<bool> snapshotUpdateRunning{false};
-    std::atomic<bool> clearOcclusionCacheRequested{false};
+    /// @name Snapshot & Thread Safety
+    /// @{
+    std::vector<ActorDrawData> snapshot;             ///< Current actor draw data
+    std::mutex snapshotLock;                         ///< Guards snapshot reads/writes
+    std::atomic<bool> updateQueued{false};           ///< True while a game-thread update is pending
+    std::atomic<bool> pauseSnapshotUpdates{false};   ///< Suppress updates during reload
+    std::atomic<bool> snapshotUpdateRunning{false};  ///< True while game-thread update is active
+    std::atomic<bool> clearOcclusionCacheRequested{false};  ///< Request to clear occlusion cache
+    /// @}
 
-    // Frame State
-    bool wasInInvalidState = true;
-    int postLoadCooldown = 0;
+    /// @name Frame State
+    /// @{
+    bool wasInInvalidState = true;  ///< True if previous frame was in an invalid game state
+    int postLoadCooldown = 0;       ///< Frames remaining in post-load cooldown
+    /// @}
 
-    // Debug Stats
-    DebugOverlay::Stats debugStats;
-    float lastDebugUpdateTime = .0f;
-    int updateCounter = 0;
-    int lastUpdateCount = 0;
+    /// @name Debug Stats
+    /// @{
+    DebugOverlay::Stats debugStats;   ///< Debug overlay performance metrics
+    float lastDebugUpdateTime = .0f;  ///< Time of last debug stats refresh
+    int updateCounter = 0;            ///< Total snapshot updates since startup
+    int lastUpdateCount = 0;          ///< Update counter at last debug refresh
+    /// @}
 
-    // Hot Reload
-    bool reloadKeyWasDown = false;
-    float lastReloadTime = -10.0f;
-    std::atomic<bool> reloadRequested{false};
-    std::atomic<bool> reloadCompleted{false};  // Set by game thread when async Load() finishes
+    /// @name Hot Reload
+    /// @{
+    bool reloadKeyWasDown = false;             ///< Previous frame's reload key state
+    float lastReloadTime = -10.0f;             ///< Time of last settings reload
+    std::atomic<bool> reloadRequested{false};  ///< Render thread requests reload
+    std::atomic<bool> reloadCompleted{false};  ///< Set by game thread when async Load() finishes
+    /// @}
 
-    // Overlay Flags
-    std::atomic<bool> allowOverlay{false};
-    std::atomic<bool> manualEnabled{true};
+    /// @name Overlay Flags
+    /// @{
+    std::atomic<bool> allowOverlay{false};  ///< True when game state allows overlay
+    std::atomic<bool> manualEnabled{true};  ///< Toggled by user via console/key
+    /// @}
 
-    // Cached settings snapshot (re-captured only when Settings::Generation() changes)
+    /// Cached settings snapshot (re-captured only when Settings::Generation() changes).
     RenderSettingsSnapshot cachedSnap;
-    uint32_t lastSnapGeneration = 0;
+    uint32_t lastSnapGeneration = 0;  ///< Generation counter at last snapshot capture
 };
 
 /// Describes one formatted text segment on the main nameplate line.
 struct RenderSeg
 {
-    std::string text;         // Formatted text to display
-    std::string displayText;  // Text after typewriter truncation
-    bool isLevel;             // Whether to use level font
-    ImFont* font;             // Font to use for rendering
-    float fontSize;           // Scaled font size
-    ImVec2 size;              // Measured size of this segment
-    ImVec2 displaySize;       // Measured size of displayText
+    std::string text;         ///< Formatted text to display
+    std::string displayText;  ///< Text after typewriter truncation
+    bool isLevel;             ///< Whether to use level font
+    ImFont* font;             ///< Font to use for rendering
+    float fontSize;           ///< Scaled font size
+    ImVec2 size;              ///< Measured size of this segment
+    ImVec2 displaySize;       ///< Measured size of displayText
 };
 
 /**
@@ -345,12 +357,12 @@ struct LabelStyle
     const Settings::TierDefinition* tier;
     const Settings::SpecialTitleDefinition* specialTitle;
 
-    ImU32 colL, colR;            // Name gradient (packed)
-    ImU32 colLTitle, colRTitle;  // Title gradient
-    ImU32 colLLevel, colRLevel;  // Level gradient
-    ImU32 highlight;             // Shimmer / sparkle highlight
-    ImU32 outlineColor;          // Black outline (alpha-scaled)
-    ImU32 shadowColor;           // Black shadow  (alpha-scaled)
+    ImU32 colL, colR;            ///< Name gradient (packed)
+    ImU32 colLTitle, colRTitle;  ///< Title gradient
+    ImU32 colLLevel, colRLevel;  ///< Level gradient
+    ImU32 highlight;             ///< Shimmer / sparkle highlight
+    ImU32 outlineColor;          ///< Black outline (alpha-scaled)
+    ImU32 shadowColor;           ///< Black shadow  (alpha-scaled)
 
     ImVec4 Lc, Rc;            ///< Tier left/right color (pasteled float).
     ImVec4 LcName, RcName;    ///< Computed name color (float, for glow).
@@ -401,44 +413,44 @@ struct LabelStyle
 /// the screen-space anchor computed from WorldToScreen.
 struct LabelLayout
 {
-    ImFont* fontName;
-    ImFont* fontLevel;
-    ImFont* fontTitle;
-    float nameFontSize;
-    float levelFontSize;
-    float titleFontSize;
+    ImFont* fontName;     ///< Name font pointer
+    ImFont* fontLevel;    ///< Level font pointer
+    ImFont* fontTitle;    ///< Title font pointer
+    float nameFontSize;   ///< Scaled name font size in pixels
+    float levelFontSize;  ///< Scaled level font size in pixels
+    float titleFontSize;  ///< Scaled title font size in pixels
 
-    std::vector<RenderSeg> segments;
-    float mainLineWidth;
-    float mainLineHeight;
-    float segmentPadding;
+    std::vector<RenderSeg> segments;  ///< Main line segments (built from DisplayFormat)
+    float mainLineWidth;              ///< Total width of all segments plus padding
+    float mainLineHeight;             ///< Height of the tallest segment
+    float segmentPadding;             ///< Horizontal padding between segments
 
-    std::string titleStr;
-    std::string titleDisplayStr;
-    ImVec2 titleSize;
+    std::string titleStr;         ///< Full title text
+    std::string titleDisplayStr;  ///< Title text after typewriter truncation
+    ImVec2 titleSize;             ///< Measured size of titleDisplayStr
 
-    ImVec2 startPos;
-    float titleY;
-    float mainLineY;
-    float totalWidth;
+    ImVec2 startPos;   ///< Screen-space anchor from WorldToScreen
+    float titleY;      ///< Y position of title line top
+    float mainLineY;   ///< Y position of main line top
+    float totalWidth;  ///< Width of the wider of title/main line
 
-    ImVec2 nameplateCenter;
-    float nameplateTop;
-    float nameplateBottom;
-    float nameplateLeft;
-    float nameplateRight;
-    float nameplateWidth;
-    float nameplateHeight;
-    float mainLineCenterY;
+    ImVec2 nameplateCenter;  ///< Center of the nameplate bounding box
+    float nameplateTop;      ///< Top edge of nameplate (screen Y)
+    float nameplateBottom;   ///< Bottom edge of nameplate (screen Y)
+    float nameplateLeft;     ///< Left edge of nameplate (screen X)
+    float nameplateRight;    ///< Right edge of nameplate (screen X)
+    float nameplateWidth;    ///< Total nameplate width in pixels
+    float nameplateHeight;   ///< Total nameplate height in pixels
+    float mainLineCenterY;   ///< Vertical center of main line (for ornament anchoring)
 };
 
 /// Distance-based fade, LOD, and scale factors for a label.
 struct DistanceFactors
 {
-    float alphaTarget;       // Target alpha from distance fade
-    float textScaleTarget;   // Target font scale from distance
-    float lodTitleFactor;    // LOD multiplier for title visibility [0,1]
-    float lodEffectsFactor;  // LOD multiplier for particles/ornaments [0,1]
+    float alphaTarget;       ///< Target alpha from distance fade
+    float textScaleTarget;   ///< Target font scale from distance
+    float lodTitleFactor;    ///< LOD multiplier for title visibility [0,1]
+    float lodEffectsFactor;  ///< LOD multiplier for particles/ornaments [0,1]
 };
 
 // ============================================================================
@@ -450,10 +462,10 @@ struct DistanceFactors
 /// ("Avoid non-trivial global state").
 struct SnapshotState
 {
-    uint32_t frame = 0;                    // Snapshot frame counter
-    RE::BGSKeyword* npcKeyword = nullptr;  // Cached ActorTypeNPC keyword for creature filtering
-    bool npcKeywordLookupAttempted = false;
-    bool npcKeywordMissingLogged = false;
+    uint32_t frame = 0;                      ///< Snapshot frame counter
+    RE::BGSKeyword* npcKeyword = nullptr;    ///< Cached ActorTypeNPC keyword for creature filtering
+    bool npcKeywordLookupAttempted = false;  ///< True after first keyword lookup attempt
+    bool npcKeywordMissingLogged = false;    ///< True after logging keyword-not-found warning
 };
 SnapshotState& GetSnapshotState();
 

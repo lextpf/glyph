@@ -474,7 +474,7 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
     }
 
     // Screen blend state: output = src + dst * (1 - src)
-    // Capped at 1.0 — avoids the harsh white clipping of pure additive on
+    // Capped at 1.0 - avoids the harsh white clipping of pure additive on
     // bright backgrounds while still producing a natural light-emission look.
     D3D11_BLEND_DESC screenDesc{};
     screenDesc.RenderTarget[0].BlendEnable = TRUE;
