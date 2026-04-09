@@ -49,6 +49,7 @@ find_package(imgui CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(xbyak CONFIG REQUIRED)
 find_package(NanoSVG CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 find_path(RAPIDCSV_INCLUDE_DIRS "rapidcsv.h") # Added for CommonLibSSE-NG dependency
 
 # boost-unordered is header-only, find the include directory
@@ -145,8 +146,17 @@ add_library(glyph SHARED
     src/ParticleTextures.cpp
     src/BadgeTextures.hpp
     src/BadgeTextures.cpp
+    src/ProjectManifest.hpp
+    src/ProjectManifest.cpp
     src/TextPostProcess.hpp
     src/TextPostProcess.cpp
+    src/SceneMeter.hpp
+    src/SceneMeter.cpp
+    src/DepthClip.hpp
+    src/DepthClip.cpp
+    src/TrueHUDAPI.h
+    src/HudCompat.hpp
+    src/HudCompat.cpp
     src/Utf8Utils.hpp
     src/Version.hpp
 )
@@ -185,6 +195,7 @@ target_link_libraries(glyph PRIVATE
     xbyak::xbyak
     NanoSVG::nanosvg
     NanoSVG::nanosvgrast
+    nlohmann_json::nlohmann_json
 )
 # Note: boost-unordered and srell are header-only, no linking needed
 
