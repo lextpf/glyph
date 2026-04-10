@@ -252,6 +252,10 @@ struct TierDefinition
     std::optional<Color3> levelLeftColor;   ///< Level gradient left (default: mixed from name)
     std::optional<Color3> levelRightColor;  ///< Level gradient right
     std::optional<Color3> particleColor;    ///< Particle tint (default: highlightColor)
+    std::optional<Color3>
+        ornamentLeftColor;  ///< Ornament gradient left (default: raw tier leftColor)
+    std::optional<Color3>
+        ornamentRightColor;  ///< Ornament gradient right (default: raw tier rightColor)
 
     EffectParams titleEffect;  ///< Visual effect for title text (player only)
     EffectParams nameEffect;   ///< Visual effect for name text (player only)

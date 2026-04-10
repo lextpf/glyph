@@ -498,6 +498,8 @@ static std::string CanonicalizeStructKey(const std::string& rawKey)
         {"ornaments", "Ornaments"},
         {"particletypes", "ParticleTypes"},
         {"particlecount", "ParticleCount"},
+        {"ornamentleftcolor", "OrnamentLeftColor"},
+        {"ornamentrightcolor", "OrnamentRightColor"},
         {"keyword", "Keyword"},
         {"displaytitle", "DisplayTitle"},
         {"color", "Color"},
@@ -830,6 +832,18 @@ static bool ParseTierField(TierDefinition& tier, const std::string& key, const s
         Color3 c;
         ParseColor3(val, c);
         tier.particleColor = c;
+    }
+    else if (key == "OrnamentLeftColor")
+    {
+        Color3 c;
+        ParseColor3(val, c);
+        tier.ornamentLeftColor = c;
+    }
+    else if (key == "OrnamentRightColor")
+    {
+        Color3 c;
+        ParseColor3(val, c);
+        tier.ornamentRightColor = c;
     }
     else if (key == "TitleEffect" || key == "NameEffect" || key == "LevelEffect")
     {
