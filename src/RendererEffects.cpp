@@ -1013,6 +1013,28 @@ void DrawOrnaments(ImDrawList* dl,
     // Per-tier ornament color overrides bypass pastelization for punchier ornaments.
     // Special titles keep their dedicated color (already stored in style.Lc/Rc).
     ImVec4 ornLv, ornRv;
+    auto MixColors = [](const ImVec4& a, const ImVec4& b, float t)
+    {
+        t = std::clamp(t, .0f, 1.0f);
+        return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.0f);
+    };
+    auto BoostSaturation = [](ImVec4& c, float amount)
+    {
+        float gray = c.x * .299f + c.y * .587f + c.z * .114f;
+        c.x = std::clamp(gray + (c.x - gray) * amount, .0f, 1.0f);
+        c.y = std::clamp(gray + (c.y - gray) * amount, .0f, 1.0f);
+        c.z = std::clamp(gray + (c.z - gray) * amount, .0f, 1.0f);
+    };
+    auto DeriveOrnamentAccent =
+        [&](const ImVec4& titleCol, const ImVec4& nameCol, float highlightMix) -> ImVec4
+    {
+        ImVec4 highlight(tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, 1.0f);
+        ImVec4 accent = MixColors(titleCol, highlight, highlightMix);
+        accent = MixColors(accent, nameCol, .15f);
+        BoostSaturation(accent, 1.25f);
+        accent.w = style.alpha;
+        return accent;
+    };
     if (style.specialTitle)
     {
         ornLv = ImVec4(style.Lc.x, style.Lc.y, style.Lc.z, style.alpha);
@@ -1020,10 +1042,31 @@ void DrawOrnaments(ImDrawList* dl,
     }
     else
     {
-        const auto& oL = tier.ornamentLeftColor ? *tier.ornamentLeftColor : tier.leftColor;
-        const auto& oR = tier.ornamentRightColor ? *tier.ornamentRightColor : tier.rightColor;
-        ornLv = ImVec4(oL.r, oL.g, oL.b, style.alpha);
-        ornRv = ImVec4(oR.r, oR.g, oR.b, style.alpha);
+        if (tier.ornamentLeftColor)
+        {
+            const auto& oL = *tier.ornamentLeftColor;
+            ornLv = ImVec4(oL.r, oL.g, oL.b, style.alpha);
+        }
+        else
+        {
+            ornLv = DeriveOrnamentAccent(
+                ImVec4(style.LcTitle.x, style.LcTitle.y, style.LcTitle.z, 1.0f),
+                ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, 1.0f),
+                .32f);
+        }
+
+        if (tier.ornamentRightColor)
+        {
+            const auto& oR = *tier.ornamentRightColor;
+            ornRv = ImVec4(oR.r, oR.g, oR.b, style.alpha);
+        }
+        else
+        {
+            ornRv = DeriveOrnamentAccent(
+                ImVec4(style.RcTitle.x, style.RcTitle.y, style.RcTitle.z, 1.0f),
+                ImVec4(style.RcName.x, style.RcName.y, style.RcName.z, 1.0f),
+                .42f);
+        }
     }
     ImU32 ornColL = ImGui::ColorConvertFloat4ToU32(ornLv);
     ImU32 ornColR = ImGui::ColorConvertFloat4ToU32(ornRv);
