@@ -205,32 +205,47 @@ static void ComputeTierColors(LabelStyle& style,
                       1.0f + (c.z - 1.0f) * amount,
                       c.w);
     };
+    auto MixColors = [](const ImVec4& a, const ImVec4& b, float t)
+    {
+        t = std::clamp(t, .0f, 1.0f);
+        return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.0f);
+    };
 
     const float baseColorAmount = under100 ? (.35f + .65f * tierIntensity) : 1.0f;
+    const ImVec4 highlightColor(
+        tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, 1.0f);
 
-    // Level colors: use per-tier override if set, else derive from the tier base.
+    // Name colors stay anchored to the tier's main gradient.
+    style.LcName = style.Lc;
+    style.RcName = style.Rc;
+
+    // Level colors: use per-tier override if set, else derive a softer supporting accent
+    // from the name colors plus a touch of the tier highlight.
     if (tier.levelLeftColor)
         style.LcLevel = Pastelize(*tier.levelLeftColor);
     else
-        style.LcLevel = MixToWhite(style.Lc, baseColorAmount);
+        style.LcLevel = MixToWhite(MixColors(style.LcName, highlightColor, .18f + .10f * levelT),
+                                   baseColorAmount * .90f);
     if (tier.levelRightColor)
         style.RcLevel = Pastelize(*tier.levelRightColor);
     else
-        style.RcLevel = MixToWhite(style.Rc, baseColorAmount);
+        style.RcLevel = MixToWhite(MixColors(style.RcName, highlightColor, .18f + .10f * levelT),
+                                   baseColorAmount * .90f);
 
-    // Name colors are derived directly from the softened level colors.
-    style.LcName = style.LcLevel;
-    style.RcName = style.RcLevel;
-
-    // Title colors: use per-tier override if set, else derive from the name colors.
+    // Title colors: use per-tier override if set, else derive a companion accent from
+    // the same tier palette rather than cloning the name band.
     if (tier.titleLeftColor)
         style.LcTitle = Pastelize(*tier.titleLeftColor);
     else
-        style.LcTitle = style.LcName;
+        style.LcTitle =
+            MixToWhite(MixColors(MixColors(style.LcName, style.RcName, .18f), highlightColor, .34f),
+                       baseColorAmount * .82f);
     if (tier.titleRightColor)
         style.RcTitle = Pastelize(*tier.titleRightColor);
     else
-        style.RcTitle = style.RcName;
+        style.RcTitle =
+            MixToWhite(MixColors(MixColors(style.RcName, style.LcName, .18f), highlightColor, .42f),
+                       baseColorAmount * .82f);
 
     style.specialGlowColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
