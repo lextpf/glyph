@@ -13,6 +13,7 @@
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <wrl/client.h>
+#include <chrono>
 #include <exception>
 #include <mutex>
 
@@ -49,6 +50,7 @@ struct InitFlags
 {
     std::atomic<bool> initialized{false};
     std::atomic<bool> initializing{false};
+    std::atomic<std::uint64_t> nextInitRetryAtMs{0};
     std::atomic<bool> mipmapsGenerated{false};
     std::atomic<bool> particleTexturesLoaded{false};
     std::atomic<bool> postProcessInitialized{false};
@@ -66,6 +68,9 @@ struct DiagFlags
     std::atomic<uint32_t> renderExceptionCount{0};
     std::atomic<bool> missingPresentLogged{false};
     std::atomic<bool> deviceChangeLogged{false};
+    std::atomic<bool> imguiInitializedLogged{false};
+    std::atomic<bool> firstPostDisplayLogged{false};
+    std::atomic<bool> presentBootstrapLogged{false};
 };
 
 static InitFlags& Init()
@@ -203,30 +208,33 @@ static void HandleDeviceChange()
 
 // Perform first-time ImGui initialization: create context, load fonts,
 // initialize Win32/DX11 backends, and install the Present hook.
-static void InitializeImGui()
+//
+// Returns true when initialization completed successfully. Failures are
+// expected during some load-order transitions, so callers may retry later.
+static bool InitializeImGui()
 {
     auto renderer = RE::BSGraphics::Renderer::GetSingleton();
     if (!renderer)
     {
-        return;
+        return false;
     }
 
     auto& data = renderer->data;
     if (!data.renderWindows)
     {
-        return;
+        return false;
     }
 
     auto swapChain = reinterpret_cast<IDXGISwapChain*>(data.renderWindows[0].swapChain);
     if (!swapChain)
     {
-        return;
+        return false;
     }
 
     DXGI_SWAP_CHAIN_DESC desc{};
     if (FAILED(swapChain->GetDesc(std::addressof(desc))))
     {
-        return;
+        return false;
     }
 
     const auto device = reinterpret_cast<ID3D11Device*>(data.forwarder);
@@ -234,7 +242,7 @@ static void InitializeImGui()
 
     if (!device || !context)
     {
-        return;
+        return false;
     }
 
     // Store for later mipmap generation
@@ -351,14 +359,14 @@ static void InitializeImGui()
     {
         logger::error("Hooks: ImGui Win32 backend initialization failed");
         cleanupFailedInit();
-        return;
+        return false;
     }
     win32Initialized = true;
     if (!ImGui_ImplDX11_Init(device, context))
     {
         logger::error("Hooks: ImGui DX11 backend initialization failed");
         cleanupFailedInit();
-        return;
+        return false;
     }
     dx11Initialized = true;
 
@@ -372,10 +380,54 @@ static void InitializeImGui()
     {
         logger::error("Hooks: Failed to install Present hook");
         cleanupFailedInit();
-        return;
+        return false;
     }
 
     Init().initialized.store(true, std::memory_order_release);
+    Init().nextInitRetryAtMs.store(0, std::memory_order_release);
+    if (!Diag().imguiInitializedLogged.exchange(true, std::memory_order_acq_rel))
+    {
+        logger::info("Hooks: ImGui/DX11 initialized");
+    }
+    return true;
+}
+
+// Late bootstrap path for sessions where the D3D creation hook fires before
+// glyph is loaded or when renderer startup ordering changes.  HUD/Present can
+// call this safely; the CAS ensures only one thread attempts initialization.
+static void EnsureOverlayInitialized()
+{
+    static constexpr std::uint64_t INIT_RETRY_INTERVAL_MS = 5000;
+    const auto nowMs =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch())
+                                       .count());
+
+    if (Init().initialized.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    const auto nextRetryAt = Init().nextInitRetryAtMs.load(std::memory_order_acquire);
+    if (nextRetryAt != 0 && nowMs < nextRetryAt)
+    {
+        return;
+    }
+
+    bool expected = false;
+    if (!Init().initializing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    {
+        return;
+    }
+    struct InitScope
+    {
+        ~InitScope() { Init().initializing.store(false, std::memory_order_release); }
+    } _;
+
+    if (!InitializeImGui())
+    {
+        Init().nextInitRetryAtMs.store(nowMs + INIT_RETRY_INTERVAL_MS, std::memory_order_release);
+    }
 }
 
 // Hook for D3D11 device/swap chain creation
@@ -391,18 +443,7 @@ struct CreateD3DAndSwapChain
             return;
         }
 
-        // Ensure only one thread attempts initialization at a time.
-        bool expected = false;
-        if (!Init().initializing.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-        {
-            return;
-        }
-        struct InitScope
-        {
-            ~InitScope() { Init().initializing.store(false, std::memory_order_release); }
-        } _;
-
-        InitializeImGui();
+        EnsureOverlayInitialized();
     }
     static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -619,6 +660,23 @@ void RenderOverlayNow()
 // during TryInstallPresentHook before any Present call can occur.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
+    AppearanceTemplate::CheckPendingAppearanceTemplate();
+
+    if (!Frame().shouldRenderOverlay.load(std::memory_order_acquire) && GameState::CanDrawOverlay())
+    {
+        Renderer::TickRT();
+
+        const bool shouldRender =
+            Init().initialized.load(std::memory_order_acquire) && Renderer::IsOverlayAllowedRT();
+        Frame().shouldRenderOverlay.store(shouldRender, std::memory_order_release);
+
+        if (shouldRender &&
+            !Diag().presentBootstrapLogged.exchange(true, std::memory_order_acq_rel))
+        {
+            logger::info("Hooks: Present fallback bootstrapped overlay rendering");
+        }
+    }
+
     if (Frame().shouldRenderOverlay.load(std::memory_order_acquire) &&
         !Frame().overlayRenderedThisFrame.load(std::memory_order_acquire))
     {
@@ -704,8 +762,18 @@ struct PostDisplay
         Frame().shouldRenderOverlay.store(false, std::memory_order_release);
         Frame().overlayRenderedThisFrame.store(false, std::memory_order_release);
 
+        if (!Diag().firstPostDisplayLogged.exchange(true, std::memory_order_acq_rel))
+        {
+            logger::debug("Hooks: HUDMenu::PostDisplay hit");
+        }
+
+        EnsureOverlayInitialized();
+        AppearanceTemplate::CheckPendingAppearanceTemplate();
+
+        const bool canDrawOverlay = GameState::CanDrawOverlay();
+
         // Early exit checks
-        if (!Init().initialized.load(std::memory_order_acquire) || !GameState::CanDrawOverlay())
+        if (!Init().initialized.load(std::memory_order_acquire) || !canDrawOverlay)
         {
             func(a_menu);
             return;
@@ -720,9 +788,6 @@ struct PostDisplay
 
         // Update render thread state to queue actor data updates
         Renderer::TickRT();
-
-        // Check if we need to apply appearance template
-        AppearanceTemplate::CheckPendingAppearanceTemplate();
 
         // Check if overlay should be rendered
         bool shouldRender = Renderer::IsOverlayAllowedRT();

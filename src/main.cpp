@@ -172,6 +172,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
             logger::debug("Post load game event received");
             if (readTemplateSettingsSnapshot().enabled)
             {
+                AppearanceTemplate::ResetAppliedFlag();
                 AppearanceTemplate::SetPendingAppearanceApply();
             }
             // Test overlay interface after game load
@@ -189,6 +190,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
                              snapshot.plugin);
                 if (snapshot.enabled)
                 {
+                    AppearanceTemplate::ResetAppliedFlag();
                     AppearanceTemplate::SetPendingAppearanceApply();
                     logger::info("Pending appearance flag set to TRUE");
                 }
