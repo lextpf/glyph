@@ -12,9 +12,7 @@ bool CanDrawOverlay()
         return false;
     }
 
-    // "Loading is basically still happening" window
-    if (!main->gameActive || main->freezeTime || main->freezeNextFrame || main->fullReset ||
-        main->resetGame || main->reloadContent)
+    if (!main->gameActive)
     {
         return false;
     }
@@ -26,6 +24,8 @@ bool CanDrawOverlay()
             "Main Menu",
             "MapMenu",
             "Fader Menu",
+            "RaceSex Menu",
+            "MessageBoxMenu",
             "Menu",
             "Console",
             "TweenMenu",

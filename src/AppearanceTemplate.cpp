@@ -325,10 +325,13 @@ bool ApplyIfConfigured()
 
 static std::atomic<bool> s_pendingAppearanceApply{false};
 static std::atomic<int> s_checkCount{0};
+static std::atomic<int> s_readyStreak{0};
 
 void SetPendingAppearanceApply()
 {
     s_pendingAppearanceApply.store(true);
+    s_checkCount.store(0);
+    s_readyStreak.store(0);
 }
 
 void CheckPendingAppearanceTemplate()
@@ -344,27 +347,77 @@ void CheckPendingAppearanceTemplate()
         return;
     }
 
-    int count = s_checkCount.fetch_add(1);
-    bool shouldLog = (count % 60 == 0);
+    int count = s_checkCount.fetch_add(1) + 1;
 
     auto player = RE::PlayerCharacter::GetSingleton();
     auto playerBase = player ? player->GetActorBase() : nullptr;
+    auto* playerCell = player ? player->GetParentCell() : nullptr;
+    bool isCellAttached = playerCell && playerCell->IsAttached();
     bool is3DLoaded = player ? player->Is3DLoaded() : false;
-
-    if (shouldLog)
+    bool gameActive = true;
+    if (auto* main = RE::Main::GetSingleton())
     {
-        logger::debug("Appearance check #{}: player={}, base={}, 3D={}",
-                      count,
-                      player != nullptr,
-                      playerBase != nullptr,
-                      is3DLoaded);
+        gameActive = main->gameActive;
     }
 
-    if (player && playerBase && is3DLoaded)
+    const char* blockingMenu = nullptr;
+    if (auto* ui = RE::UI::GetSingleton())
+    {
+        static constexpr const char* BLOCKING_MENUS[] = {
+            "Loading Menu",
+            "Main Menu",
+            "Fader Menu",
+            "RaceSex Menu",
+            "MessageBoxMenu",
+            "Menu",
+            "TweenMenu",
+        };
+        for (const auto* menu : BLOCKING_MENUS)
+        {
+            if (ui->IsMenuOpen(menu))
+            {
+                blockingMenu = menu;
+                break;
+            }
+        }
+    }
+
+    const bool ready = gameActive && player != nullptr && playerBase != nullptr && isCellAttached &&
+                       is3DLoaded && blockingMenu == nullptr;
+
+    int readyStreak = 0;
+    if (ready)
+    {
+        readyStreak = s_readyStreak.fetch_add(1) + 1;
+    }
+    else
+    {
+        s_readyStreak.store(0);
+    }
+
+    const bool shouldLog = (count % 60 == 0) || (ready && readyStreak == 1);
+    if (shouldLog)
+    {
+        logger::debug(
+            "Appearance check #{}: player={}, base={}, cellAttached={}, 3D={}, gameActive={}, "
+            "blockingMenu={}, readyStreak={}",
+            count,
+            player != nullptr,
+            playerBase != nullptr,
+            isCellAttached,
+            is3DLoaded,
+            gameActive,
+            blockingMenu ? blockingMenu : "<none>",
+            readyStreak);
+    }
+
+    constexpr int REQUIRED_READY_STREAK = 120;
+    if (ready && readyStreak >= REQUIRED_READY_STREAK)
     {
         logger::info("Player ready after {} checks, applying appearance template", count);
         s_pendingAppearanceApply.store(false);
         s_checkCount.store(0);
+        s_readyStreak.store(0);
         if (auto* task = SKSE::GetTaskInterface())
         {
             task->AddTask([]() { ApplyIfConfigured(); });
