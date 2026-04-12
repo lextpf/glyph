@@ -8,18 +8,44 @@ namespace AppearanceTemplate
 {
 namespace
 {
-// Compute the FaceGen file ID for a plugin
-// Light plugins (ESL/ESPFE): FaceGen uses lower 12 bits (e.g., FEDC6810 -> 00000810)
-// Regular plugins (ESP/ESM): FaceGen uses lower 24 bits (e.g., 05012345 -> 00012345)
-RE::FormID FaceGenFileID(RE::FormID resolvedFormID, const RE::TESFile* plugin)
+// Build candidate FaceGen file IDs for a plugin.
+//
+// Most regular plugins use the lower 24 bits. Light plugins usually use the
+// lower 12 bits, but AE runtimes can resolve some ESL-flagged plugins into a
+// non-FE runtime slot for records whose local ID exceeds 0xFFF. In that case
+// the on-disk FaceGen may still exist using the 24-bit object ID, so try both.
+std::vector<RE::FormID> FaceGenFileIDs(RE::FormID resolvedFormID, const RE::TESFile* plugin)
 {
-    if (plugin && plugin->IsLight())
+    std::vector<RE::FormID> ids;
+    ids.reserve(2);
+
+    if (!plugin)
     {
-        // Light plugins: extract lower 12 bits
-        return resolvedFormID & 0x00000FFF;
+        ids.push_back(resolvedFormID & 0x00FFFFFF);
+        return ids;
     }
-    // Regular plugins: extract lower 24 bits
-    return resolvedFormID & 0x00FFFFFF;
+
+    const RE::FormID lower24 = resolvedFormID & 0x00FFFFFF;
+    const RE::FormID lower12 = resolvedFormID & 0x00000FFF;
+
+    if (plugin->IsLight())
+    {
+        ids.push_back(lower12);
+
+        // AE 1.6.1130+ can resolve some ESL-flagged forms into a regular slot.
+        // When that happens, FaceGen may still be authored/exported with the
+        // 24-bit object ID, so fall back to that lookup too.
+        if ((resolvedFormID & 0xFF000000) != 0xFE000000 && lower24 != lower12)
+        {
+            ids.push_back(lower24);
+        }
+    }
+    else
+    {
+        ids.push_back(lower24);
+    }
+
+    return ids;
 }
 }  // namespace
 
@@ -161,40 +187,51 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
     std::string triedSecondary;
     std::string meshPath, tintPath;
     bool meshFound = false;
+    RE::FormID matchedFaceID = 0;
+    const RE::TESFile* matchedPlugin = nullptr;
 
-    for (size_t i = 0; i < unique.size(); ++i)
+    size_t attemptIndex = 0;
+    for (const auto* plugin : unique)
     {
-        const RE::TESFile* plugin = unique[i];
         if (!plugin || !plugin->fileName)
         {
             continue;
         }
-        RE::FormID faceID = FaceGenFileID(resolvedFormID, plugin);
-        meshPath = BuildFaceGenMeshPath(plugin->fileName, faceID);
-        tintPath = BuildFaceGenTintPath(plugin->fileName, faceID);
 
-        RE::BSResourceNiBinaryStream meshStream(meshPath.c_str());
-        if (i == 0)
+        for (RE::FormID faceID : FaceGenFileIDs(resolvedFormID, plugin))
         {
-            triedPrimary = meshPath;
-        }
-        else
-        {
-            triedSecondary = meshPath;
-        }
+            meshPath = BuildFaceGenMeshPath(plugin->fileName, faceID);
+            tintPath = BuildFaceGenTintPath(plugin->fileName, faceID);
 
-        if (meshStream.good())
-        {
-            logger::info("AppearanceTemplate: Found FaceGen mesh: {}", meshPath);
-            logger::info("AppearanceTemplate: FaceGen lookup - plugin: {}, FormID: {:08X}",
-                         plugin->fileName,
-                         faceID);
-            meshFound = true;
-            break;
-        }
-        else
-        {
+            RE::BSResourceNiBinaryStream meshStream(meshPath.c_str());
+            if (attemptIndex == 0)
+            {
+                triedPrimary = meshPath;
+            }
+            else
+            {
+                triedSecondary = meshPath;
+            }
+            ++attemptIndex;
+
+            if (meshStream.good())
+            {
+                logger::info("AppearanceTemplate: Found FaceGen mesh: {}", meshPath);
+                logger::info("AppearanceTemplate: FaceGen lookup - plugin: {}, FormID: {:08X}",
+                             plugin->fileName,
+                             faceID);
+                meshFound = true;
+                matchedFaceID = faceID;
+                matchedPlugin = plugin;
+                break;
+            }
+
             logger::debug("AppearanceTemplate: FaceGen not found at: {}", meshPath);
+        }
+
+        if (meshFound)
+        {
+            break;
         }
     }
 
@@ -232,6 +269,13 @@ bool ApplyFaceGen(RE::TESNPC* templateNPC)
     if (tintExists)
     {
         logger::info("AppearanceTemplate: FaceGen tint will be loaded from: {}", tintPath);
+    }
+
+    if (matchedPlugin)
+    {
+        logger::debug("AppearanceTemplate: FaceGen source matched {} using file ID {:08X}",
+                      matchedPlugin->fileName,
+                      matchedFaceID);
     }
 
     return true;

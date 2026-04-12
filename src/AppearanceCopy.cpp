@@ -118,6 +118,31 @@ bool CopyHeadParts(RE::TESNPC* templateNPC, RE::TESNPC* playerBase)
             "memory (safety over potential invalid free)");
     }
 
+    // For the primary visible face-part categories, also go through the engine
+    // swap path so the live NPC state tracks the newly copied parts.
+    for (uint8_t i = 0; i < templateNPC->numHeadParts; ++i)
+    {
+        auto* part = templateNPC->headParts[i];
+        if (!part)
+        {
+            continue;
+        }
+
+        switch (part->type.get())
+        {
+            case RE::BGSHeadPart::HeadPartType::kFace:
+            case RE::BGSHeadPart::HeadPartType::kEyes:
+            case RE::BGSHeadPart::HeadPartType::kHair:
+            case RE::BGSHeadPart::HeadPartType::kFacialHair:
+            case RE::BGSHeadPart::HeadPartType::kScar:
+            case RE::BGSHeadPart::HeadPartType::kEyebrows:
+                playerBase->ChangeHeadPart(part);
+                break;
+            default:
+                break;
+        }
+    }
+
     for (uint8_t i = 0; i < templateNPC->numHeadParts; ++i)
     {
         auto* part = templateNPC->headParts[i];
@@ -180,14 +205,14 @@ bool CopyHairAndSkin(RE::TESNPC* templateNPC, RE::TESNPC* playerBase, bool copyS
         // Hair color
         if (templateNPC->headRelatedData->hairColor)
         {
-            playerBase->headRelatedData->hairColor = templateNPC->headRelatedData->hairColor;
+            playerBase->SetHairColor(templateNPC->headRelatedData->hairColor);
             logger::info("AppearanceTemplate: Copied hair color");
         }
 
         // Face texture set, skin detail textures
         if (templateNPC->headRelatedData->faceDetails)
         {
-            playerBase->headRelatedData->faceDetails = templateNPC->headRelatedData->faceDetails;
+            playerBase->SetFaceTexture(templateNPC->headRelatedData->faceDetails);
             logger::info("AppearanceTemplate: Copied face texture set");
         }
     }
