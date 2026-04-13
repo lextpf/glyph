@@ -13,7 +13,7 @@ struct EffectArgs
 {
     const Settings::EffectParams& effect;
     ImU32 colL, colR, highlight, outlineColor;
-    float outlineWidth, phase01, strength, textSizeScale, alpha;
+    float outlineWidth, phase01, strength;
     bool fastOutlines;
     TextEffects::OutlineGlowParams outlineGlow;
     TextEffects::DualOutlineParams dualOutline;
@@ -357,7 +357,7 @@ static void ApplyBreathe(
         a.colL,
         a.colR,
         ParamOr(a.effect.param1, .25f),
-        ParamOr(a.effect.param2, .06f) * a.strength);
+        (std::max)(.10f, ParamOr(a.effect.param2, .16f) * a.strength));
 }
 
 static void ApplyDrift(
@@ -376,7 +376,7 @@ static void ApplyDrift(
         a.colL,
         a.colR,
         ParamOr(a.effect.param1, .08f),
-        ParamOr(a.effect.param2, 8.0f) * a.strength);
+        ParamOr(a.effect.param2, 26.0f) * a.strength);
 }
 
 static void ApplyMote(
@@ -395,8 +395,8 @@ static void ApplyMote(
         a.colL,
         a.colR,
         a.highlight,
-        ParamOr(a.effect.param1, 2.5f),
-        ParamOr(a.effect.param2, .4f) * a.strength);
+        ParamOr(a.effect.param1, 3.5f),
+        (std::max)(.50f, ParamOr(a.effect.param2, .60f) * a.strength));
 }
 
 static void ApplyWander(
@@ -415,8 +415,69 @@ static void ApplyWander(
         a.colL,
         a.colR,
         ParamOr(a.effect.param1, .4f),
-        ParamOr(a.effect.param2, .05f) * a.strength,
+        (std::max)(.10f, ParamOr(a.effect.param2, .14f) * a.strength),
         ParamOr(a.effect.param3, 1.0f));
+}
+
+static void ApplyEclipse(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextEclipse>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        a.highlight,
+        a.phase01,
+        ParamOr(a.effect.param1, .16f),
+        ParamOr(a.effect.param2, 1.0f) * a.strength);
+}
+
+static void ApplyPulse(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextPulse>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        a.highlight,
+        ParamOr(a.effect.param1, .45f),
+        ParamOr(a.effect.param2, .55f) * a.strength);
+}
+
+static void ApplyElectric(
+    ImDrawList* dl, ImFont* font, float sz, ImVec2 pos, const char* text, const EffectArgs& a)
+{
+    TextEffects::WithOutlineGlow<TextEffects::AddTextElectric>(
+        dl,
+        font,
+        sz,
+        pos,
+        text,
+        a.outlineColor,
+        a.outlineWidth,
+        a.fastOutlines,
+        a.outlineGlow.enabled ? &a.outlineGlow : nullptr,
+        a.colL,
+        a.colR,
+        a.highlight,
+        ParamOr(a.effect.param1, .18f),
+        ParamOr(a.effect.param2, .85f) * a.strength);
 }
 }  // namespace
 
@@ -452,11 +513,32 @@ void ApplyTextEffect(ImDrawList* drawList,
                     outlineWidth,
                     phase01,
                     strength,
-                    textSizeScale,
-                    alpha,
                     fastOutlines,
                     outlineGlow ? *outlineGlow : TextEffects::OutlineGlowParams{},
                     dualOutline ? *dualOutline : TextEffects::DualOutlineParams{}};
+
+    // Inner outline BELOW the fill. Its 8 sub-pixel-offset stamps overlap the
+    // glyph interior; drawn after the fill they composited into a ~50% static
+    // mid-dark film that repainted over every animated effect each frame,
+    // halving the effect's contrast. Under the fill, only the rim survives --
+    // which is all it was ever meant to be.
+    if (args.dualOutline.enabled)
+    {
+        TextEffects::DrawDirectionalInnerOutline(drawList,
+                                                 font,
+                                                 fontSize,
+                                                 pos,
+                                                 text,
+                                                 args.outlineColor,
+                                                 args.dualOutline.tierColor,
+                                                 args.outlineWidth,
+                                                 args.dualOutline.innerScale,
+                                                 args.dualOutline.tintFactor,
+                                                 args.dualOutline.alphaFactor,
+                                                 args.dualOutline.lightAngle,
+                                                 args.dualOutline.lightBias,
+                                                 args.fastOutlines);
+    }
 
     switch (effect.type)
     {
@@ -505,28 +587,17 @@ void ApplyTextEffect(ImDrawList* drawList,
         case Settings::EffectType::Wander:
             ApplyWander(drawList, font, fontSize, pos, text, args);
             break;
+        case Settings::EffectType::Eclipse:
+            ApplyEclipse(drawList, font, fontSize, pos, text, args);
+            break;
+        case Settings::EffectType::Pulse:
+            ApplyPulse(drawList, font, fontSize, pos, text, args);
+            break;
+        case Settings::EffectType::Electric:
+            ApplyElectric(drawList, font, fontSize, pos, text, args);
+            break;
         default:
             break;
-    }
-
-    // Draw inner outline on top (sits between outer outline and text visually
-    // due to smaller width and semi-transparent tier-tinted color)
-    if (args.dualOutline.enabled)
-    {
-        TextEffects::DrawDirectionalInnerOutline(drawList,
-                                                 font,
-                                                 fontSize,
-                                                 pos,
-                                                 text,
-                                                 args.outlineColor,
-                                                 args.dualOutline.tierColor,
-                                                 args.outlineWidth,
-                                                 args.dualOutline.innerScale,
-                                                 args.dualOutline.tintFactor,
-                                                 args.dualOutline.alphaFactor,
-                                                 args.dualOutline.lightAngle,
-                                                 args.dualOutline.lightBias,
-                                                 args.fastOutlines);
     }
 
     // Apply text-body alpha shaping after all fill/outline vertices have been emitted.
@@ -592,10 +663,13 @@ static TextEffects::OutlineGlowParams BuildOutlineGlow(const RenderSettingsSnaps
     float gg = snap.outlineGlowG;
     float gb = snap.outlineGlowB;
 
-    // Optionally tint toward tier color
+    // Optionally tint toward tier color. Near-fully tier-colored (85%): any
+    // white majority here stacks with the bloom and shine into the whitewash
+    // the halo keeps getting blamed for; the remaining 15% white just lifts
+    // luminance a touch.
     if (snap.outlineGlowTierTint)
     {
-        float t = .35f;  // blend 35% tier color into the glow
+        float t = .85f;  // blend 85% tier color into the glow
         gr = gr + (supportTint.x - gr) * t;
         gg = gg + (supportTint.y - gg) * t;
         gb = gb + (supportTint.z - gb) * t;
@@ -962,9 +1036,9 @@ static OrnamentMetrics ComputeOrnamentMetrics(const ActorDrawData& d,
     m.ornamentSize = snap.ornamentFontSize * snap.ornamentScale * sizeMultiplier * textSizeScale;
 
     const float spacingScale = textSizeScale;
-    const float extraPadding = m.ornamentSize * .30f;
-    m.totalSpacing = snap.ornamentSpacing * 1.35f * spacingScale + extraPadding;
-    m.ornamentCharGap = std::max(2.0f, m.ornamentSize * .16f);
+    const float extraPadding = m.ornamentSize * .18f;
+    m.totalSpacing = snap.ornamentSpacing * 1.1f * spacingScale + extraPadding;
+    m.ornamentCharGap = std::max(1.0f, m.ornamentSize * .08f);
 
     auto sideExtent = [&](const std::vector<std::string>& chars) -> float
     {
@@ -1001,11 +1075,13 @@ struct ParticleTypeSpec
     float spreadYScale;
     float sizeScale;
     float speedScale;
-    float countScale;  ///< Multiplies boostedCount (result floored to >= 4)
+    float countScale;   ///< Multiplies boostedCount (with tier weight; clamped per type)
+    int minCount = 4;   ///< Per-type count floor (scaled down by whisper weights < 1)
+    int maxCount = 96;  ///< Per-type count cap -- solitary accents (moon/planet) set 2
 };
 
-static constexpr int kParticleTypeCount = 11;
-static const ParticleTypeSpec kParticleTypes[kParticleTypeCount] = {
+static constexpr int kParticleTypeCount = Settings::kParticleStyleCount;
+static constexpr ParticleTypeSpec kParticleTypes[kParticleTypeCount] = {
     {Settings::ParticleStyle::Firefly, "firefly", 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
     {Settings::ParticleStyle::Rain, "rain", 1.00f, 1.05f, 0.85f, 1.60f, 1.00f},
     {Settings::ParticleStyle::Snow, "snow", 1.00f, 1.05f, 0.90f, 0.70f, 1.00f},
@@ -1017,19 +1093,89 @@ static const ParticleTypeSpec kParticleTypes[kParticleTypeCount] = {
     {Settings::ParticleStyle::CherryBlossom, "cherryblossom", 1.00f, 1.05f, 1.00f, 0.70f, 0.90f},
     {Settings::ParticleStyle::Dust, "dust", 1.00f, 1.00f, 0.80f, 0.40f, 1.00f},
     {Settings::ParticleStyle::Mote, "mote", 1.00f, 1.00f, 1.00f, 0.50f, 0.90f},
+    // -- 2026-07 sprite expansion --
+    {Settings::ParticleStyle::Arcane, "arcane", 1.05f, 1.00f, 1.05f, 0.85f, 0.70f},
+    {Settings::ParticleStyle::Ash, "ash", 1.00f, 1.05f, 0.90f, 0.80f, 1.00f},
+    {Settings::ParticleStyle::Bat, "bat", 1.15f, 1.00f, 1.15f, 1.10f, 0.60f, 3},
+    {Settings::ParticleStyle::Bubble, "bubble", 0.95f, 1.05f, 1.00f, 0.90f, 0.80f},
+    {Settings::ParticleStyle::Butterfly, "butterfly", 1.10f, 1.05f, 1.10f, 0.80f, 0.60f, 3},
+    {Settings::ParticleStyle::Coin, "coin", 1.00f, 1.05f, 1.05f, 1.20f, 0.80f},
+    {Settings::ParticleStyle::Confetti, "confetti", 1.00f, 1.05f, 0.95f, 1.10f, 1.00f},
+    {Settings::ParticleStyle::Constellation, "constellation", 1.10f, 0.95f, 1.10f, 0.50f, 0.70f},
+    {Settings::ParticleStyle::Curse, "curse", 1.05f, 1.00f, 1.10f, 0.70f, 0.60f, 3},
+    {Settings::ParticleStyle::Enchant, "enchant", 1.05f, 1.05f, 0.95f, 0.90f, 1.00f},
+    {Settings::ParticleStyle::Fairy, "fairy", 1.10f, 1.10f, 1.00f, 1.00f, 0.70f, 3},
+    {Settings::ParticleStyle::Fog, "fog", 1.15f, 0.95f, 1.60f, 0.50f, 0.60f},
+    {Settings::ParticleStyle::Gem, "gem", 1.00f, 0.95f, 1.00f, 0.75f, 0.70f},
+    {Settings::ParticleStyle::Glitter, "glitter", 1.00f, 1.00f, 0.85f, 0.90f, 1.20f, 6},
+    {Settings::ParticleStyle::Heart, "heart", 0.95f, 1.05f, 1.05f, 0.85f, 0.70f},
+    {Settings::ParticleStyle::Hex, "hex", 1.05f, 1.00f, 1.05f, 0.75f, 0.70f},
+    {Settings::ParticleStyle::Ink, "ink", 0.95f, 1.05f, 0.95f, 1.30f, 0.80f},
+    {Settings::ParticleStyle::Moon, "moon", 1.10f, 0.95f, 1.45f, 0.45f, 0.10f, 1, 2},
+    {Settings::ParticleStyle::Planet, "planet", 1.15f, 1.00f, 1.50f, 0.50f, 0.10f, 1, 2},
+    {Settings::ParticleStyle::Pollen, "pollen", 1.05f, 1.05f, 0.85f, 0.70f, 1.10f, 5},
+    {Settings::ParticleStyle::Soul, "soul", 1.00f, 1.05f, 1.15f, 0.70f, 0.70f, 3},
+    {Settings::ParticleStyle::Steam, "steam", 0.90f, 1.05f, 1.00f, 1.00f, 0.80f},
+    {Settings::ParticleStyle::Void, "void", 1.05f, 1.00f, 1.20f, 0.70f, 0.60f, 3},
+    {Settings::ParticleStyle::Vortex, "vortex", 1.05f, 1.00f, 1.10f, 1.10f, 0.70f},
+    {Settings::ParticleStyle::Wind, "wind", 1.15f, 0.95f, 1.05f, 1.40f, 0.80f},
+    {Settings::ParticleStyle::Zap, "zap", 1.05f, 1.00f, 1.10f, 1.20f, 0.70f},
+    {Settings::ParticleStyle::Zzz, "zzz", 1.00f, 1.05f, 1.00f, 0.70f, 0.60f, 3},
+    {Settings::ParticleStyle::Ember, "ember", 1.00f, 1.05f, 0.90f, 0.85f, 0.90f},
+    {Settings::ParticleStyle::Pixiedust, "pixiedust", 1.05f, 1.05f, 0.85f, 0.75f, 1.10f, 5},
+    {Settings::ParticleStyle::Runes, "runes", 1.05f, 1.00f, 1.05f, 0.80f, 0.70f},
+    {Settings::ParticleStyle::Sand, "sand", 1.15f, 0.95f, 0.90f, 1.00f, 0.90f},
 };
+// Every style exactly once, with the canonical token from Settings -- a row
+// drifting out of sync with the enum is a compile error, not a silent miss.
+static_assert(
+    []() consteval
+    {
+        auto eq = [](const char* a, const char* b)
+        {
+            while (*a && *b && *a == *b)
+            {
+                ++a;
+                ++b;
+            }
+            return *a == *b;
+        };
+        bool seen[kParticleTypeCount] = {};
+        for (const auto& row : kParticleTypes)
+        {
+            const int idx = static_cast<int>(row.style);
+            if (idx < 0 || idx >= kParticleTypeCount || seen[idx] ||
+                !eq(row.token, Settings::kParticleStyleTokens[idx].token))
+            {
+                return false;
+            }
+            seen[idx] = true;
+        }
+        return true;
+    }(),
+    "kParticleTypes must cover every ParticleStyle once, with canonical tokens");
 
-// True when `token` appears as a comma-separated entry in `particleTypes`
-// (case-insensitive, whitespace-trimmed). Exact-token match avoids substring
-// collisions between type names.
-static bool ParticleTypesContains(const std::string& particleTypes, const char* token)
+// Relative weight for `token` within `particleTypes`. Each comma-separated entry
+// is "type" or "type:weight" (a bare type = weight 1). Case-insensitive,
+// whitespace-trimmed, exact type-token match (avoids substring collisions).
+// Returns 0 when the type is not listed; a listed type's weight is clamped to
+// [kMinTypeWeight, kMaxTypeWeight]. Weights set the RATIO of each type within a
+// tier; ComputeParticleConfig mean-normalizes them so the total density holds.
+static float ParticleTypeWeight(const std::string& particleTypes, const char* token)
 {
+    constexpr float kMinTypeWeight = 0.1f;
+    constexpr float kMaxTypeWeight = 10.0f;
+    const size_t tokenLen = std::strlen(token);
     size_t start = 0;
     while (start <= particleTypes.size())
     {
         size_t comma = particleTypes.find(',', start);
         size_t end = (comma == std::string::npos) ? particleTypes.size() : comma;
-        size_t a = start, b = end;
+        // Split the entry at the first ':' inside it (weight suffix).
+        size_t colon = particleTypes.find(':', start);
+        size_t typeEnd = (colon != std::string::npos && colon < end) ? colon : end;
+        // Trim the type part.
+        size_t a = start, b = typeEnd;
         while (a < b && std::isspace(static_cast<unsigned char>(particleTypes[a])))
         {
             ++a;
@@ -1039,7 +1185,7 @@ static bool ParticleTypesContains(const std::string& particleTypes, const char* 
             --b;
         }
         const size_t len = b - a;
-        bool match = (std::strlen(token) == len);
+        bool match = (tokenLen == len);
         for (size_t i = 0; match && i < len; ++i)
         {
             match = std::tolower(static_cast<unsigned char>(particleTypes[a + i])) ==
@@ -1047,7 +1193,19 @@ static bool ParticleTypesContains(const std::string& particleTypes, const char* 
         }
         if (match)
         {
-            return true;
+            float weight = 1.0f;
+            if (colon != std::string::npos && colon < end)
+            {
+                try
+                {
+                    weight = std::stof(particleTypes.substr(colon + 1, end - (colon + 1)));
+                }
+                catch (...)
+                {
+                    weight = 1.0f;
+                }
+            }
+            return std::clamp(weight, kMinTypeWeight, kMaxTypeWeight);
         }
         if (comma == std::string::npos)
         {
@@ -1055,7 +1213,7 @@ static bool ParticleTypesContains(const std::string& particleTypes, const char* 
         }
         start = comma + 1;
     }
-    return false;
+    return .0f;
 }
 
 // Computed particle configuration for a single actor label.
@@ -1070,6 +1228,7 @@ struct ParticleConfig
     float boostedSize;
     float boostedAlpha;
     bool enabled[kParticleTypeCount];
+    float weight[kParticleTypeCount];  ///< Mean-normalized per-type ratio weight
     int enabledStyles;
 };
 
@@ -1078,7 +1237,8 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
                                             const LabelStyle& style,
                                             const LabelLayout& layout,
                                             float lodEffectsFactor,
-                                            const RenderSettingsSnapshot& snap)
+                                            const RenderSettingsSnapshot& snap,
+                                            const OrnamentMetrics& ornMetrics)
 {
     ParticleConfig cfg{};
     const Settings::TierDefinition& tier = *style.tier;
@@ -1120,7 +1280,6 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
     // Wrap the particle aura around ornaments too when they are visible.
     // Symmetric inflation keeps the cloud centered on the actor's head bone;
     // shifting the center for asymmetric ornament strings would visibly drift.
-    OrnamentMetrics ornMetrics = ComputeOrnamentMetrics(d, style, layout, lodEffectsFactor, snap);
     const float ornHalfInflate = std::max(ornMetrics.leftExtent, ornMetrics.rightExtent);
 
     cfg.spreadX =
@@ -1151,10 +1310,27 @@ static ParticleConfig ComputeParticleConfig(const ActorDrawData& d,
         1.0f);
 
     cfg.enabledStyles = 0;
+    float sumWeights = .0f;
     for (int i = 0; i < kParticleTypeCount; ++i)
     {
-        cfg.enabled[i] = ParticleTypesContains(tier.particleTypes, kParticleTypes[i].token);
-        cfg.enabledStyles += cfg.enabled[i] ? 1 : 0;
+        cfg.weight[i] = ParticleTypeWeight(tier.particleTypes, kParticleTypes[i].token);
+        cfg.enabled[i] = cfg.weight[i] > .0f;
+        if (cfg.enabled[i])
+        {
+            ++cfg.enabledStyles;
+            sumWeights += cfg.weight[i];
+        }
+    }
+    // Mean-normalize the weights so a tier's TOTAL particle budget stays ~constant
+    // and equal weights reproduce the legacy per-type count exactly (norm == 1);
+    // unequal weights only redistribute density by ratio.
+    if (cfg.enabledStyles > 0 && sumWeights > .0f)
+    {
+        const float norm = static_cast<float>(cfg.enabledStyles) / sumWeights;
+        for (int i = 0; i < kParticleTypeCount; ++i)
+        {
+            cfg.weight[i] *= norm;
+        }
     }
     return cfg;
 }
@@ -1167,9 +1343,11 @@ void DrawParticles(ImDrawList* dl,
                    float lodEffectsFactor,
                    float time,
                    ImDrawListSplitter* splitter,
-                   const RenderSettingsSnapshot& snap)
+                   const RenderSettingsSnapshot& snap,
+                   const OrnamentMetrics& ornMetrics)
 {
-    ParticleConfig cfg = ComputeParticleConfig(d, style, layout, lodEffectsFactor, snap);
+    ParticleConfig cfg =
+        ComputeParticleConfig(d, style, layout, lodEffectsFactor, snap, ornMetrics);
     if (!cfg.showParticles)
     {
         return;
@@ -1193,7 +1371,18 @@ void DrawParticles(ImDrawList* dl,
             continue;
         }
         const ParticleTypeSpec& spec = kParticleTypes[i];
-        const int count = (std::max)(4, static_cast<int>(cfg.boostedCount * spec.countScale));
+        // The floor scales with a sub-1 weight so whisper ratios (e.g.
+        // Firefly:10, Glitter:0.1) are honored instead of silently snapping
+        // back to the full per-type floor; equal weights mean-normalize to
+        // exactly 1.0, so unweighted tiers keep their legacy floors. The cap
+        // keeps solitary accents (moon/planet) at accent counts by design.
+        const int lo = (std::max)(1,
+                                  static_cast<int>(static_cast<float>(spec.minCount) *
+                                                   std::min(1.0f, cfg.weight[i])));
+        const int count =
+            std::clamp(static_cast<int>(cfg.boostedCount * spec.countScale * cfg.weight[i]),
+                       lo,
+                       spec.maxCount);
 
         TextEffects::DrawParticleAura({dl,
                                        layout.nameplateCenter,
@@ -1265,12 +1454,11 @@ void DrawOrnaments(ImDrawList* dl,
                    float time,
                    ImDrawListSplitter* splitter,
                    bool fastOutlines,
-                   const RenderSettingsSnapshot& snap)
+                   const RenderSettingsSnapshot& snap,
+                   const OrnamentMetrics& metrics)
 {
     const Settings::TierDefinition& tier = *style.tier;
 
-    const OrnamentMetrics metrics =
-        ComputeOrnamentMetrics(d, style, layout, lodEffectsFactor, snap);
     if (!metrics.shown)
     {
         return;
@@ -1413,8 +1601,36 @@ void DrawOrnaments(ImDrawList* dl,
                         ornNeedsTextAdjust ? &ornShine : nullptr);
     };
 
+    // OrnamentOffsetY: manual vertical nudge on top of the anchor (negative =
+    // up), scaled with the plate so it holds at distance.
     const float ornAnchorY =
-        snap.ornamentAnchorToMainLine ? layout.mainLineCenterY : layout.nameplateCenter.y;
+        (snap.ornamentAnchorToMainLine ? layout.mainLineCenterY : layout.nameplateCenter.y) +
+        snap.ornamentOffsetY * textSizeScale;
+
+    // Center the flourish INK on the anchor rather than the em box: the anchor
+    // (mainLineCenterY) is the name's tight ink center, but ornament fonts often
+    // park their ink low in the em box, which rendered the flourishes visibly
+    // below the name's optical center. One shared offset across both sides keeps
+    // the whole set on a common baseline.
+    float ornInkTop = +FLT_MAX;
+    float ornInkBottom = -FLT_MAX;
+    auto accumulateInk = [&](const std::vector<std::string>& chars)
+    {
+        for (const std::string& ch : chars)
+        {
+            float top, bottom;
+            CalcTightYBoundsFromTop(ornamentFont, ornamentSize, ch.c_str(), top, bottom);
+            if (bottom > top)
+            {
+                ornInkTop = std::min(ornInkTop, top);
+                ornInkBottom = std::max(ornInkBottom, bottom);
+            }
+        }
+    };
+    accumulateInk(leftChars);
+    accumulateInk(rightChars);
+    const float ornYOffset =
+        (ornInkBottom > ornInkTop) ? (ornInkTop + ornInkBottom) * .5f : ornamentSize * .5f;
 
     if (!leftChars.empty())
     {
@@ -1424,7 +1640,7 @@ void DrawOrnaments(ImDrawList* dl,
             const std::string& ch = leftChars[i];
             ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, .0f, ch.c_str());
             cursorX -= charSize.x;
-            ImVec2 charPos(cursorX, ornAnchorY - charSize.y * .5f);
+            ImVec2 charPos(cursorX, ornAnchorY - ornYOffset);
             drawOrnChar(charPos, ch.c_str());
             if (i > 0)
             {
@@ -1440,7 +1656,7 @@ void DrawOrnaments(ImDrawList* dl,
         {
             const std::string& ch = rightChars[i];
             ImVec2 charSize = ornamentFont->CalcTextSizeA(ornamentSize, FLT_MAX, .0f, ch.c_str());
-            ImVec2 charPos(cursorX, ornAnchorY - charSize.y * .5f);
+            ImVec2 charPos(cursorX, ornAnchorY - ornYOffset);
             drawOrnChar(charPos, ch.c_str());
             cursorX += charSize.x;
             if (i + 1 < rightChars.size())
@@ -1449,6 +1665,27 @@ void DrawOrnaments(ImDrawList* dl,
             }
         }
     }
+}
+
+// Draw the particle aura (back layer) then the ornament glyphs for one
+// nameplate, computing the shared ornament block geometry a single time so the
+// particle-aura sizer and the ornament draw pass agree without rebuilding it
+// twice per label.
+void DrawParticlesAndOrnaments(ImDrawList* dl,
+                               const ActorDrawData& d,
+                               const LabelStyle& style,
+                               const LabelLayout& layout,
+                               float lodEffectsFactor,
+                               float time,
+                               ImDrawListSplitter* splitter,
+                               bool fastOutlines,
+                               const RenderSettingsSnapshot& snap)
+{
+    const OrnamentMetrics ornMetrics =
+        ComputeOrnamentMetrics(d, style, layout, lodEffectsFactor, snap);
+    DrawParticles(dl, d, style, layout, lodEffectsFactor, time, splitter, snap, ornMetrics);
+    DrawOrnaments(
+        dl, d, style, layout, lodEffectsFactor, time, splitter, fastOutlines, snap, ornMetrics);
 }
 
 // Render the title line above the main nameplate line.
@@ -1461,7 +1698,7 @@ void DrawTitleText(ImDrawList* dl,
                    const RenderSettingsSnapshot& snap)
 {
     const char* titleDisplayText = layout.titleDisplayStr.c_str();
-    if (!titleDisplayText || !*titleDisplayText || lodTitleFactor <= .01f)
+    if (!*titleDisplayText || lodTitleFactor <= .01f)
     {
         return;
     }
@@ -1841,10 +2078,12 @@ void DrawBadges(ImDrawList* dl,
 
     for (const auto& b : layout.badges)
     {
-        float a = style.alpha;
+        float a = style.alpha * style.badgeAlphaMul;
         if (b.pulse && snap.icons.deadlyPulse)
         {
-            a *= .75f + .25f * std::sin(static_cast<float>(ImGui::GetTime()) * 3.0f);
+            // 1.2 rad/s (~0.19 Hz, was 3.0 -> ~0.48 Hz): a slow warning
+            // breath, not a blink -- part of the calm-tempo pass.
+            a *= .75f + .25f * std::sin(static_cast<float>(ImGui::GetTime()) * 1.2f);
         }
 
         // Muted (neutral/inactive) slots read as a subtle "off" state: drop
@@ -1859,14 +2098,22 @@ void DrawBadges(ImDrawList* dl,
             c.g += (luma - c.g) * k;
             c.b += (luma - c.b) * k;
         }
+        else
+        {
+            a = (std::min)(1.0f, a * snap.icons.opacity);  // lit-badge visibility gain
+        }
         if (a < .01f)
         {
             continue;
         }
         const ImVec2 pMax(b.pos.x + b.size.x, b.pos.y + b.size.y);
-        const ImU32 tint = ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, a));
-        // Lit badges get a drop shadow for readability; muted badges sit flat
-        // (no shadow pass) so the always-on strip stays calm.
+        // Full-color emblems (the tier badge) draw as-authored: a white multiply
+        // leaves their RGB untouched and only applies the fade alpha.
+        const ImU32 tint = b.fullColor ? ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, a))
+                                       : ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, a));
+        // Lit badges get a drop shadow (world contrast) plus a soft glow in the
+        // badge's own semantic color so the strip reads at a glance. Muted
+        // badges sit flat so the always-on strip stays calm.
         if (!b.muted)
         {
             const ImU32 shadow =
@@ -1877,9 +2124,93 @@ void DrawBadges(ImDrawList* dl,
                          ImVec2(0, 0),
                          ImVec2(1, 1),
                          shadow);
+
+            // Colored glow: two enlarged low-alpha copies of the icon in its
+            // tint color, forming a soft halo. Semantic icons only -- full-color
+            // emblems draw as-authored (the tier emblem carries its own bloom).
+            if (!b.fullColor)
+            {
+                const ImVec2 gc((b.pos.x + pMax.x) * .5f, (b.pos.y + pMax.y) * .5f);
+                const auto glow = [&](float scale, float ga)
+                {
+                    const ImVec2 gh(b.size.x * .5f * scale, b.size.y * .5f * scale);
+                    dl->AddImage(b.tex,
+                                 ImVec2(gc.x - gh.x, gc.y - gh.y),
+                                 ImVec2(gc.x + gh.x, gc.y + gh.y),
+                                 ImVec2(0, 0),
+                                 ImVec2(1, 1),
+                                 ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, ga)));
+                };
+                glow(1.65f, a * .22f);
+                glow(1.32f, a * .34f);
+            }
         }
         dl->AddImage(b.tex, b.pos, pMax, ImVec2(0, 0), ImVec2(1, 1), tint);
     }
+}
+
+// Draw the player tier emblem on its own row above the icon strip: a soft bloom
+// in the emblem's OWN colors (enlarged low-alpha copies) that gently breathes,
+// then the crisp emblem on top.  The status icons stay flat -- this is the one
+// badge with a glow.
+void DrawTierEmblem(ImDrawList* dl,
+                    const LabelStyle& style,
+                    const LabelLayout& layout,
+                    float time,
+                    ImDrawListSplitter* splitter,
+                    const RenderSettingsSnapshot& snap)
+{
+    if (!layout.tierEmblemShown || layout.tierEmblemTex == 0)
+    {
+        return;
+    }
+
+    // Fold with the icon strip's alpha so a Quiet-Frame pan retires the whole
+    // "above the name" block together; keep the lit-badge visibility gain.
+    float a = style.alpha * style.badgeAlphaMul;
+    a = (std::min)(1.0f, a * snap.icons.opacity);
+    if (a < .01f)
+    {
+        return;
+    }
+
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    splitter->SetCurrentChannel(dl, gpuGlow ? 2 : 1);
+
+    const ImVec2 c(layout.tierEmblemPos.x + layout.tierEmblemSize.x * .5f,
+                   layout.tierEmblemPos.y + layout.tierEmblemSize.y * .5f);
+
+    // Slow, calm breath (~0.17 Hz) modulating only the bloom -- never the crisp
+    // emblem -- so the shape stays stable while its halo swells and settles.
+    const float breathe = .78f + .22f * std::sin(time * 1.05f);
+
+    const auto drawScaled = [&](float scale, float alpha)
+    {
+        if (alpha < .004f)
+        {
+            return;
+        }
+        const ImVec2 half(layout.tierEmblemSize.x * .5f * scale,
+                          layout.tierEmblemSize.y * .5f * scale);
+        const ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, alpha));
+        dl->AddImage(layout.tierEmblemTex,
+                     ImVec2(c.x - half.x, c.y - half.y),
+                     ImVec2(c.x + half.x, c.y + half.y),
+                     ImVec2(0, 0),
+                     ImVec2(1, 1),
+                     col);
+    };
+
+    // Bloom: three enlarged, low-alpha copies -> a fuller, brighter outward
+    // halo in the emblem's own colors.  Drawn first so the crisp emblem lands
+    // on top.  Boosted from the old two-layer .10/.18 so the rank badge's glow
+    // carries the prestige read.
+    drawScaled(1.62f, a * .14f * breathe);
+    drawScaled(1.34f, a * .24f * breathe);
+    drawScaled(1.16f, a * .32f * breathe);
+    // Crisp emblem, full color -- a touch more translucent (.82) so the halo
+    // shows through and the emblem glows rather than sitting flat and opaque.
+    drawScaled(1.0f, a * .82f);
 }
 
 }  // namespace Renderer
