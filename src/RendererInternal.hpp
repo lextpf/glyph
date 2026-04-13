@@ -106,6 +106,7 @@ struct RenderSettingsSnapshot
     std::string ornamentFontPath = {};
     float ornamentFontSize = .0f;
     bool ornamentAnchorToMainLine = true;
+    float ornamentOffsetY = .0f;
 
     // Particles
     bool useParticleTextures = false;
@@ -118,7 +119,7 @@ struct RenderSettingsSnapshot
     int particleBlendMode = 0;
     float particleDepthStrength = .7f;    ///< Scales the 3D depth read (F1/F2/F6)
     float particleColorWarmth = .5f;      ///< Warm/cool depth temperature mix (C1/C4)
-    float particleGlowStrength = .35f;    ///< Additive backlight halo alpha (G1/G5)
+    float particleGlowStrength = .28f;    ///< Additive backlight halo alpha (G1/G5)
     float particleGlowSize = 2.2f;        ///< Halo radius vs. crisp sprite (G1/G5)
     float particleShineThreshold = .84f;  ///< Rare specular glint threshold (G3/G5)
 
@@ -157,9 +158,10 @@ struct RenderSettingsSnapshot
     bool enableEntrance = false;
     int entranceStyle = 0;
     float entranceDuration = .35f;
-    float entranceOvershoot = 1.05f;
     bool enableExit = false;
     float exitDuration = .20f;
+    float entranceStaggerStep = .06f;
+    float entranceStaggerMax = .8f;
 
     // Visual polish settings (value copy)
     Settings::VisualSettings visual = {};
@@ -248,6 +250,10 @@ struct RenderSettingsSnapshot
         std::string icoNormalWeight;  // muted
         std::string icoWanted;
         std::string icoBountyClear;  // muted
+        // Player tier-band prestige badge (low / mid / high ladder thirds).
+        std::string icoTierLow;
+        std::string icoTierMid;
+        std::string icoTierHigh;
         // Lit colors for the active states.
         Settings::Color3 colGuard{};
         Settings::Color3 colMerchant{};
@@ -259,6 +265,15 @@ struct RenderSettingsSnapshot
         Settings::Color3 colSneakDetected{};
         Settings::Color3 colEncumbered{};
         Settings::Color3 colWanted{};
+        Settings::Color3 colTierLow{};
+        Settings::Color3 colTierMid{};
+        Settings::Color3 colTierHigh{};
+        // Full-color prestige emblem images for the tier badge (replaces the
+        // medal/gem/crown icons above when enabled and images loaded).
+        bool tierBadgeImages = false;  ///< Use emblem PNGs for the tier badge
+        int tierImageCount = 0;        ///< Emblem images loaded (from BadgeTextures)
+        float tierBadgeGamma = 1.8f;   ///< Top-weighting exponent (>1 = high emblems rarer)
+        float tierBadgeScale = 1.7f;   ///< Emblem size as a multiple of the status-icon size
         // Per-slot resting colors (each "muted" slot carries its own calm hue).
         Settings::Color3 colNeutral{};
         Settings::Color3 colHumanoid{};
@@ -283,6 +298,8 @@ struct RenderSettingsSnapshot
         bool playerCombatEnabled = true;
         bool encumberedEnabled = true;
         bool bountyEnabled = true;
+        bool tierEnabled = true;  // player tier-band prestige badge
+        float opacity = 1.15f;
         // Muted styling: alpha multiplier and desaturation strength [0,1].
         float mutedAlpha = 0.45f;
         float mutedDesat = 0.18f;
@@ -291,6 +308,32 @@ struct RenderSettingsSnapshot
 
     /// Focus-target expanded-nameplate settings (value copy).
     Settings::FocusSettings focus = {};
+
+    /// Quiet Frame camera-motion quieting settings (value copy).
+    Settings::QuietSettings quiet = {};
+
+    /// Last Rites death valediction settings.
+    bool deathRiteEnabled = true;
+    float deathRiteDuration = 1.6f;
+
+    /// Registers -- context-conditional profiles (value copies).
+    bool registersEnabled = true;
+    float registerTransitionTime = 1.2f;
+    std::vector<Settings::RegisterDefinition> registers = {};
+
+    /// One Voice Per Actor -- HUD-compat yield settings.
+    float compatTrueHUDYieldAlpha = .0f;
+    float compatYieldSettleTime = .3f;
+
+    /// Candlelight Metering -- exposure-adaptive ink settings.
+    bool candleEnabled = true;
+    float candleStrength = .08f;
+    float candleWarmth = .5f;
+    float candleSettleTime = .6f;
+
+    /// Cut by the World -- per-pixel depth occlusion settings.
+    bool depthClipEnabled = true;
+    float depthClipFeather = 2.5f;
 
     // Factory: populate all fields from Settings under shared lock.
     static RenderSettingsSnapshot CaptureFromSettings();
@@ -333,16 +376,47 @@ struct ActorCache
     float exitPhase = .0f;      ///< Exit animation progress (0=visible, 1=fully exited)
     bool entranceDone = false;  ///< True when entrance animation finished
 
+    /// Roll Call stagger: seconds this plate still waits before its entrance
+    /// begins.  Negative means "not yet assigned" -- the entrance block claims
+    /// the next distance-ordered slot the first frame it runs.
+    float entranceDelay = -1.0f;
+
+    /// @name Last Rites -- one-shot death valediction
+    /// The rite plays only for actors this cache entry saw alive; corpses
+    /// first seen dead never render.  deathDone latches so a rite never
+    /// repeats for the same corpse while its entry lives.
+    /// @{
+    bool sawAlive = false;   ///< Entry rendered this actor alive at least once
+    float deathPhase = .0f;  ///< Rite progress (0=just died, 1=finished)
+    bool deathDone = false;  ///< Rite finished (or cancelled on overlay wake)
+    /// @}
+
     /// Smoothed focus state for the focus-target expanded nameplate feature.
     /// Targets 1.0 while this actor is the cone winner, 0.0 otherwise.
     /// Drives both the ambient dim multiplier and the title/info row fade.
     float focusSmooth = .0f;
 
+    /// One Voice Per Actor: smoothed yield state.  Targets 1.0 while another
+    /// HUD mod (TrueHUD) floats a widget over this actor, fading the plate
+    /// to the configured yield alpha and back with the same weight as focus.
+    float yieldSmooth = .0f;
+
+    /// @name Candlelight Metering -- smoothed scene sample behind this plate
+    /// @{
+    float bgLum = -1.0f;  ///< Smoothed background luminance (-1 = no sample yet)
+    float bgR = .5f;      ///< Smoothed background red
+    float bgG = .5f;      ///< Smoothed background green
+    float bgB = .5f;      ///< Smoothed background blue
+    /// @}
+
     /// Motion trail history (separate from posHistory used for smoothing).
+    /// Stored in WORLD space and reprojected through the current camera each
+    /// frame, so a pure camera pan maps every ghost identically and they
+    /// collapse onto the head -- only real actor movement leaves a trail.
     static constexpr int TRAIL_HISTORY_SIZE = 8;
-    ImVec2 trailHistory[TRAIL_HISTORY_SIZE]{};  ///< Trail ghost positions
-    int trailIndex = 0;                         ///< Current write index in trailHistory
-    bool trailFilled = false;                   ///< True once trailHistory has wrapped
+    RE::NiPoint3 trailHistory[TRAIL_HISTORY_SIZE]{};  ///< Trail ghost positions (world space)
+    int trailIndex = 0;                               ///< Current write index in trailHistory
+    bool trailFilled = false;                         ///< True once trailHistory has wrapped
 
     std::string cachedName;       ///< Last known name (to detect changes)
     std::string cachedNameLower;  ///< Pre-lowered name for special title matching
@@ -452,6 +526,19 @@ struct ActorDrawData
     float distToPlayer{.0f};  ///< Distance to player in units
     bool isPlayer{false};     ///< Whether this is the player character
     bool isOccluded{false};   ///< Whether actor is occluded from view
+    bool isDead{false};       ///< Actor is dead -- signals the Last Rites pass;
+                              ///< the rite itself replays the last live facts
+
+    /// Deeds, Not Words: faction-earned honorific resolved on the game
+    /// thread; empty = none.  Replaces the tier title in the title slot
+    /// (special titles still win).
+    std::string honorific;
+
+    /// @name One Voice Per Actor (HUD-compat facts, resolved on game thread)
+    /// @{
+    bool yieldPlate{false};  ///< TrueHUD floats a bar here -- fade the plate out
+    bool yieldLevel{false};  ///< moreHUD shows this target's level -- drop ours
+    /// @}
 
     /// @name Contextual nameplate facts (resolved on game thread)
     /// @{
@@ -495,11 +582,12 @@ struct RendererState
 
     /// @name Snapshot & Thread Safety
     /// @{
-    std::vector<ActorDrawData> snapshot;             ///< Current actor draw data
-    std::mutex snapshotLock;                         ///< Guards snapshot reads/writes
-    std::atomic<bool> updateQueued{false};           ///< True while a game-thread update is pending
-    std::atomic<bool> pauseSnapshotUpdates{false};   ///< Suppress updates during reload
-    std::atomic<bool> snapshotUpdateRunning{false};  ///< True while game-thread update is active
+    std::vector<ActorDrawData> snapshot;            ///< Current actor draw data
+    std::mutex snapshotLock;                        ///< Guards snapshot reads/writes
+    std::atomic<bool> updateQueued{false};          ///< True while a game-thread update is pending
+    std::atomic<bool> pauseSnapshotUpdates{false};  ///< Suppress updates during reload
+    std::atomic<bool> pendingIdentityRefresh{false};  ///< RaceMenu rename -> force player re-read
+    std::atomic<bool> snapshotUpdateRunning{false};   ///< True while game-thread update is active
     std::atomic<bool> clearOcclusionCacheRequested{false};  ///< Request to clear occlusion cache
     /// @}
 
@@ -508,6 +596,45 @@ struct RendererState
     bool wasInInvalidState = true;  ///< True if previous frame was in an invalid game state
     int postLoadCooldown = 0;       ///< Frames remaining in post-load cooldown
     /// @}
+
+    /// @name Roll Call -- orchestrated re-entry
+    /// @{
+    /// Set when the overlay resumes after suppression (combat, menus, loads).
+    /// The next drawn frame replays every visible plate's entrance so the
+    /// scene re-introduces itself as a staggered near-to-far cascade.
+    bool wakeReplayPending = false;
+    /// Entrances that began this frame; each new start claims the next
+    /// stagger slot.  Reset at the top of every drawn frame.
+    int entrancesStartedThisFrame = 0;
+    /// @}
+
+    /// @name Quiet Frame -- camera-motion quieting
+    /// Smoothed [0,1] quiet factors driven by camera angular speed with an
+    /// asymmetric envelope (fast attack, slow release).  quietSub releases
+    /// slower than quietName, so names resolve back before sub-lines.
+    /// @{
+    RE::NiPoint3 prevCamForward{};  ///< Camera forward on the previous frame
+    bool prevCamValid = false;      ///< prevCamForward holds a real sample
+    float quietName = .0f;          ///< Name-row quiet factor (thins to a floor)
+    float quietSub = .0f;           ///< Sub-line quiet factor (folds to zero)
+    /// @}
+
+    /// @name Registers -- context-conditional profiles
+    /// The game thread publishes the active register index each snapshot;
+    /// the render thread eases its effective knobs toward that register's
+    /// values (or the 1/1/1/0 base state) so scene transitions swell and
+    /// recede instead of snapping.
+    /// @{
+    std::atomic<int> activeRegister{-1};  ///< Index into snapshot registers, -1 = none
+    float regAlphaMul = 1.0f;             ///< Smoothed overlay-wide alpha multiplier
+    float regFadeMul = 1.0f;              ///< Smoothed fade/scale distance multiplier
+    float regSubLineMul = 1.0f;           ///< Smoothed sub-line alpha multiplier
+    float regHideNeutral = .0f;           ///< Smoothed neutral/ally plate hide factor
+    /// @}
+
+    /// Cut by the World: true while this frame's draws are depth-clipped
+    /// (depth SRV located, polarity resolved).  Render-thread only.
+    bool depthClipFrame = false;
 
     /// @name Debug Stats
     /// @{
@@ -554,11 +681,12 @@ struct RenderSeg
 struct BadgeDrawItem
 {
     ImTextureID tex = 0;     ///< Rasterized duotone icon SRV (from BadgeTextures)
-    Settings::Color3 color;  ///< Semantic badge tint
+    Settings::Color3 color;  ///< Semantic badge tint (ignored when fullColor)
     ImVec2 pos;              ///< Top-left draw position (screen pixels)
     ImVec2 size;             ///< Draw size (square)
     bool pulse;              ///< Deadly skull breathing alpha
     bool muted = false;      ///< Neutral/inactive slot -- dimmed + desaturated at draw time
+    bool fullColor = false;  ///< True for the emblem tier badge: draw untinted (white multiply)
 };
 
 /// Bundle of resolved actor-fact values passed to `FormatString` for one
@@ -641,6 +769,11 @@ struct LabelStyle
     /// 1.0 = no effect; 0.0 = info row fully hidden.
     float infoAlphaMul = 1.0f;
 
+    /// Extra alpha multiplier for the status badge strip.  The Quiet Frame
+    /// folds the badge strip away with the title during fast camera pans;
+    /// the name and level stay full.
+    float badgeAlphaMul = 1.0f;
+
     float CalcOutlineWidth(float fontSize, const RenderSettingsSnapshot& snap) const
     {
         float ratio = std::max(fontSize / snap.nameFontSize, RenderConstants::OUTLINE_MIN_SCALE);
@@ -680,6 +813,13 @@ struct LabelLayout
     float infoLineHeight = .0f;           ///< Height of the tallest info segment
 
     std::vector<BadgeDrawItem> badges;  ///< Status icon badges (built from snap.icons)
+
+    // Player tier emblem (full-color prestige badge): laid on its own row above
+    // the icon strip, larger than the icons, drawn with a bloom + breathe glow.
+    bool tierEmblemShown = false;
+    ImTextureID tierEmblemTex = 0;
+    ImVec2 tierEmblemPos{};   ///< Top-left draw position (screen pixels)
+    ImVec2 tierEmblemSize{};  ///< Draw size (square)
 
     std::string titleStr;         ///< Full title text
     std::string titleDisplayStr;  ///< Title text after typewriter truncation
@@ -815,11 +955,34 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
 /// Measure text and compute all positions for a label.  Builds segments,
 /// applies typewriter truncation, measures title and main line, and computes
 /// the nameplate bounding box.
+/// @param forcedCharsToShow  When >= 0, overrides the typewriter character
+///        budget (used by Last Rites to crumble text in reverse); -1 keeps
+///        the entry-driven typewriter behavior.
 LabelLayout ComputeLabelLayout(const ActorDrawData& d,
                                ActorCache& entry,
                                const LabelStyle& style,
                                float textSizeScale,
-                               const RenderSettingsSnapshot& snap);
+                               const RenderSettingsSnapshot& snap,
+                               int forcedCharsToShow = -1);
+
+/// Last Rites: pull every resolved style color toward `target` by `mixT`,
+/// calm the effect strength to match, and re-pack the draw-ready colors.
+/// Composable -- call repeatedly to stage multi-stop ramps (sear -> dark).
+void ApplyDeathRiteTint(LabelStyle& style,
+                        const ImVec4& target,
+                        float mixT,
+                        const RenderSettingsSnapshot& snap);
+
+/// Candlelight Metering: adapt the resolved ink to the scene behind the
+/// plate -- dim a touch over bright backgrounds, lift and warm slightly over
+/// dark ones -- then re-pack the draw-ready colors.  `bgLum`/`bgRGB` are the
+/// smoothed per-actor scene sample; adjustments are capped by
+/// `snap.candleStrength`.  Pure color math -- mirrored conceptually in
+/// tests/test_utils.cpp (CandleAdjust); keep the mapping in sync.
+void ApplyCandlelight(LabelStyle& style,
+                      float bgLum,
+                      const float bgRGB[3],
+                      const RenderSettingsSnapshot& snap);
 
 // ============================================================================
 // Effects functions (RendererEffects.cpp)
@@ -881,28 +1044,19 @@ void DrawBackgroundGlow(ImDrawList* dl,
                         ImDrawListSplitter* splitter,
                         const RenderSettingsSnapshot& snap);
 
-/// Draw particle aura effects behind the nameplate.  Renders on splitter
-/// channel 0 (back layer).  Player-only unless forced by specialTitle.
-void DrawParticles(ImDrawList* dl,
-                   const ActorDrawData& d,
-                   const LabelStyle& style,
-                   const LabelLayout& layout,
-                   float lodEffectsFactor,
-                   float time,
-                   ImDrawListSplitter* splitter,
-                   const RenderSettingsSnapshot& snap);
-
-/// Draw decorative ornament characters beside the nameplate.
-/// Player-only unless forced by specialTitle.
-void DrawOrnaments(ImDrawList* dl,
-                   const ActorDrawData& d,
-                   const LabelStyle& style,
-                   const LabelLayout& layout,
-                   float lodEffectsFactor,
-                   float time,
-                   ImDrawListSplitter* splitter,
-                   bool fastOutlines,
-                   const RenderSettingsSnapshot& snap);
+/// Draw the particle aura (back layer, splitter channel 0) and ornament glyphs
+/// for one nameplate, computing the shared ornament block geometry a single time
+/// so the particle-aura sizer and the ornament draw pass agree without rebuilding
+/// it twice per label.  Player-only unless forced by specialTitle.
+void DrawParticlesAndOrnaments(ImDrawList* dl,
+                               const ActorDrawData& d,
+                               const LabelStyle& style,
+                               const LabelLayout& layout,
+                               float lodEffectsFactor,
+                               float time,
+                               ImDrawListSplitter* splitter,
+                               bool fastOutlines,
+                               const RenderSettingsSnapshot& snap);
 
 /// Render the title line above the main nameplate line.
 void DrawTitleText(ImDrawList* dl,
@@ -939,6 +1093,16 @@ void DrawBadges(ImDrawList* dl,
                 ImDrawListSplitter* splitter,
                 bool fastOutlines,
                 const RenderSettingsSnapshot& snap);
+
+/// Render the player tier emblem on its own row above the icon strip, with a
+/// soft emblem-colored bloom + breathe glow.  No-op when the layout produced no
+/// emblem.
+void DrawTierEmblem(ImDrawList* dl,
+                    const LabelStyle& style,
+                    const LabelLayout& layout,
+                    float time,
+                    ImDrawListSplitter* splitter,
+                    const RenderSettingsSnapshot& snap);
 
 // ============================================================================
 // Coordinator functions (Renderer.cpp)
