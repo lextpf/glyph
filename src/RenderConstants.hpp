@@ -19,10 +19,10 @@
  *
  * ## :material-account-group-outline: Actor Processing
  *
- * | Constant      | Value | Description                              |
- * |---------------|:-----:|------------------------------------------|
- * | `MAX_ACTORS`  | 16    | Max nameplates rendered simultaneously   |
- * | `MAX_SCAN`    | 32    | Max actors iterated per scan pass        |
+ * | Constant      | Value | Description                                   |
+ * |---------------|:-----:|-----------------------------------------------|
+ * | `MAX_ACTORS`  | 16    | Max nameplates rendered simultaneously        |
+ * | `MAX_SCAN`    | 128   | Runaway guard on the cheap distance scan pass |
  *
  * ## :material-chart-bell-curve-cumulative: Position Smoothing
  *
@@ -48,7 +48,13 @@ namespace RenderConstants
 {
 // Actor Processing Limits
 inline constexpr int MAX_ACTORS = 16;  ///< Maximum actors to display nameplates for at once
-inline constexpr int MAX_SCAN = 32;    ///< Maximum actors to iterate when scanning
+// Runaway guard on the cheap distance pre-pass (which only distance-filters
+// high-process actors; the expensive per-actor derivation is capped at
+// MAX_ACTORS separately). Set well above the engine's high-process actor
+// budget so it never truncates the list in normal play -- capping this by list
+// POSITION rather than distance is what used to drop a near actor that sat past
+// the cutoff in a crowded area, leaving a freshly-approached NPC with no plate.
+inline constexpr int MAX_SCAN = 128;
 
 // Cache Management
 inline constexpr uint32_t CACHE_GRACE_FRAMES =
@@ -71,6 +77,8 @@ inline constexpr int FONT_INDEX_ORNAMENT = 3;  ///< Ornament/flourish font
 inline constexpr int MAX_TIER_INDEX =
     100;  ///< Maximum tier index in INI (prevents unbounded allocation)
 inline constexpr int MAX_SPECIAL_TITLE_INDEX = 50;  ///< Maximum special title index in INI
+inline constexpr int MAX_HONORIFIC_INDEX = 63;      ///< Maximum honorific index in INI
+inline constexpr int MAX_REGISTER_INDEX = 31;       ///< Maximum register index in INI
 
 // ----------------------------------------------------------------------------
 // Layout / animation tuning (formerly INI-configurable).
@@ -97,15 +105,22 @@ inline constexpr bool PROPORTIONAL_SPACING =
     true;  ///< Scale pixel spacings (padding, gaps, outlines) with text size
 
 // Effect intensity range (tier progression interpolates between min and max).
-inline constexpr float EFFECT_ALPHA_MIN = .20f;
-inline constexpr float EFFECT_ALPHA_MAX = .60f;
-inline constexpr float EFFECT_STRENGTH_MIN = .15f;
-inline constexpr float EFFECT_STRENGTH_MAX = .50f;
+// The strength band multiplies into every animated effect's amplitude; the
+// old .15-.50 band stacked with per-effect caps and INI intensities into a
+// ~1-7% net modulation -- mathematically invisible. The band starts clearly
+// visible: even the entry tier's effect should read at a glance, with tier
+// progression adding weight on top rather than gating visibility.
+inline constexpr float EFFECT_ALPHA_MIN = .32f;
+inline constexpr float EFFECT_ALPHA_MAX = .78f;
+inline constexpr float EFFECT_STRENGTH_MIN = .78f;
+inline constexpr float EFFECT_STRENGTH_MAX = 1.0f;
 
-// Animation speed bands by tier (smaller = slower).
+// Animation speed bands by tier (smaller = slower). High tiers stay the
+// slowest (weighty, deliberate) but no band drops below the threshold where
+// the motion stops registering at a glance.
 inline constexpr float ANIM_SPEED_LOW_TIER = .24f;   ///< Tiers 0-7
-inline constexpr float ANIM_SPEED_MID_TIER = .14f;   ///< Tier 8
-inline constexpr float ANIM_SPEED_HIGH_TIER = .08f;  ///< Tier 9+
+inline constexpr float ANIM_SPEED_MID_TIER = .17f;   ///< Tier 8
+inline constexpr float ANIM_SPEED_HIGH_TIER = .12f;  ///< Tier 9+
 
 // Entrance/exit motion offsets (pixels). The label rises gently into place on
 // entry and sinks slightly as it leaves -- weighty and cinematic, never bouncy.
