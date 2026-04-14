@@ -10,28 +10,28 @@
  * @author Alex (https://github.com/lextpf)
  * @ingroup ParticleTextures
  *
- * Loads one hand-made PNG sprite per weather type and creates D3D11 shader
+ * Loads hand-made PNG sprites per particle style and creates D3D11 shader
  * resource views for use with ImGui textured quads. The per-particle texture
  * selection is deterministic to avoid flickering.
  *
  * ## :material-folder-image: Sprite Files
  *
- * One PNG per type is loaded from `Data/SKSE/Plugins/glyph/particles/`. The
- * style index matches `Settings::ParticleStyle`:
+ * Sprites live in `Data/SKSE/Plugins/glyph/particles/` and are discovered by
+ * a scan driven by `Settings::kParticleStyleTokens` (the token doubles as the
+ * filename base). For every style the loader probes the base name plus
+ * numbered variants, preferring an animated flipbook strip over the
+ * same-named static:
  *
- * | File                | Style Index | Type           |
- * |---------------------|:-----------:|----------------|
- * | `firefly.png`       | 0           | Firefly        |
- * | `rain.png`          | 1           | Rain           |
- * | `snow.png`          | 2           | Snow           |
- * | `smoke.png`         | 3           | Smoke          |
- * | `spark.png`         | 4           | Spark          |
- * | `wisp.png`          | 5           | Wisp           |
- * | `leaf.png`          | 6           | Leaf           |
- * | `aurora.png`        | 7           | Aurora         |
- * | `cherryblossom.png` | 8           | Cherry blossom |
- * | `dust.png`          | 9           | Dust           |
- * | `mote.png`          | 10          | Mote           |
+ * | Candidate           | Meaning                                    |
+ * |---------------------|--------------------------------------------|
+ * | `<token>.png`       | Static 16x16 sprite                        |
+ * | `<token>_strip.png` | 4-frame 64x16 flipbook, supersedes static  |
+ * | `<token>2.png` ...  | Numbered variants, same strip-over-static  |
+ * | `bubblepop.png`     | Bubble pop sprite, outside the rotation    |
+ *
+ * All loaded variants of a style enter the per-particle hash rotation, so a
+ * style with N variants spawns each on ~1/N of its particles, stably across
+ * frames.
  *
  * ## :material-image-filter-hdr: Texture Pipeline
  *
@@ -54,11 +54,12 @@
  *
  * ## :material-dice-multiple-outline: Texture Selection
  *
- * Each particle is assigned a texture deterministically using a hash of its
- * index and style to avoid random flickering across frames. The hash uses
- * prime multipliers for good distribution:
+ * Each particle is assigned a texture deterministically -- a stratified
+ * round-robin over the style's variants with a per-style hash offset -- so a
+ * style with N variants puts each on an equal share of its particles (within
+ * one) and never flickers across frames:
  *
- * $$\text{texture} = \text{hash}(\text{particleIndex},\; \text{style}) \bmod \text{textureCount}$$
+ * $$\text{texture} = (\text{particleIndex} + \text{hash}(\text{style})) \bmod \text{textureCount}$$
  *
  * ## :material-auto-fix: Quality Pipeline
  *
@@ -83,6 +84,20 @@ enum class BlendMode
     Additive = 1,  ///< Additive blending for bright, glowing particles
     Screen = 2     ///< Screen-like blend for softer luminous sprites
 };
+
+/// Art-aware visibility compensation for one particle style. The motion
+/// renderer still owns its physical size; this only compensates for how much
+/// of the 16x16 source frame is actually painted.
+struct StyleVisibilityTuning
+{
+    float coreSizeScale = 1.0f;   ///< Crisp sprite only; does not enlarge the halo
+    float alphaGamma = 1.0f;      ///< Source-alpha curve; lower is more opaque
+    float haloAlphaScale = 1.0f;  ///< Per-style multiplier for the shared halo
+};
+
+/// Return the measured/art-directed visibility tuning for a style ordinal.
+/// Invalid ordinals return neutral tuning.
+const StyleVisibilityTuning& GetStyleVisibilityTuning(int style);
 
 /**
  * Initialize particle textures using the D3D11 device.
@@ -136,6 +151,8 @@ ImTextureID GetRandomTexture(int style, int particleIndex);
  * @param color Tint color (white = no tint)
  * @param blendMode Blend state to use while drawing this sprite
  * @param rotation Rotation angle in radians
+ * @param frame Flipbook frame for animated strips (wrapped into range;
+ *              ignored for 1-frame statics)
  */
 void DrawSpriteWithIndex(ImDrawList* list,
                          const ImVec2& center,
@@ -144,7 +161,54 @@ void DrawSpriteWithIndex(ImDrawList* list,
                          int particleIndex,
                          ImU32 color,
                          BlendMode blendMode = BlendMode::Alpha,
-                         float rotation = .0f);
+                         float rotation = .0f,
+                         int frame = 0);
+
+/**
+ * Flipbook frame count of the texture the given particle hash-selects.
+ * @return >= 1; 1 when the selected sprite is a static (or nothing loaded)
+ */
+int GetFrameCountForIndex(int style, int particleIndex);
+
+/**
+ * Whether the style has an end-of-life pop sprite loaded (e.g. Bubble's
+ * `bubblepop_strip.png` / `bubblepop.png`). Pop sprites live outside the
+ * hash rotation.
+ */
+bool HasPopSprite(int style);
+
+/**
+ * Flipbook frame count of the style's pop sprite.
+ * @return >= 1; 1 when the pop is a static (or nothing loaded)
+ */
+int GetPopFrameCount(int style);
+
+/**
+ * Draw the style's pop sprite (see HasPopSprite). No-op when absent.
+ * @param frame Flipbook frame for an animated pop strip -- play it ONCE
+ *              across the pop window (wrapped into range; 0 for statics)
+ */
+void DrawPopSprite(ImDrawList* list,
+                   const ImVec2& center,
+                   float size,
+                   int style,
+                   ImU32 color,
+                   BlendMode blendMode = BlendMode::Alpha,
+                   float rotation = .0f,
+                   int frame = 0);
+
+/**
+ * Draw the shared soft light disc (procedural Gaussian falloff, additive).
+ * Used as the glow-halo / glint layer behind and over crisp sprites -- a
+ * featureless light so it never reads as a duplicate of the particle art.
+ * No-op until Initialize has generated the disc.
+ *
+ * @param list ImGui draw list
+ * @param center Center position
+ * @param size Quad edge length in pixels (visible glow radius is ~1/3 of it)
+ * @param color Tint color; alpha scales the glow strength
+ */
+void DrawSoftGlow(ImDrawList* list, const ImVec2& center, float size, ImU32 color);
 
 /**
  * Push additive blend state onto the draw list via callback.
