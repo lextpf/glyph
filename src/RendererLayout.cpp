@@ -112,6 +112,33 @@ const Settings::TierDefinition& GetFallbackTier()
     return fallback;
 }
 
+static ImVec4 MixVec4(const ImVec4& a, const ImVec4& b, float t)
+{
+    t = std::clamp(t, .0f, 1.0f);
+    return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.0f);
+}
+
+static void BoostSaturation(ImVec4& c, float amount)
+{
+    float gray = c.x * .299f + c.y * .587f + c.z * .114f;
+    c.x = std::clamp(gray + (c.x - gray) * amount, .0f, 1.0f);
+    c.y = std::clamp(gray + (c.y - gray) * amount, .0f, 1.0f);
+    c.z = std::clamp(gray + (c.z - gray) * amount, .0f, 1.0f);
+}
+
+static ImVec4 DeriveSupportTint(const ImVec4& left,
+                                const ImVec4& right,
+                                const Settings::Color3& highlight,
+                                float highlightMix,
+                                float saturationBoost)
+{
+    ImVec4 support = MixVec4(left, right, .5f);
+    support = MixVec4(support, ImVec4(highlight.r, highlight.g, highlight.b, 1.0f), highlightMix);
+    BoostSaturation(support, saturationBoost);
+    support.w = 1.0f;
+    return support;
+}
+
 // ============================================================================
 // ComputeLabelStyle helpers
 // ============================================================================
@@ -289,19 +316,29 @@ static void ComputeTierColors(LabelStyle& style,
     if (snap.textSaturationBoost > .0f)
     {
         const float s = 1.0f + snap.textSaturationBoost;
-        auto BoostSat = [s](ImVec4& c)
-        {
-            float gray = c.x * .299f + c.y * .587f + c.z * .114f;
-            c.x = std::clamp(gray + (c.x - gray) * s, .0f, 1.0f);
-            c.y = std::clamp(gray + (c.y - gray) * s, .0f, 1.0f);
-            c.z = std::clamp(gray + (c.z - gray) * s, .0f, 1.0f);
-        };
+        auto BoostSat = [s](ImVec4& c) { BoostSaturation(c, s); };
         BoostSat(style.LcName);
         BoostSat(style.RcName);
         BoostSat(style.LcLevel);
         BoostSat(style.RcLevel);
         BoostSat(style.LcTitle);
         BoostSat(style.RcTitle);
+    }
+
+    if (style.specialTitle)
+    {
+        style.supportName = ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, 1.0f);
+        style.supportLevel = style.supportName;
+        style.supportTitle = style.supportName;
+    }
+    else
+    {
+        style.supportName =
+            DeriveSupportTint(style.LcName, style.RcName, tier.highlightColor, .14f, 1.08f);
+        style.supportLevel =
+            DeriveSupportTint(style.LcLevel, style.RcLevel, tier.highlightColor, .18f, 1.12f);
+        style.supportTitle =
+            DeriveSupportTint(style.LcTitle, style.RcTitle, tier.highlightColor, .24f, 1.16f);
     }
 
     // Pack colors to ImU32
@@ -323,17 +360,6 @@ static void ComputeTierColors(LabelStyle& style,
         ImVec4(style.RcLevel.x, style.RcLevel.y, style.RcLevel.z, style.levelAlpha));
     style.highlight = ImGui::ColorConvertFloat4ToU32(ImVec4(
         tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.effectAlpha));
-
-    const float outlineAlpha = TextEffects::Saturate(alpha * snap.outlineAlpha);
-    const float shadowAlpha = TextEffects::Saturate(alpha * .75f * snap.outlineAlpha);
-
-    // Subtle tier-color tint for outline and shadow (0 = pure black)
-    const float ot = snap.outlineColorTint;
-    const float st = snap.shadowColorTint;
-    style.outlineColor = ImGui::ColorConvertFloat4ToU32(
-        ImVec4(style.Lc.x * ot, style.Lc.y * ot, style.Lc.z * ot, outlineAlpha));
-    style.shadowColor = ImGui::ColorConvertFloat4ToU32(
-        ImVec4(style.Lc.x * st, style.Lc.y * st, style.Lc.z * st, shadowAlpha));
 
     // Outline width data (actual widths computed after font sizes are known)
     style.baseOutlineWidth = snap.outlineWidthMin + snap.outlineWidthMax;

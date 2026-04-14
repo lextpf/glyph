@@ -361,13 +361,14 @@ struct LabelStyle
     ImU32 colLTitle, colRTitle;  ///< Title gradient
     ImU32 colLLevel, colRLevel;  ///< Level gradient
     ImU32 highlight;             ///< Shimmer / sparkle highlight
-    ImU32 outlineColor;          ///< Black outline (alpha-scaled)
-    ImU32 shadowColor;           ///< Black shadow  (alpha-scaled)
 
     ImVec4 Lc, Rc;            ///< Tier left/right color (pasteled float).
     ImVec4 LcName, RcName;    ///< Computed name color (float, for glow).
     ImVec4 LcTitle, RcTitle;  ///< Computed title color (float, for glow).
     ImVec4 LcLevel, RcLevel;  ///< Softened level color (float, for glow).
+    ImVec4 supportName;       ///< Representative tint for name support layers.
+    ImVec4 supportTitle;      ///< Representative tint for title support layers.
+    ImVec4 supportLevel;      ///< Representative tint for level support layers.
     ImVec4 dispoCol;          ///< Disposition color.
     ImVec4 specialGlowColor;  ///< Special title glow color.
 
