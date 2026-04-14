@@ -818,6 +818,72 @@ void AddTextWander(ImDrawList* list,
                    float amplitude,
                    float spread);
 
+/**
+ * Draw text with a sweeping shadow band and hot leading rim (Eclipse).
+ *
+ * The inverse of Shimmer: a soft darkness crosses the text with a thin
+ * white-hot rim just ahead of it. Darkening always has headroom on bright
+ * tier palettes, so this reads everywhere.
+ *
+ * @param highlight Rim color (usually tier highlight).
+ * @param phase01 Band position in [0, 1) (wraps).
+ * @param bandWidth01 Band width as fraction of text width.
+ * @param strength01 Overall effect strength in [0, 1].
+ */
+void AddTextEclipse(ImDrawList* list,
+                    ImFont* font,
+                    float size,
+                    const ImVec2& pos,
+                    const char* text,
+                    ImU32 baseL,
+                    ImU32 baseR,
+                    ImU32 highlight,
+                    float phase01,
+                    float bandWidth01,
+                    float strength01);
+
+/**
+ * Draw text with a weighty two-beat heartbeat glow (Pulse).
+ *
+ * Lub, softer dub, long rest; the glow blooms from the text center outward
+ * and the rest state sits slightly shaded so both beats carry a real swing.
+ *
+ * @param rateHz Heartbeat cycle frequency in Hz.
+ * @param amplitude Swing depth in [0, 1].
+ */
+void AddTextPulse(ImDrawList* list,
+                  ImFont* font,
+                  float size,
+                  const ImVec2& pos,
+                  const char* text,
+                  ImU32 baseL,
+                  ImU32 baseR,
+                  ImU32 highlight,
+                  float rateHz,
+                  float amplitude);
+
+/**
+ * Draw text with rare crackling arc sweeps (Electric).
+ *
+ * Each cycle a jittered white-hot front crosses the text left-to-right in
+ * the first quarter of the period; between strikes the face rests calm with
+ * faint per-glyph static. Fully stateless (hash + time), like the particle
+ * zap.
+ *
+ * @param rateHz Strike cycle frequency in Hz (0.18 = a strike every ~5.5 s).
+ * @param intensity Strike brightness in [0, 1].
+ */
+void AddTextElectric(ImDrawList* list,
+                     ImFont* font,
+                     float size,
+                     const ImVec2& pos,
+                     const char* text,
+                     ImU32 baseL,
+                     ImU32 baseR,
+                     ImU32 highlight,
+                     float rateHz,
+                     float intensity);
+
 /// Draw a static top-edge shine overlay on top of already-rendered text.
 /// Simulates overhead lighting by brightening vertices near the top of
 /// each glyph. Intended to be rendered with additive blending.
@@ -940,19 +1006,50 @@ struct ParticleAuraParams
  * Creates an aura of animated particles around the nameplate. Each style
  * has a dedicated distribution and motion model:
  *
- * | Style    | Distribution                  | Motion                                        |
- * |----------|-------------------------------|-----------------------------------------------|
- * | Stars    | Area-uniform starfield        | Differential rotation, mixed directions       |
- * | Sparks   | Launch ring at the text edge  | Ease-out launch, buoyant rise, cooling fade   |
- * | Wisps    | Area-uniform band             | Incommensurate Lissajous weave, drifting bob  |
- * | Runes    | Two evenly spaced rings       | Counter-rotating ceremonial orbit, rocking    |
- * | Orbs     | Area-uniform band             | Slow orbit plus pseudo-Brownian wander        |
- * | Crystals | Area-uniform band             | Suspended levitation, pendulum sway           |
+ * | Style         | Motion                                                       |
+ * |---------------|--------------------------------------------------------------|
+ * | Firefly       | Tilted orbit + incommensurate wander, blinking               |
+ * | Dust          | Slow tilted orbit + tiny drift, twinkling                    |
+ * | Mote          | Tilted orbit + Brownian wander, breathing glow               |
+ * | Wisp          | Tilted orbit + serpentine weave, tangent echo trail          |
+ * | Spark         | Tilted orbit + periodic outward ember flare, tangent trail   |
+ * | Leaf          | Tilted orbit + in/out radius drift, fluttering tumble        |
+ * | CherryBlossom | Tilted orbit + gentle bob, slow continuous spin              |
+ * | Rain          | Suspended streaks on a slow tilted orbit                     |
+ * | Snow |
+ * Broad, slow orbit with gentle flake bob                      |
+ * | Smoke         | Rises,
+ * expands, dissolves (non-orbiting)                     | | Aurora        | Horizontal flowing
+ * light curtain (non-orbiting)             |
  *
- * Per-particle variation (speed, direction, pseudo-depth, size) comes from
- * independent deterministic hash streams, so motion is organic yet stable
- * across frames. When several styles render together each one occupies its
- * own radial band; a style rendering alone may fill the whole region.
+ * The nine orbiting styles share a tilted elliptical ring (SampleOrbit): each
+ * particle circles
+ * the plate at its own radius, elevation band, speed and phase, with front-of-ring particles drawn
+ * larger/brighter and back-of-ring smaller/ dimmer for a 3D read. Smoke/Aurora are deliberate
+ * non-orbiting exceptions.
+ * Per-particle variation comes from independent deterministic hash
+ *
+ * streams, so motion is organic yet stable across frames. When several styles render together each
+ * occupies its own radial band; a style rendering alone may fill the whole region.
+ *
+ * The 2026-07 sprite-expansion styles share six parameterized motion
+ * archetypes instead of bespoke renderers (see StyleMotionSpec in
+ * TextEffectsParticle.cpp):
+ *
+ * | Archetype | Styles                                                       |
+ * |-----------|--------------------------------------------------------------|
+ * | Orbit     | Arcane, Enchant, Gem, Hex, Curse, Void, Vortex, Fairy, Runes |
+ * | Orbit     | Bat (swoops), Butterfly (bob), Constellation + Moon, Planet  |
+ * | Orbit     | Pollen (wide sway), Pixiedust (sprinkle), Ash (flutter),     |
+ * | Orbit     | Zap, Rain, Snow, Coin (spinning), Ink                        |
+ * | Rise      |
+ * Bubble (pops at top), Heart, Soul, Steam, Zzz, Ember         | | Fall      | Confetti |
+ * | Flow
+ * | Wind (mid band), Fog + Sand (lower band)                     | | Twinkle   | Glitter (anchored
+ * sparkle field)                             |
+ *
+ * Sprites with 4-frame `_strip.png` flipbooks animate on a stateless clock
+ * (per-particle phase, speed-coupled cadence); statics simply hold frame 0.
  *
  * @param params Particle aura parameters.
  *

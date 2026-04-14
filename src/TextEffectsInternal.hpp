@@ -277,4 +277,49 @@ inline ImU32 ThreeColorGradient(ImU32 colA, ImU32 colMid, ImU32 colB, float t)
     return LerpColorU32(LerpColorU32(colA, colMid, s1), colB, s2);
 }
 
+/// Deep jewel shade of a color: value down, saturation up, alpha preserved.
+///
+/// Animated effects sweep between this shade and a hot highlight so they
+/// carry their OWN contrast. Tier palettes are same-family pairs only ~15%
+/// apart on bright bases -- far too narrow to animate visibly, which is why
+/// the pre-overhaul effects read as invisible.
+inline ImU32 DeepShade(ImU32 c, float valMul = .55f, float satMul = 1.35f)
+{
+    const int r = (c >> IM_COL32_R_SHIFT) & 0xFF;
+    const int g = (c >> IM_COL32_G_SHIFT) & 0xFF;
+    const int b = (c >> IM_COL32_B_SHIFT) & 0xFF;
+    const int a = (c >> IM_COL32_A_SHIFT) & 0xFF;
+    float h = .0f, s = .0f, v = .0f;
+    ImGui::ColorConvertRGBtoHSV(r / 255.0f, g / 255.0f, b / 255.0f, h, s, v);
+    v = Saturate(v * valMul);
+    s = Saturate(s * satMul + .10f);  // desaturated near-whites gain a hue too
+    float nr = .0f, ng = .0f, nb = .0f;
+    ImGui::ColorConvertHSVtoRGB(h, s, v, nr, ng, nb);
+    return IM_COL32(static_cast<int>(nr * 255.0f + .5f),
+                    static_cast<int>(ng * 255.0f + .5f),
+                    static_cast<int>(nb * 255.0f + .5f),
+                    a);
+}
+
+/// Hot highlight: push a color toward pure white, keeping a trace of its
+/// hue and its alpha. The bright pole of the DeepShade<->Hot sweep.
+inline ImU32 HotHighlight(ImU32 c, float whiteness = .75f)
+{
+    const int a = (c >> IM_COL32_A_SHIFT) & 0xFF;
+    ImU32 white = (IM_COL32(255, 255, 255, 0)) | (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
+    return LerpColorU32(c, white, Saturate(whiteness));
+}
+
+/// Repack a color's RGB with the alpha channel of another color.
+///
+/// The tier highlight arrives packed with the (low) effectAlpha, and
+/// LerpColorU32 lerps all four channels -- so a sweep toward the raw
+/// highlight made text MORE TRANSPARENT exactly where it brightened,
+/// self-canceling. Every bright sweep target must adopt the fill's alpha.
+inline ImU32 WithAlphaFrom(ImU32 rgbSrc, ImU32 alphaSrc)
+{
+    constexpr ImU32 kAlphaMask = static_cast<ImU32>(0xFF) << IM_COL32_A_SHIFT;
+    return (rgbSrc & ~kAlphaMask) | (alphaSrc & kAlphaMask);
+}
+
 }  // namespace TextEffects
