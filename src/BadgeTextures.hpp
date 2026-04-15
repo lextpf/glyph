@@ -60,4 +60,32 @@ void Shutdown();
  * @return ImTextureID of the icon, or 0 when the icon is not loaded
  */
 ImTextureID Get(const std::string& name);
+
+/**
+ * Load the full-color prestige emblem PNGs used by the player tier badge.
+ *
+ * Unlike the duotone SVG icons above (alpha masks tinted at draw time), these
+ * are true-color images rendered untinted.  `paths` lists the emblem files in
+ * rank order (index 0 = lowest rank), resolved from the obfuscated asset
+ * manifest.  A file that fails to load keeps its rank slot (rendered blank) so
+ * the emblem-to-rank alignment is preserved; if *none* load, the set is cleared
+ * so the tier badge falls back to the Font Awesome medal/gem/crown icons.
+ *
+ * Each image is trimmed to its opaque content and resampled into a centered,
+ * mipmapped square so all emblems read at a uniform on-screen size.
+ *
+ * Call on the render thread once the D3D11 device exists.  An empty `paths`
+ * clears any loaded emblems.  Safe to call again (settings hot reload).
+ *
+ * @param device D3D11 device to create textures on
+ * @param paths  Emblem file paths in rank order (empty clears the set)
+ * @return number of emblem images that loaded successfully
+ */
+int InitializeTierImages(ID3D11Device* device, const std::vector<std::string>& paths);
+
+/// Texture for tier emblem `index` (0-based), or 0 when not loaded.
+ImTextureID GetTierImage(int index);
+
+/// Number of loaded tier emblem images (lock-free; 0 when none/disabled).
+int TierImageCount();
 }  // namespace BadgeTextures
