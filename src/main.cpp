@@ -30,10 +30,44 @@
 #include "AppearanceTemplate.hpp"
 #include "ConsoleCommands.hpp"
 #include "Hooks.hpp"
+#include "HudCompat.hpp"
+#include "ProjectManifest.hpp"
 #include "Renderer.hpp"
 #include "Settings.hpp"
 
 #include <string>
+
+namespace
+{
+// RaceMenu (RaceSex Menu) close -> force a player identity refresh, and log the
+// live name so we can confirm the engine reflects the rename pre-reload.
+class RaceMenuCloseSink : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+{
+public:
+    static RaceMenuCloseSink* GetSingleton()
+    {
+        static RaceMenuCloseSink s;
+        return &s;
+    }
+    RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* e,
+                                          RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+    {
+        // String literal (not RE::RaceSexMenu::MENU_NAME) to avoid a
+        // BSFixedString-vs-string_view comparison ambiguity; the value is stable.
+        if (e && !e->opening && e->menuName == "RaceSex Menu")
+        {
+            if (auto* pc = RE::PlayerCharacter::GetSingleton())
+            {
+                const char* nm = pc->GetDisplayFullName();
+                logger::info("RaceSex closed; player GetDisplayFullName() = '{}'",
+                             nm ? nm : "(null)");
+            }
+            Renderer::RequestIdentityRefresh();
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
+};
+}  // namespace
 
 // SKSE message handler - key lifecycle states:
 // - kDataLoaded: register console commands, retry NiOverride
@@ -50,6 +84,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
         case SKSE::MessagingInterface::kPostPostLoad:
             // All PostLoad handlers have run, SKEE might send interface here
             logger::debug("PostPostLoad event received");
+            // All plugins are loaded -- request the TrueHUD API and probe
+            // for moreHUD (One Voice Per Actor deconfliction).
+            HudCompat::Initialize();
             break;
 
         case SKSE::MessagingInterface::kDataLoaded:
@@ -57,6 +94,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
             ConsoleCommands::Register();
             // Retry getting NiOverride interface, SKEE should be fully loaded by now
             AppearanceTemplate::RetryNiOverrideInterface();
+            // RaceMenu rename -> prompt player-name refresh (see RaceMenuCloseSink).
+            if (auto* ui = RE::UI::GetSingleton())
+            {
+                ui->AddEventSink<RE::MenuOpenCloseEvent>(RaceMenuCloseSink::GetSingleton());
+            }
             break;
 
         case SKSE::MessagingInterface::kPostLoadGame:
@@ -105,6 +147,11 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
     logger::debug("glyph loaded");
     Settings::Load();
 
+    // Resolve the obfuscated asset manifest (fonts / tier emblems / particles).
+    // A missing or bad manifest is non-fatal: each loader falls back to its
+    // built-in default.
+    ProjectManifest::Load();
+
     // Register for SKSE messages
     auto messaging = SKSE::GetMessagingInterface();
     if (messaging)
@@ -133,6 +180,11 @@ extern "C" __declspec(dllexport) constinit const auto SKSEPlugin_Version = []()
     version.PluginName("glyph");
     version.AuthorName("lextpf | powerof3 | expired6978");
     version.UsesAddressLibrary(true);
+    // glyph targets Skyrim SE 1.5.97 only (AE/VR untested, and the D3D hook
+    // patches a compile-time SE call offset). An explicit allow-list overrides
+    // the address-library version-independence flag, so SKSE refuses to load us
+    // on any other runtime instead of crashing at startup.
+    version.CompatibleVersions({SKSE::RUNTIME_SSE_1_5_97});
     return version;
 }();
 
