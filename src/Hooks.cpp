@@ -1,9 +1,12 @@
 #include "Hooks.hpp"
 
 #include "BadgeTextures.hpp"
+#include "DepthClip.hpp"
 #include "GameState.hpp"
 #include "ParticleTextures.hpp"
+#include "ProjectManifest.hpp"
 #include "Renderer.hpp"
+#include "SceneMeter.hpp"
 #include "Settings.hpp"
 #include "TextPostProcess.hpp"
 
@@ -92,6 +95,10 @@ struct D3DState
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain;
     std::atomic<PresentFn> originalPresent{nullptr};
+    // glyph-owned mipmapped font atlas SRV bound into io.Fonts->TexID. Held here
+    // so it is not confused with the ImGui backend's own font texture (which the
+    // backend creates and frees in InvalidateDeviceObjects).
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> fontAtlasSRV;
 };
 
 static D3DState& D3D()
@@ -176,6 +183,8 @@ static void HandleDeviceChange()
         ParticleTextures::Shutdown();
         BadgeTextures::Shutdown();
         TextPostProcess::Shutdown();
+        SceneMeter::Shutdown();
+        DepthClip::Shutdown();
         Init().mipmapsGenerated.store(false, std::memory_order_release);
         Init().particleTexturesLoaded.store(false, std::memory_order_release);
         Init().badgeTexturesLoaded.store(false, std::memory_order_release);
@@ -267,6 +276,8 @@ static bool InitializeImGui()
         }
         ParticleTextures::Shutdown();
         TextPostProcess::Shutdown();
+        SceneMeter::Shutdown();
+        DepthClip::Shutdown();
     };
 
     ImGui::CreateContext();
@@ -296,10 +307,19 @@ static bool InitializeImGui()
     config.OversampleV = 2;
     config.PixelSnapH = false;  // Disable pixel snapping for smooth subpixel rendering
 
+    // Font paths come from the obfuscated asset manifest when present, falling
+    // back to the INI path (both already GUID-named) when it is not.
+    const auto fontPath = [](const std::string& mapped,
+                             const std::string& ini) -> const std::string&
+    { return mapped.empty() ? ini : mapped; };
+
     // Font Index 0: Name font
     const auto& font = Settings::Font();
-    ImFont* nameFont =
-        io.Fonts->AddFontFromFileTTF(font.NameFontPath.c_str(), font.NameFontSize, &config, ranges);
+    ImFont* nameFont = io.Fonts->AddFontFromFileTTF(
+        fontPath(ProjectManifest::FontName(), font.NameFontPath).c_str(),
+        font.NameFontSize,
+        &config,
+        ranges);
     if (!nameFont)
     {
         // Fallback to default font if custom font fails to load
@@ -308,7 +328,10 @@ static bool InitializeImGui()
 
     // Font Index 1: Level font
     ImFont* levelFont = io.Fonts->AddFontFromFileTTF(
-        font.LevelFontPath.c_str(), font.LevelFontSize, &config, ranges);
+        fontPath(ProjectManifest::FontLevel(), font.LevelFontPath).c_str(),
+        font.LevelFontSize,
+        &config,
+        ranges);
     if (!levelFont)
     {
         io.Fonts->AddFontDefault();
@@ -316,7 +339,10 @@ static bool InitializeImGui()
 
     // Font Index 2: Title font
     ImFont* titleFont = io.Fonts->AddFontFromFileTTF(
-        font.TitleFontPath.c_str(), font.TitleFontSize, &config, ranges);
+        fontPath(ProjectManifest::FontTitle(), font.TitleFontPath).c_str(),
+        font.TitleFontSize,
+        &config,
+        ranges);
     if (!titleFont)
     {
         io.Fonts->AddFontDefault();
@@ -324,10 +350,11 @@ static bool InitializeImGui()
 
     // Font Index 3: Ornament font
     const auto& orn = Settings::Ornament();
-    if (!orn.FontPath.empty())
+    const std::string& ornPath = fontPath(ProjectManifest::FontOrnament(), orn.FontPath);
+    if (!ornPath.empty())
     {
         ImFont* ornamentFont =
-            io.Fonts->AddFontFromFileTTF(orn.FontPath.c_str(), orn.FontSize, &config, ranges);
+            io.Fonts->AddFontFromFileTTF(ornPath.c_str(), orn.FontSize, &config, ranges);
         if (!ornamentFont)
         {
             io.Fonts->AddFontDefault();
@@ -490,11 +517,15 @@ static void GenerateMipmappedFontAtlas(ID3D11Device* device, ID3D11DeviceContext
                     fontTexture.Get(), &srvDesc, fontSRV.GetAddressOf())))
             {
                 context->GenerateMips(fontSRV.Get());
-                if (io.Fonts->TexID)
-                {
-                    reinterpret_cast<ID3D11ShaderResourceView*>(io.Fonts->TexID)->Release();
-                }
-                io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(fontSRV.Detach()));
+                // The SRV currently in io.Fonts->TexID is owned by the ImGui DX11
+                // backend (bd->pFontTextureView). Releasing it here would dangle
+                // that pointer and make the backend double-free it in
+                // InvalidateDeviceObjects on the next device rebuild. Retain our
+                // mipmapped SRV in a glyph-owned ComPtr instead: reassigning it
+                // releases any prior glyph atlas, while the backend keeps owning
+                // and freeing its own non-mipmapped texture.
+                D3D().fontAtlasSRV = fontSRV;
+                io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(fontSRV.Get()));
                 mipmapsReady = true;
             }
         }
@@ -535,6 +566,7 @@ static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
     }
 
     bool enabled = false;
+    bool tierImages = false;
     std::string folder;
     std::vector<std::string> names;
     {
@@ -542,6 +574,7 @@ static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
         const auto& ic = Settings::Icons();
         enabled = ic.Enabled && !ic.Folder.empty();
         folder = ic.Folder;
+        tierImages = ic.TierBadgeImages;
         names = {ic.FollowerIcon,
                  ic.AllyIcon,
                  ic.HostileIcon,
@@ -571,7 +604,10 @@ static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
                  ic.EncumberedIcon,
                  ic.NormalWeightIcon,
                  ic.WantedIcon,
-                 ic.BountyClearIcon};
+                 ic.BountyClearIcon,
+                 ic.TierLowIcon,
+                 ic.TierMidIcon,
+                 ic.TierHighIcon};
     }
 
     if (enabled)
@@ -582,6 +618,11 @@ static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
     {
         BadgeTextures::Shutdown();
     }
+    // Full-color tier emblem PNGs come from the obfuscated manifest (rank
+    // order); an empty list clears them (icons disabled or feature off).
+    static const std::vector<std::string> kNoBadges{};
+    BadgeTextures::InitializeTierImages(
+        device, (enabled && tierImages) ? ProjectManifest::TierBadges() : kNoBadges);
     Init().badgeTexturesGen.store(gen, std::memory_order_release);
     Init().badgeTexturesLoaded.store(true, std::memory_order_release);
 }
@@ -655,6 +696,8 @@ void RenderOverlayNow()
             {
                 Init().postProcessInitialized.store(true, std::memory_order_release);
             }
+            SceneMeter::Initialize(device.Get(), context.Get());
+            DepthClip::Initialize(device.Get(), context.Get());
         }
 
         // Set display size to actual screen resolution
@@ -664,6 +707,7 @@ void RenderOverlayNow()
             io.DisplaySize.x = static_cast<float>(screenSize.width);
             io.DisplaySize.y = static_cast<float>(screenSize.height);
             TextPostProcess::OnResize(screenSize.width, screenSize.height);
+            SceneMeter::OnResize(screenSize.width, screenSize.height);
         }
 
         ImGui::NewFrame();
@@ -720,7 +764,10 @@ void RenderOverlayNow()
 // before any Present call can occur.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-    if (!Frame().shouldRenderOverlay.load(std::memory_order_acquire) && GameState::CanDrawOverlay())
+    // Bootstrap the overlay from the Present fallback (upscalers that skip
+    // PostDisplay). Tick unconditionally so the game thread can publish the
+    // gate; don't call CanDrawOverlay() here (render-thread cell-deref race).
+    if (!Frame().shouldRenderOverlay.load(std::memory_order_acquire))
     {
         Renderer::TickRT();
 
@@ -761,7 +808,7 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
                 if (vtable && vtable[8])
                 {
                     auto candidate = reinterpret_cast<PresentFn>(vtable[8]);
-                    if (candidate && candidate != reinterpret_cast<PresentFn>(&PresentHook))
+                    if (candidate != reinterpret_cast<PresentFn>(&PresentHook))
                     {
                         const std::lock_guard<std::mutex> lock(StateMutex());
                         if (!D3D().originalPresent.load(std::memory_order_relaxed))
@@ -812,10 +859,15 @@ struct PostDisplay
 
         EnsureOverlayInitialized();
 
-        const bool canDrawOverlay = GameState::CanDrawOverlay();
+        // Queue the game-thread snapshot unconditionally so it can publish the
+        // allowOverlay gate. The render thread must not call CanDrawOverlay()
+        // itself: it dereferences player->GetParentCell(), which can race with
+        // cell teardown during exterior streaming. QueueSnapshotUpdate is
+        // idempotent per frame and self-clears the snapshot when not allowed.
+        Renderer::TickRT();
 
-        // Early exit checks
-        if (!Init().initialized.load(std::memory_order_acquire) || !canDrawOverlay)
+        // Early exit if the overlay backend isn't initialized yet.
+        if (!Init().initialized.load(std::memory_order_acquire))
         {
             func(a_menu);
             return;
@@ -828,10 +880,8 @@ struct PostDisplay
             return;
         }
 
-        // Update render thread state to queue actor data updates
-        Renderer::TickRT();
-
-        // Check if overlay should be rendered
+        // Gate rendering on the game-thread-published atomic, not a direct
+        // game-state read.
         bool shouldRender = Renderer::IsOverlayAllowedRT();
         Frame().shouldRenderOverlay.store(shouldRender, std::memory_order_release);
 
@@ -852,6 +902,18 @@ struct PostDisplay
 
 void Install()
 {
+    // Defense in depth: SKSEPlugin_Version's CompatibleVersions should already
+    // keep SKSE from loading glyph off Skyrim SE 1.5.97, but the
+    // CreateD3DAndSwapChain hook patches a compile-time SE call offset
+    // (GLYPH_OFFSET resolves to the SE value), so installing on AE/VR would
+    // corrupt an unrelated address. Bail loudly instead.
+    if (!REL::Module::IsSE())
+    {
+        SKSE::log::error(
+            "Hooks: Unsupported runtime (not Skyrim SE 1.5.97); skipping hook installation");
+        return;
+    }
+
     bool d3dHookInstalled = false;
     bool hudHookInstalled = false;
 
@@ -860,8 +922,22 @@ void Install()
         // Hook D3D11 device creation for ImGui initialization
         REL::Relocation<std::uintptr_t> target{RELOCATION_ID(75595, 77226),
                                                GLYPH_OFFSET(0x9, 0x275)};
-        Stl::WriteThunkCall<CreateD3DAndSwapChain>(target.address());
-        d3dHookInstalled = true;
+        // WriteThunkCall (write_call<5>) overwrites a 5-byte relative CALL.
+        // Verify the patch site actually starts with the CALL rel32 opcode
+        // (0xE8) so an offset drift fails loudly instead of clobbering code.
+        const auto patchOpcode = *reinterpret_cast<const std::uint8_t*>(target.address());
+        if (patchOpcode != 0xE8)
+        {
+            SKSE::log::error(
+                "Hooks: CreateD3DAndSwapChain patch site reads 0x{:02X}, expected 0xE8 "
+                "(CALL rel32); aborting D3D hook to avoid corrupting code",
+                patchOpcode);
+        }
+        else
+        {
+            Stl::WriteThunkCall<CreateD3DAndSwapChain>(target.address());
+            d3dHookInstalled = true;
+        }
     }
     catch (const std::exception& e)
     {
