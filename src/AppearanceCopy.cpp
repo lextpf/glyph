@@ -49,21 +49,6 @@ void FreeIfTracked(void* ptr, std::unordered_set<void*>& owned)
     }
 }
 
-void CleanupOwnedAllocations()
-{
-    std::lock_guard<std::mutex> lock(GetOwnedAllocationMutex());
-    for (auto* ptr : OwnedHeadPartArrays())
-    {
-        RE::free(ptr);
-    }
-    OwnedHeadPartArrays().clear();
-    for (auto* ptr : OwnedTintLayers())
-    {
-        RE::free(ptr);
-    }
-    OwnedTintLayers().clear();
-}
-
 // Copy head parts (eyes, hair, brows, scars, facial hair) from template to player.
 bool CopyHeadParts(RE::TESNPC* templateNPC, RE::TESNPC* playerBase)
 {
