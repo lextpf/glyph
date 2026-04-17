@@ -8,7 +8,11 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -77,7 +81,10 @@ enum class EffectType
     Breathe,
     Drift,
     Mote,
-    Wander
+    Wander,
+    Eclipse,
+    Pulse,
+    Electric
 };
 
 static EffectType ParseEffectType(const std::string& str)
@@ -113,6 +120,12 @@ static EffectType ParseEffectType(const std::string& str)
         return EffectType::Mote;
     if (s == "Wander")
         return EffectType::Wander;
+    if (s == "Eclipse")
+        return EffectType::Eclipse;
+    if (s == "Pulse")
+        return EffectType::Pulse;
+    if (s == "Electric")
+        return EffectType::Electric;
     return EffectType::Gradient;  // Default
 }
 
@@ -323,10 +336,71 @@ TEST(ParseColor3Test, NewBadgeSlotDefaults)
     EXPECT_NEAR(muted[2], 0.68f, 0.01f);
 
     float combat[3] = {0, 0, 0};
-    ParseColor3("1.0, 0.35, 0.28", combat);  // IconCombatColor
-    EXPECT_NEAR(combat[0], 1.0f, 0.01f);
-    EXPECT_NEAR(combat[1], 0.35f, 0.01f);
-    EXPECT_NEAR(combat[2], 0.28f, 0.01f);
+    ParseColor3("0.88, 0.42, 0.30", combat);  // IconCombatColor
+    EXPECT_NEAR(combat[0], 0.88f, 0.01f);
+    EXPECT_NEAR(combat[1], 0.42f, 0.01f);
+    EXPECT_NEAR(combat[2], 0.30f, 0.01f);
+}
+
+// Mirror of Settings.cpp ParseEffectString's positional-parameter splitting
+// (post-fix). The bug was that an empty comma-separated field did `continue`
+// without advancing the index, collapsing later values into earlier slots. The
+// fix advances the index on every field so an empty field keeps its slot (the
+// param stays at its default).
+static void ParseEffectParams(const std::string& params, float out[5])
+{
+    std::istringstream paramStream(params);
+    std::string token;
+    int paramIdx = 0;
+    while (std::getline(paramStream, token, ',') && paramIdx < 5)
+    {
+        token = Trim(token);
+        if (!token.empty())
+        {
+            out[paramIdx] = ParseFloat(token, 0.0f);
+        }
+        paramIdx++;
+    }
+}
+
+// ============================================================================
+// Tests: ParseEffectParams (positional slots survive empty fields)
+// ============================================================================
+
+TEST(ParseEffectParamsTest, EmptyFieldPreservesPositionalSlot)
+{
+    float out[5] = {0, 0, 0, 0, 0};
+    ParseEffectParams("0.5,,0.85", out);  // e.g. "Aurora 0.5,,0.85"
+    EXPECT_NEAR(out[0], 0.5f, 0.0001f);
+    EXPECT_NEAR(out[1], 0.0f, 0.0001f);  // empty field keeps its default
+    EXPECT_NEAR(out[2], 0.85f, 0.0001f);
+}
+
+TEST(ParseEffectParamsTest, LeadingEmptyField)
+{
+    float out[5] = {0, 0, 0, 0, 0};
+    ParseEffectParams(",0.5", out);
+    EXPECT_NEAR(out[0], 0.0f, 0.0001f);
+    EXPECT_NEAR(out[1], 0.5f, 0.0001f);
+}
+
+TEST(ParseEffectParamsTest, TrailingEmptyField)
+{
+    float out[5] = {0, 0, 0, 0, 0};
+    ParseEffectParams("0.5,", out);
+    EXPECT_NEAR(out[0], 0.5f, 0.0001f);
+    EXPECT_NEAR(out[1], 0.0f, 0.0001f);
+}
+
+TEST(ParseEffectParamsTest, AllFieldsPopulated)
+{
+    float out[5] = {0, 0, 0, 0, 0};
+    ParseEffectParams("1,2,3,4,5", out);
+    EXPECT_NEAR(out[0], 1.0f, 0.0001f);
+    EXPECT_NEAR(out[1], 2.0f, 0.0001f);
+    EXPECT_NEAR(out[2], 3.0f, 0.0001f);
+    EXPECT_NEAR(out[3], 4.0f, 0.0001f);
+    EXPECT_NEAR(out[4], 5.0f, 0.0001f);
 }
 
 // ============================================================================
@@ -381,6 +455,21 @@ TEST(ParseEffectTypeTest, Mote)
 TEST(ParseEffectTypeTest, Wander)
 {
     EXPECT_EQ(ParseEffectType("Wander"), EffectType::Wander);
+}
+
+TEST(ParseEffectTypeTest, Eclipse)
+{
+    EXPECT_EQ(ParseEffectType("Eclipse"), EffectType::Eclipse);
+}
+
+TEST(ParseEffectTypeTest, Pulse)
+{
+    EXPECT_EQ(ParseEffectType("Pulse"), EffectType::Pulse);
+}
+
+TEST(ParseEffectTypeTest, Electric)
+{
+    EXPECT_EQ(ParseEffectType("Electric"), EffectType::Electric);
 }
 
 TEST(ParseEffectTypeTest, WithWhitespace)
@@ -841,14 +930,14 @@ struct ParticleSettings
     bool Enabled = true;
     bool UseParticleTextures = true;
     int Count = 8;
-    float Size = 3.5f;  // reconciled S2 default (was 3.0)
+    float Size = 4.2f;  // visibility pass: sprites render at/above native 16px
     float Speed = 1.0f;
     float Spread = 20.0f;
     float Alpha = 0.8f;
-    int BlendMode = 0;
+    int BlendMode = 1;  // Screen: readable on bright scenes (visibility pass)
     float DepthStrength = 0.7f;
     float ColorWarmth = 0.5f;
-    float GlowStrength = 0.35f;
+    float GlowStrength = 0.28f;  // subdued backlight; crisp sprite owns the read
     float GlowSize = 2.2f;
     float ShineThreshold = 0.84f;
 };
@@ -889,14 +978,14 @@ TEST(ParticleSettings, DefaultsMatchProduction)
     EXPECT_TRUE(p.Enabled);
     EXPECT_TRUE(p.UseParticleTextures);
     EXPECT_EQ(p.Count, 8);
-    EXPECT_FLOAT_EQ(p.Size, 3.5f);
+    EXPECT_FLOAT_EQ(p.Size, 4.2f);
     EXPECT_FLOAT_EQ(p.Speed, 1.0f);
     EXPECT_FLOAT_EQ(p.Spread, 20.0f);
     EXPECT_FLOAT_EQ(p.Alpha, 0.8f);
-    EXPECT_EQ(p.BlendMode, 0);
+    EXPECT_EQ(p.BlendMode, 1);
     EXPECT_FLOAT_EQ(p.DepthStrength, 0.7f);
     EXPECT_FLOAT_EQ(p.ColorWarmth, 0.5f);
-    EXPECT_FLOAT_EQ(p.GlowStrength, 0.35f);
+    EXPECT_FLOAT_EQ(p.GlowStrength, 0.28f);
     EXPECT_FLOAT_EQ(p.GlowSize, 2.2f);
     EXPECT_FLOAT_EQ(p.ShineThreshold, 0.84f);
 }
@@ -974,9 +1063,10 @@ TEST(ParticleSettings, InRangeValuesPreserved)
 
 TEST(ParticleSettings, SizeDefaultReconciled)
 {
-    // S2: the INI/default/comment were 5.0/3.0/"3.5"; all reconciled to 3.5.
+    // S2 reconciled INI/default/comment to 3.5; the visibility pass then
+    // raised the shared default to 4.2 so 16px sprites render at native size.
     particle_test::ParticleSettings p;
-    EXPECT_FLOAT_EQ(p.Size, 3.5f);
+    EXPECT_FLOAT_EQ(p.Size, 4.2f);
 }
 
 // ============================================================================
@@ -1069,4 +1159,400 @@ TEST(NpcColors, MalformedStringFallsBackToWhite)
     EXPECT_FLOAT_EQ(c[0], 1.0f);
     EXPECT_FLOAT_EQ(c[1], 1.0f);
     EXPECT_FLOAT_EQ(c[2], 1.0f);
+}
+
+// ============================================================================
+// Registers -- When-token predicate parsing
+// (mirrors ParseWhenTokens in Settings.cpp; keep the logic in sync)
+// ============================================================================
+
+namespace Context
+{
+inline constexpr uint32_t Interior = 1u << 0;
+inline constexpr uint32_t Night = 1u << 1;
+inline constexpr uint32_t City = 1u << 2;
+inline constexpr uint32_t Sneaking = 1u << 3;
+inline constexpr uint32_t Dialogue = 1u << 4;
+inline constexpr uint32_t Crowded = 1u << 5;
+}  // namespace Context
+
+static std::string ToLowerAsciiCopy(const std::string& input)
+{
+    std::string out = input;
+    for (auto& c : out)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+static void ParseWhenTokens(const std::string& val, uint32_t& whenMask, uint32_t& whenNotMask)
+{
+    whenMask = 0;
+    whenNotMask = 0;
+    std::istringstream ss(val);
+    std::string token;
+    while (std::getline(ss, token, ','))
+    {
+        token = ToLowerAsciiCopy(Trim(token));
+        bool negate = false;
+        if (!token.empty() && token[0] == '!')
+        {
+            negate = true;
+            token = Trim(token.substr(1));
+        }
+        uint32_t bit = 0;
+        if (token == "interior")
+            bit = Context::Interior;
+        else if (token == "exterior")
+        {
+            bit = Context::Interior;
+            negate = !negate;
+        }
+        else if (token == "night")
+            bit = Context::Night;
+        else if (token == "day")
+        {
+            bit = Context::Night;
+            negate = !negate;
+        }
+        else if (token == "city")
+            bit = Context::City;
+        else if (token == "sneaking")
+            bit = Context::Sneaking;
+        else if (token == "dialogue")
+            bit = Context::Dialogue;
+        else if (token == "crowded")
+            bit = Context::Crowded;
+        if (bit == 0)
+            continue;
+        (negate ? whenNotMask : whenMask) |= bit;
+    }
+}
+
+TEST(RegisterWhen, SimpleTokensSetRequiredBits)
+{
+    uint32_t when = 0, whenNot = 0;
+    ParseWhenTokens("city, crowded", when, whenNot);
+    EXPECT_EQ(when, Context::City | Context::Crowded);
+    EXPECT_EQ(whenNot, 0u);
+}
+
+TEST(RegisterWhen, ExteriorAndDayAreNegatedSugar)
+{
+    uint32_t when = 0, whenNot = 0;
+    ParseWhenTokens("exterior, night", when, whenNot);
+    EXPECT_EQ(when, Context::Night);
+    EXPECT_EQ(whenNot, Context::Interior);
+
+    ParseWhenTokens("day", when, whenNot);
+    EXPECT_EQ(when, 0u);
+    EXPECT_EQ(whenNot, Context::Night);
+}
+
+TEST(RegisterWhen, BangNegates)
+{
+    uint32_t when = 0, whenNot = 0;
+    ParseWhenTokens("!dialogue, sneaking", when, whenNot);
+    EXPECT_EQ(when, Context::Sneaking);
+    EXPECT_EQ(whenNot, Context::Dialogue);
+}
+
+TEST(RegisterWhen, DoubleNegationCancels)
+{
+    uint32_t when = 0, whenNot = 0;
+    ParseWhenTokens("!exterior", when, whenNot);  // !(!interior) == interior
+    EXPECT_EQ(when, Context::Interior);
+    EXPECT_EQ(whenNot, 0u);
+}
+
+TEST(RegisterWhen, UnknownTokensAndEmptyAreIgnored)
+{
+    uint32_t when = 0, whenNot = 0;
+    ParseWhenTokens("bogus,, city ,", when, whenNot);
+    EXPECT_EQ(when, Context::City);
+    EXPECT_EQ(whenNot, 0u);
+}
+
+// ============================================================================
+// Registers -- profile matching / priority pick
+// (mirrors PickRegister in RendererSnapshot.cpp; keep the logic in sync)
+// ============================================================================
+
+struct TestRegister
+{
+    uint32_t whenMask = 0;
+    uint32_t whenNotMask = 0;
+    int priority = 0;
+    bool configured = true;  // index-gap backfill entries stay false -> inert
+};
+
+static int PickRegister(uint32_t ctxMask, const std::vector<TestRegister>& regs)
+{
+    int best = -1;
+    int bestPriority = INT_MIN;
+    for (size_t i = 0; i < regs.size(); ++i)
+    {
+        const auto& r = regs[i];
+        if (!r.configured || (ctxMask & r.whenMask) != r.whenMask || (ctxMask & r.whenNotMask) != 0)
+            continue;
+        if (best < 0 || r.priority > bestPriority)
+        {
+            best = static_cast<int>(i);
+            bestPriority = r.priority;
+        }
+    }
+    return best;
+}
+
+TEST(RegisterPick, HighestPriorityMatchWins)
+{
+    std::vector<TestRegister> regs = {
+        {Context::Night, 0, 1},
+        {Context::Night | Context::City, 0, 5},
+    };
+    EXPECT_EQ(PickRegister(Context::Night | Context::City, regs), 1);
+    EXPECT_EQ(PickRegister(Context::Night, regs), 0);
+}
+
+TEST(RegisterPick, ForbiddenBitsExclude)
+{
+    std::vector<TestRegister> regs = {
+        {Context::Night, Context::Interior, 1},
+    };
+    EXPECT_EQ(PickRegister(Context::Night | Context::Interior, regs), -1);
+    EXPECT_EQ(PickRegister(Context::Night, regs), 0);
+}
+
+TEST(RegisterPick, EmptyWhenIsBaseRegister)
+{
+    std::vector<TestRegister> regs = {{0, 0, 0}};
+    EXPECT_EQ(PickRegister(0, regs), 0);
+    EXPECT_EQ(PickRegister(Context::City | Context::Crowded, regs), 0);
+}
+
+TEST(RegisterPick, NoMatchReturnsNone)
+{
+    std::vector<TestRegister> regs = {{Context::Sneaking, 0, 0}};
+    EXPECT_EQ(PickRegister(Context::Night, regs), -1);
+}
+
+// ============================================================================
+// Deeds, Not Words -- faction spec parsing + priority pick
+// (mirrors ResolveFactionSpec splitting / ResolveHonorific priority logic
+//  in RendererSnapshot.cpp; keep in sync)
+// ============================================================================
+
+struct FactionSpecParts
+{
+    uint32_t formID = 0;
+    std::string plugin = "Skyrim.esm";
+};
+
+static FactionSpecParts SplitFactionSpec(const std::string& spec)
+{
+    FactionSpecParts parts;
+    std::string idPart = spec;
+    if (const size_t at = spec.find('@'); at != std::string::npos)
+    {
+        idPart = spec.substr(0, at);
+        parts.plugin = spec.substr(at + 1);
+    }
+    parts.formID = static_cast<uint32_t>(std::strtoul(idPart.c_str(), nullptr, 16));
+    return parts;
+}
+
+TEST(HonorificSpec, BareHexDefaultsToSkyrimEsm)
+{
+    const auto parts = SplitFactionSpec("0x0001BDB3");
+    EXPECT_EQ(parts.formID, 0x1BDB3u);
+    EXPECT_EQ(parts.plugin, "Skyrim.esm");
+}
+
+TEST(HonorificSpec, PluginSuffixIsRespected)
+{
+    const auto parts = SplitFactionSpec("0x000800@MyMod.esp");
+    EXPECT_EQ(parts.formID, 0x800u);
+    EXPECT_EQ(parts.plugin, "MyMod.esp");
+}
+
+TEST(HonorificSpec, HexWithoutPrefixParses)
+{
+    const auto parts = SplitFactionSpec("48181");
+    EXPECT_EQ(parts.formID, 0x48181u);
+}
+
+TEST(HonorificSpec, GarbageResolvesToZero)
+{
+    EXPECT_EQ(SplitFactionSpec("not-a-number").formID, 0u);
+    EXPECT_EQ(SplitFactionSpec("").formID, 0u);
+}
+
+struct TestHonorific
+{
+    int minRank = 0;
+    int priority = 0;
+    bool playerOnly = false;
+    bool npcOnly = false;
+    bool inFaction = false;  // stand-in for the faction membership test
+    int rank = 0;
+};
+
+static int PickHonorific(const std::vector<TestHonorific>& defs, bool isPlayer)
+{
+    int best = -1;
+    int bestPriority = INT_MIN;
+    for (size_t i = 0; i < defs.size(); ++i)
+    {
+        const auto& d = defs[i];
+        if (!d.inFaction || d.rank < d.minRank || (d.playerOnly && !isPlayer) ||
+            (d.npcOnly && isPlayer))
+            continue;
+        if (best < 0 || d.priority > bestPriority)
+        {
+            best = static_cast<int>(i);
+            bestPriority = d.priority;
+        }
+    }
+    return best;
+}
+
+TEST(HonorificPick, HighestPriorityMembershipWins)
+{
+    std::vector<TestHonorific> defs = {
+        {0, 10, false, false, true, 0},
+        {0, 20, false, false, true, 0},
+        {0, 30, false, false, false, 0},  // not a member
+    };
+    EXPECT_EQ(PickHonorific(defs, false), 1);
+}
+
+TEST(HonorificPick, MinRankGates)
+{
+    std::vector<TestHonorific> defs = {{4, 10, false, false, true, 3}};
+    EXPECT_EQ(PickHonorific(defs, false), -1);
+    defs[0].rank = 4;
+    EXPECT_EQ(PickHonorific(defs, false), 0);
+}
+
+TEST(HonorificPick, PlayerAndNpcOnlyFlags)
+{
+    std::vector<TestHonorific> defs = {
+        {0, 10, true, false, true, 0},  // player only
+        {0, 5, false, true, true, 0},   // npc only
+    };
+    EXPECT_EQ(PickHonorific(defs, true), 0);
+    EXPECT_EQ(PickHonorific(defs, false), 1);
+}
+
+TEST(RegisterPick, UnconfiguredBackfillNeverShadows)
+{
+    // [Register1] written without [Register0]: index 0 is a gap-filled
+    // default (empty When = matches everything) that must stay inert, or it
+    // would win priority ties against the user's real register.
+    std::vector<TestRegister> regs = {
+        {0, 0, 0, false},              // phantom backfill
+        {Context::Night, 0, 0, true},  // the user's register, priority 0
+    };
+    EXPECT_EQ(PickRegister(Context::Night, regs), 1);
+    EXPECT_EQ(PickRegister(0, regs), -1);  // phantom must not act as a base
+}
+
+static float ClampRangeIcon(float v, float lo, float hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+TEST(IconOpacity, ParsesAndClampsToRange)
+{
+    EXPECT_NEAR(ClampRangeIcon(ParseFloat("1.15", 1.15f), 0.5f, 2.0f), 1.15f, 1e-6f);
+    EXPECT_NEAR(ClampRangeIcon(ParseFloat("5.0", 1.15f), 0.5f, 2.0f), 2.0f, 1e-6f);   // over max
+    EXPECT_NEAR(ClampRangeIcon(ParseFloat("0.1", 1.15f), 0.5f, 2.0f), 0.5f, 1e-6f);   // under min
+    EXPECT_NEAR(ClampRangeIcon(ParseFloat("bad", 1.15f), 0.5f, 2.0f), 1.15f, 1e-6f);  // default
+}
+
+// Mirror of RendererEffects.cpp ParticleTypeWeight (per repo test convention).
+static float ParticleTypeWeightT(const std::string& particleTypes, const char* token)
+{
+    constexpr float kMinW = 0.1f, kMaxW = 10.0f;
+    const size_t tokenLen = std::strlen(token);
+    size_t start = 0;
+    while (start <= particleTypes.size())
+    {
+        size_t comma = particleTypes.find(',', start);
+        size_t end = (comma == std::string::npos) ? particleTypes.size() : comma;
+        size_t colon = particleTypes.find(':', start);
+        size_t typeEnd = (colon != std::string::npos && colon < end) ? colon : end;
+        size_t a = start, b = typeEnd;
+        while (a < b && std::isspace((unsigned char)particleTypes[a]))
+            ++a;
+        while (b > a && std::isspace((unsigned char)particleTypes[b - 1]))
+            --b;
+        const size_t len = b - a;
+        bool match = (tokenLen == len);
+        for (size_t i = 0; match && i < len; ++i)
+            match = std::tolower((unsigned char)particleTypes[a + i]) == (unsigned char)token[i];
+        if (match)
+        {
+            float w = 1.0f;
+            if (colon != std::string::npos && colon < end)
+            {
+                try
+                {
+                    w = std::stof(particleTypes.substr(colon + 1, end - (colon + 1)));
+                }
+                catch (...)
+                {
+                    w = 1.0f;
+                }
+            }
+            return std::clamp(w, kMinW, kMaxW);
+        }
+        if (comma == std::string::npos)
+            break;
+        start = comma + 1;
+    }
+    return 0.0f;
+}
+
+TEST(ParticleTypeWeight, BareTypeIsWeightOne)
+{
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Firefly", "firefly"), 1.0f);
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Firefly, Mote", "mote"), 1.0f);
+}
+TEST(ParticleTypeWeight, ParsesExplicitWeight)
+{
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Firefly:3, Mote:1", "firefly"), 3.0f);
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Firefly:3, Mote:1", "mote"), 1.0f);
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Mote:3, Spark:2, Cherryblossom:1", "spark"), 2.0f);
+}
+TEST(ParticleTypeWeight, CaseInsensitiveAndWhitespace)
+{
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("FIREFLY:2", "firefly"), 2.0f);
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT(" Firefly : 2 ", "firefly"), 2.0f);
+}
+TEST(ParticleTypeWeight, AbsentTypeIsZero)
+{
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Wisp, Mote", "firefly"), 0.0f);
+}
+TEST(ParticleTypeWeight, MalformedWeightDefaultsToOne)
+{
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Firefly:abc", "firefly"), 1.0f);
+}
+TEST(ParticleTypeWeight, WeightClamped)
+{
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Firefly:99", "firefly"), 10.0f);
+    EXPECT_FLOAT_EQ(ParticleTypeWeightT("Firefly:0", "firefly"), 0.1f);
+}
+TEST(ParticleTypeWeight, MeanNormalizationIsIdentityForEqualWeights)
+{
+    // norm = enabledStyles / sumWeights; equal weights -> norm == 1 (legacy).
+    const float w[2] = {1.0f, 1.0f};
+    const float norm = 2.0f / (w[0] + w[1]);
+    EXPECT_FLOAT_EQ(w[0] * norm, 1.0f);
+    EXPECT_FLOAT_EQ(w[1] * norm, 1.0f);
+    // 3:2:1 over 3 types -> normalized 1.5 : 1.0 : 0.5 (total budget preserved).
+    const float v[3] = {3.0f, 2.0f, 1.0f};
+    const float n3 = 3.0f / (v[0] + v[1] + v[2]);
+    EXPECT_FLOAT_EQ(v[0] * n3, 1.5f);
+    EXPECT_FLOAT_EQ(v[1] * n3, 1.0f);
+    EXPECT_FLOAT_EQ(v[2] * n3, 0.5f);
 }
