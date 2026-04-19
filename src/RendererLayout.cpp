@@ -213,7 +213,13 @@ static void ComputeTierColors(LabelStyle& style,
     // re-saturated by the user-controlled vibrancy knobs.
     auto Pastelize = [&](const Settings::Color3& c) -> ImVec4
     {
-        const float t = snap.nameColorMix + (1.0f - snap.nameColorMix) * levelT;
+        float t = snap.nameColorMix + (1.0f - snap.nameColorMix) * levelT;
+        if (under100)
+        {
+            // Early earthy tiers carry much darker secondary hues than the
+            // prestige bands. Keep them lifted so the name fill stays readable.
+            t = std::clamp(t - .18f, .0f, 1.0f);
+        }
         return ImVec4(
             1.0f + (c.r - 1.0f) * t, 1.0f + (c.g - 1.0f) * t, 1.0f + (c.b - 1.0f) * t, 1.0f);
     };
@@ -221,8 +227,9 @@ static void ComputeTierColors(LabelStyle& style,
     style.Lc = Pastelize(tier.leftColor);
     style.Rc = Pastelize(tier.rightColor);
 
-    style.effectAlpha =
-        alpha * tierIntensity * (snap.effectAlphaMin + snap.effectAlphaMax * levelT);
+    const float effectAlphaMul =
+        snap.effectAlphaMin + (snap.effectAlphaMax - snap.effectAlphaMin) * levelT;
+    style.effectAlpha = alpha * tierIntensity * effectAlphaMul;
 
     auto MixToWhite = [](ImVec4 c, float amount)
     {
@@ -411,7 +418,8 @@ static void ComputeAnimationParams(LabelStyle& style,
     const float phaseSeed = (formID & 1023) / 1023.0f;
     style.phase01 = frac(time * tierAnimSpeed + phaseSeed);
 
-    style.strength = tierIntensity * (snap.strengthMin + snap.strengthMax * levelT);
+    style.strength =
+        tierIntensity * (snap.strengthMin + (snap.strengthMax - snap.strengthMin) * levelT);
 }
 
 // Compute all color, tier, and effect data for a label.
