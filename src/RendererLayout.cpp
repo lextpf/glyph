@@ -248,6 +248,12 @@ static void ComputeTierColors(LabelStyle& style,
     const float baseColorAmount = under100 ? (.35f + .65f * tierIntensity) : 1.0f;
     const ImVec4 highlightColor(
         tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, 1.0f);
+    const ImVec4 vividNameL(tier.leftColor.r, tier.leftColor.g, tier.leftColor.b, 1.0f);
+    const ImVec4 vividNameR(tier.rightColor.r, tier.rightColor.g, tier.rightColor.b, 1.0f);
+    ImVec4 vividLevelL = vividNameL;
+    ImVec4 vividLevelR = vividNameR;
+    ImVec4 vividTitleL = vividNameL;
+    ImVec4 vividTitleR = vividNameR;
 
     // Name colors stay anchored to the tier's main gradient.
     style.LcName = style.Lc;
@@ -256,30 +262,52 @@ static void ComputeTierColors(LabelStyle& style,
     // Level colors: use per-tier override if set, else derive a softer supporting accent
     // from the name colors plus a touch of the tier highlight.
     if (tier.levelLeftColor)
+    {
+        vividLevelL =
+            ImVec4(tier.levelLeftColor->r, tier.levelLeftColor->g, tier.levelLeftColor->b, 1.0f);
         style.LcLevel = Pastelize(*tier.levelLeftColor);
+    }
     else
-        style.LcLevel = MixToWhite(MixColors(style.LcName, highlightColor, .18f + .10f * levelT),
-                                   baseColorAmount * .90f);
+    {
+        vividLevelL = MixColors(vividNameL, highlightColor, .18f + .10f * levelT);
+        style.LcLevel = MixToWhite(vividLevelL, baseColorAmount * .90f);
+    }
     if (tier.levelRightColor)
+    {
+        vividLevelR =
+            ImVec4(tier.levelRightColor->r, tier.levelRightColor->g, tier.levelRightColor->b, 1.0f);
         style.RcLevel = Pastelize(*tier.levelRightColor);
+    }
     else
-        style.RcLevel = MixToWhite(MixColors(style.RcName, highlightColor, .18f + .10f * levelT),
-                                   baseColorAmount * .90f);
+    {
+        vividLevelR = MixColors(vividNameR, highlightColor, .18f + .10f * levelT);
+        style.RcLevel = MixToWhite(vividLevelR, baseColorAmount * .90f);
+    }
 
     // Title colors: use per-tier override if set, else derive a companion accent from
     // the same tier palette rather than cloning the name band.
     if (tier.titleLeftColor)
+    {
+        vividTitleL =
+            ImVec4(tier.titleLeftColor->r, tier.titleLeftColor->g, tier.titleLeftColor->b, 1.0f);
         style.LcTitle = Pastelize(*tier.titleLeftColor);
+    }
     else
-        style.LcTitle =
-            MixToWhite(MixColors(MixColors(style.LcName, style.RcName, .18f), highlightColor, .34f),
-                       baseColorAmount * .82f);
+    {
+        vividTitleL = MixColors(MixColors(vividNameL, vividNameR, .18f), highlightColor, .34f);
+        style.LcTitle = MixToWhite(vividTitleL, baseColorAmount * .82f);
+    }
     if (tier.titleRightColor)
+    {
+        vividTitleR =
+            ImVec4(tier.titleRightColor->r, tier.titleRightColor->g, tier.titleRightColor->b, 1.0f);
         style.RcTitle = Pastelize(*tier.titleRightColor);
+    }
     else
-        style.RcTitle =
-            MixToWhite(MixColors(MixColors(style.RcName, style.LcName, .18f), highlightColor, .42f),
-                       baseColorAmount * .82f);
+    {
+        vividTitleR = MixColors(MixColors(vividNameR, vividNameL, .18f), highlightColor, .42f);
+        style.RcTitle = MixToWhite(vividTitleR, baseColorAmount * .82f);
+    }
 
     style.specialGlowColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
@@ -311,12 +339,14 @@ static void ComputeTierColors(LabelStyle& style,
             washed.y += (vivid.y - washed.y) * boost;
             washed.z += (vivid.z - washed.z) * boost;
         };
-        Vivify(style.LcName, style.Lc);
-        Vivify(style.RcName, style.Rc);
-        Vivify(style.LcLevel, style.Lc);
-        Vivify(style.RcLevel, style.Rc);
-        Vivify(style.LcTitle, style.Lc);
-        Vivify(style.RcTitle, style.Rc);
+        // Preserve element-specific palette roles instead of collapsing every
+        // tier back toward the main name band at higher vibrancy settings.
+        Vivify(style.LcName, vividNameL);
+        Vivify(style.RcName, vividNameR);
+        Vivify(style.LcLevel, vividLevelL);
+        Vivify(style.RcLevel, vividLevelR);
+        Vivify(style.LcTitle, vividTitleL);
+        Vivify(style.RcTitle, vividTitleR);
     }
 
     // Global saturation boost: pull text colors away from gray without changing alpha.
