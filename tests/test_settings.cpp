@@ -55,16 +55,15 @@ enum class EffectType {
     DiagonalGradient,
     RadialGradient,
     Shimmer,
-    ChromaticShimmer,
     Ember,
-    RainbowWave,
-    ConicRainbow,
     Aurora,
     Sparkle,
-    Plasma,
-    Scanline,
     Enchant,
-    Frost
+    Frost,
+    Breathe,
+    Drift,
+    Mote,
+    Wander
 };
 
 static EffectType ParseEffectType(const std::string& str) {
@@ -75,17 +74,15 @@ static EffectType ParseEffectType(const std::string& str) {
     if (s == "DiagonalGradient") return EffectType::DiagonalGradient;
     if (s == "RadialGradient") return EffectType::RadialGradient;
     if (s == "Shimmer") return EffectType::Shimmer;
-    if (s == "ChromaticShimmer") return EffectType::ChromaticShimmer;
     if (s == "Ember") return EffectType::Ember;
-    if (s == "PulseGradient") return EffectType::Ember;  // backward compat
-    if (s == "RainbowWave") return EffectType::RainbowWave;
-    if (s == "ConicRainbow") return EffectType::ConicRainbow;
     if (s == "Aurora") return EffectType::Aurora;
     if (s == "Sparkle") return EffectType::Sparkle;
-    if (s == "Plasma") return EffectType::Plasma;
-    if (s == "Scanline") return EffectType::Scanline;
     if (s == "Enchant") return EffectType::Enchant;
     if (s == "Frost") return EffectType::Frost;
+    if (s == "Breathe") return EffectType::Breathe;
+    if (s == "Drift") return EffectType::Drift;
+    if (s == "Mote") return EffectType::Mote;
+    if (s == "Wander") return EffectType::Wander;
     return EffectType::Gradient;  // Default
 }
 
@@ -240,10 +237,6 @@ TEST(ParseEffectTypeTest, Gradient) {
     EXPECT_EQ(ParseEffectType("Gradient"), EffectType::Gradient);
 }
 
-TEST(ParseEffectTypeTest, RainbowWave) {
-    EXPECT_EQ(ParseEffectType("RainbowWave"), EffectType::RainbowWave);
-}
-
 TEST(ParseEffectTypeTest, Aurora) {
     EXPECT_EQ(ParseEffectType("Aurora"), EffectType::Aurora);
 }
@@ -252,16 +245,28 @@ TEST(ParseEffectTypeTest, Ember) {
     EXPECT_EQ(ParseEffectType("Ember"), EffectType::Ember);
 }
 
-TEST(ParseEffectTypeTest, PulseGradientBackwardCompat) {
-    EXPECT_EQ(ParseEffectType("PulseGradient"), EffectType::Ember);
-}
-
 TEST(ParseEffectTypeTest, Enchant) {
     EXPECT_EQ(ParseEffectType("Enchant"), EffectType::Enchant);
 }
 
 TEST(ParseEffectTypeTest, Frost) {
     EXPECT_EQ(ParseEffectType("Frost"), EffectType::Frost);
+}
+
+TEST(ParseEffectTypeTest, Breathe) {
+    EXPECT_EQ(ParseEffectType("Breathe"), EffectType::Breathe);
+}
+
+TEST(ParseEffectTypeTest, Drift) {
+    EXPECT_EQ(ParseEffectType("Drift"), EffectType::Drift);
+}
+
+TEST(ParseEffectTypeTest, Mote) {
+    EXPECT_EQ(ParseEffectType("Mote"), EffectType::Mote);
+}
+
+TEST(ParseEffectTypeTest, Wander) {
+    EXPECT_EQ(ParseEffectType("Wander"), EffectType::Wander);
 }
 
 TEST(ParseEffectTypeTest, WithWhitespace) {
