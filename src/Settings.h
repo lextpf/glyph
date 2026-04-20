@@ -154,8 +154,8 @@ struct Segment
  *
  * **Effect Categories:**
  * - Static: None, Gradient, VerticalGradient, DiagonalGradient, RadialGradient
- * - Animated: Shimmer, ChromaticShimmer, Ember, RainbowWave, ConicRainbow, Aurora
- * - Complex: Sparkle, Plasma, Scanline, Enchant, Frost
+ * - Animated: Shimmer, Ember, Aurora, Breathe, Mote, Wander
+ * - Complex: Sparkle, Enchant, Frost, Drift
  *
  * @see EffectParams, TextEffects::ApplyVertexEffect
  */
@@ -167,17 +167,17 @@ enum class EffectType
     DiagonalGradient,  ///< Diagonal gradient (requires direction in param1, param2)
     RadialGradient,    ///< Radial gradient from center (param1 = gamma)
     Shimmer,           ///< Moving highlight band (param1 = width, param2 = strength)
-    ChromaticShimmer,  ///< Chromatic aberration shimmer (param1-4 for tuning)
-    Ember,  ///< Warm flickering glow (param1 = speed, param2 = intensity). INI alias: PulseGradient
-    RainbowWave,   ///< Animated rainbow (param1-5 for hue/speed/saturation)
-    ConicRainbow,  ///< Circular rainbow rotation (param1-4 for tuning)
-    Aurora,  ///< Northern lights effect (param1 = speed, param2 = waves, param3 = intensity, param4
-             ///< = sway)
-    Sparkle,   ///< Glittering stars (param1 = density, param2 = speed, param3 = intensity)
-    Plasma,    ///< Demoscene plasma pattern (param1 = freq1, param2 = freq2, param3 = speed)
-    Scanline,  ///< Horizontal scanning bar (param1 = speed, param2 = width, param3 = intensity)
-    Enchant,   ///< Flowing magical energy (param1 = speed, param2 = scale, param3 = intensity)
-    Frost      ///< Crystalline ice sparkle (param1 = density, param2 = speed, param3 = intensity)
+    Ember,             ///< Warm flickering glow (param1 = speed, param2 = intensity)
+    Aurora,   ///< Northern lights effect (param1 = speed, param2 = waves, param3 = intensity,
+              ///< param4 = sway)
+    Sparkle,  ///< Glittering stars (param1 = density, param2 = speed, param3 = intensity)
+    Enchant,  ///< Flowing magical energy (param1 = speed, param2 = scale, param3 = intensity)
+    Frost,    ///< Crystalline ice sparkle (param1 = density, param2 = speed, param3 = intensity)
+    Breathe,  ///< Slow uniform brightness pulse (param1 = speed Hz, param2 = amplitude)
+    Drift,    ///< Slow uniform hue wander (param1 = speed Hz, param2 = hue range degrees)
+    Mote,     ///< Rare single twinkle (param1 = period s, param2 = peak alpha)
+    Wander    ///< Per-character asynchronous breathing (param1 = speed Hz, param2 = amplitude,
+              ///< param3 = phase spread)
 };
 
 /**

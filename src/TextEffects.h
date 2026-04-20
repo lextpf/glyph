@@ -18,8 +18,8 @@
  * ## :material-palette-swatch-variant: Effect Categories
  *
  * - **Gradients**: Horizontal, Vertical, Diagonal, Radial
- * - **Animated**: Shimmer, ChromaticShimmer, Ember, RainbowWave, ConicRainbow, Aurora
- * - **Complex**: Sparkle, Plasma, Scanline, Enchant, Frost
+ * - **Animated**: Shimmer, Ember, Aurora, Breathe, Mote, Wander
+ * - **Complex**: Sparkle, Enchant, Frost, Drift
  * - **Utility**: Outline, Glow
  *
  * ## :material-sort-variant: Rendering Order
@@ -494,201 +494,6 @@ void AddTextShimmer(ImDrawList* list,
                     float strength01 = 1.0f);
 
 /**
- * Draw text with chromatic aberration shimmer.
- *
- * High-quality shimmer with RGB channel separation creating a "ghosting" effect.
- * Renders multiple offset layers with color tinting for a premium look.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseL Left base color.
- * @param baseR Right base color.
- * @param highlight Highlight color for shimmer band.
- * @param outline Outline color.
- * @param outlineW Outline width in pixels.
- * @param phase01 Animation phase [0, 1].
- * @param bandWidth01 Highlight band width [0, 1].
- * @param strength01 Effect strength [0, 1].
- * @param splitPx Chromatic separation distance in pixels.
- * @param ghostAlphaMul Alpha multiplier for ghost layers [0, 1].
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- *
- * @see AddTextShimmer
- */
-void AddTextOutline4ChromaticShimmer(ImDrawList* list,
-                                     ImFont* font,
-                                     float size,
-                                     const ImVec2& pos,
-                                     const char* text,
-                                     ImU32 baseL,
-                                     ImU32 baseR,
-                                     ImU32 highlight,
-                                     ImU32 outline,
-                                     float outlineW,
-                                     float phase01,
-                                     float bandWidth01,
-                                     float strength01,
-                                     float splitPx,
-                                     float ghostAlphaMul);
-
-/**
- * Draw text with animated rainbow wave (no outline).
- *
- * Colors cycle through the hue spectrum with a wave pattern.
- * Uses HSV color space for smooth transitions.
- *
- * Per-vertex hue is calculated as:
- * $$H = H_{base} + \frac{x - x_{min}}{x_{max} - x_{min}} \cdot H_{spread} + t \cdot speed$$
- *
- * HSV to RGB conversion follows standard formulas with $H \in [0,1]$
- * mapped to $[0, 360]$.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseHue Starting hue offset [0, 1] (0 = red, 0.33 = green, 0.66 = blue).
- * @param hueSpread Hue variation across text width [0, 1].
- * @param speed Animation speed multiplier (hue shift per second).
- * @param saturation Color saturation [0, 1] (0 = grayscale, 1 = vivid).
- * @param value Color brightness [0, 1] (0 = black, 1 = bright).
- * @param alpha Transparency [0, 1].
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- *
- * @see AddTextOutline4RainbowWave
- */
-void AddTextRainbowWave(ImDrawList* list,
-                        ImFont* font,
-                        float size,
-                        const ImVec2& pos,
-                        const char* text,
-                        float baseHue,
-                        float hueSpread,
-                        float speed,
-                        float saturation,
-                        float value,
-                        float alpha);
-
-/**
- * Draw text with rainbow wave effect and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseHue Starting hue [0, 1].
- * @param hueSpread Hue variation [0, 1].
- * @param speed Animation speed multiplier.
- * @param saturation Color saturation [0, 1].
- * @param value Color brightness [0, 1].
- * @param alpha Transparency [0, 1].
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param useWhiteBase If true, draws white base layer for brightness boost.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4RainbowWave(ImDrawList* list,
-                                ImFont* font,
-                                float size,
-                                const ImVec2& pos,
-                                const char* text,
-                                float baseHue,
-                                float hueSpread,
-                                float speed,
-                                float saturation,
-                                float value,
-                                float alpha,
-                                ImU32 outline,
-                                float w,
-                                bool fastOutlines,
-                                bool useWhiteBase = false);
-
-/**
- * Draw text with conic rainbow (circular hue rotation).
- *
- * Hue rotates around a center point, creating a circular rainbow pattern.
- * Per-vertex hue is computed from the angle to center:
- * $$H = \frac{\text{atan2}(y - c_y, x - c_x)}{2\pi} + H_{base} + t \cdot speed$$
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseHue Starting hue offset [0, 1].
- * @param speed Rotation speed (hue shift per second).
- * @param saturation Color saturation [0, 1].
- * @param value Color brightness [0, 1].
- * @param alpha Transparency [0, 1].
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- *
- * @see AddTextOutline4ConicRainbow
- */
-void AddTextConicRainbow(ImDrawList* list,
-                         ImFont* font,
-                         float size,
-                         const ImVec2& pos,
-                         const char* text,
-                         float baseHue,
-                         float speed,
-                         float saturation,
-                         float value,
-                         float alpha);
-
-/**
- * Draw text with conic rainbow and outline.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseHue Starting hue [0, 1].
- * @param speed Rotation speed.
- * @param saturation Color saturation [0, 1].
- * @param value Color brightness [0, 1].
- * @param alpha Transparency [0, 1].
- * @param outline Outline color.
- * @param w Outline width in pixels.
- * @param useWhiteBase If true, draws white base for brightness.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- */
-void AddTextOutline4ConicRainbow(ImDrawList* list,
-                                 ImFont* font,
-                                 float size,
-                                 const ImVec2& pos,
-                                 const char* text,
-                                 float baseHue,
-                                 float speed,
-                                 float saturation,
-                                 float value,
-                                 float alpha,
-                                 ImU32 outline,
-                                 float w,
-                                 bool fastOutlines,
-                                 bool useWhiteBase = false);
-
-/**
  * Draw text with animated aurora/northern lights effect.
  *
  * Creates flowing, wave-like color transitions reminiscent of aurora borealis.
@@ -762,77 +567,6 @@ void AddTextSparkle(ImDrawList* list,
                     float intensity);
 
 /**
- * Draw text with classic plasma effect.
- *
- * Creates demoscene-style plasma using overlapping sine waves.
- * Six wave components (primary, diagonal, and radial from offset centers)
- * combine for organic interference patterns. The summed value is normalized
- * to $[0,\,1]$ via quintic smoothstep and drives a three-color gradient
- * through `colA`, a 50/50 midpoint, and `colB`.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param colA First plasma color.
- * @param colB Second plasma color.
- * @param freq1 First sine wave frequency.
- * @param freq2 Second sine wave frequency.
- * @param speed Animation speed multiplier.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- *
- */
-void AddTextPlasma(ImDrawList* list,
-                   ImFont* font,
-                   float size,
-                   const ImVec2& pos,
-                   const char* text,
-                   ImU32 colA,
-                   ImU32 colB,
-                   float freq1,
-                   float freq2,
-                   float speed);
-
-/**
- * Draw text with horizontal scanline effect.
- *
- * Creates a sweeping horizontal highlight bar like a scanner
- * or cyberpunk/Dwemer-style effect.
- *
- * @param list ImGui draw list to render to.
- * @param font Font to use for rendering.
- * @param size Font size in pixels.
- * @param pos Top-left position for text.
- * @param text Null-terminated UTF-8 string to render.
- * @param baseL Left base gradient color.
- * @param baseR Right base gradient color.
- * @param scanColor Scanline highlight color.
- * @param speed Scan speed (cycles per second).
- * @param width Scanline width [0, 1] as fraction of text height.
- * @param intensity Scanline brightness multiplier.
- *
- * @pre list != nullptr
- * @pre font != nullptr
- * @pre text != nullptr
- *
- */
-void AddTextScanline(ImDrawList* list,
-                     ImFont* font,
-                     float size,
-                     const ImVec2& pos,
-                     const char* text,
-                     ImU32 baseL,
-                     ImU32 baseR,
-                     ImU32 scanColor,
-                     float speed,
-                     float width,
-                     float intensity);
-
-/**
  * Draw text with flowing magical energy effect.
  *
  * Uses Fractal Brownian Motion (FBM) noise to create smooth, organic
@@ -896,6 +630,137 @@ void AddTextFrost(ImDrawList* list,
                   float density,
                   float speed,
                   float sparkleIntensity);
+
+/**
+ * Draw text with a slow uniform brightness pulse (Breathe).
+ *
+ * Multiplies every vertex's RGB by a shared sinusoidal modulation so the text
+ * gently brightens and dims together. The effect is intentionally subtle:
+ * default amplitude of 0.06 yields a +/-6% swell, and default speed of 0.25 Hz
+ * completes one cycle every four seconds.
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position for text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param baseL Left base gradient color.
+ * @param baseR Right base gradient color.
+ * @param speed Pulse frequency in Hz.
+ * @param amplitude Brightness swing in [0, 1] (0.06 = +/-6%).
+ *
+ * @pre list != nullptr
+ * @pre font != nullptr
+ * @pre text != nullptr
+ */
+void AddTextBreathe(ImDrawList* list,
+                    ImFont* font,
+                    float size,
+                    const ImVec2& pos,
+                    const char* text,
+                    ImU32 baseL,
+                    ImU32 baseR,
+                    float speed,
+                    float amplitude);
+
+/**
+ * Draw text with a slow uniform hue wander (Drift).
+ *
+ * Converts each vertex's color to HSV, shifts the hue by a shared
+ * sinusoidal offset, and converts back. Saturation and value are preserved so
+ * the only motion is in color family -- text drifts through neighbouring hues
+ * and returns. Default speed 0.08 Hz completes one cycle over ~12 seconds.
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position for text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param baseL Left base gradient color.
+ * @param baseR Right base gradient color.
+ * @param speed Drift frequency in Hz.
+ * @param hueRangeDeg Peak hue deviation in degrees (default 8 = +/-4 degrees).
+ *
+ * @pre list != nullptr
+ * @pre font != nullptr
+ * @pre text != nullptr
+ */
+void AddTextDrift(ImDrawList* list,
+                  ImFont* font,
+                  float size,
+                  const ImVec2& pos,
+                  const char* text,
+                  ImU32 baseL,
+                  ImU32 baseR,
+                  float speed,
+                  float hueRangeDeg);
+
+/**
+ * Draw text with a single rare twinkling mote.
+ *
+ * Once per `period` seconds a deterministic position within the text bounds is
+ * chosen by hashing the period index; a soft bell-curve envelope fades the
+ * mote in and out within that period, and a Gaussian radial falloff keeps the
+ * bright spot roughly one glyph wide. Exactly one mote is visible at a time.
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position for text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param baseL Left base gradient color.
+ * @param baseR Right base gradient color.
+ * @param moteColor Color of the twinkle itself (usually highlight).
+ * @param period Seconds between twinkles.
+ * @param peakAlpha Peak intensity of the mote blend in [0, 1].
+ *
+ * @pre list != nullptr
+ * @pre font != nullptr
+ * @pre text != nullptr
+ */
+void AddTextMote(ImDrawList* list,
+                 ImFont* font,
+                 float size,
+                 const ImVec2& pos,
+                 const char* text,
+                 ImU32 baseL,
+                 ImU32 baseR,
+                 ImU32 moteColor,
+                 float period,
+                 float peakAlpha);
+
+/**
+ * Draw text with per-character asynchronous breathing (Wander).
+ *
+ * Like Breathe, but each glyph carries its own phase offset hashed from its
+ * character index. The result is a subtle "choir" effect where every glyph
+ * pulses gently at its own rhythm; no single point commands attention.
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position for text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param baseL Left base gradient color.
+ * @param baseR Right base gradient color.
+ * @param speed Pulse frequency in Hz.
+ * @param amplitude Brightness swing per glyph in [0, 1].
+ * @param spread Phase desync in [0, 1] (0 = all glyphs in phase, 1 = full random).
+ *
+ * @pre list != nullptr
+ * @pre font != nullptr
+ * @pre text != nullptr
+ */
+void AddTextWander(ImDrawList* list,
+                   ImFont* font,
+                   float size,
+                   const ImVec2& pos,
+                   const char* text,
+                   ImU32 baseL,
+                   ImU32 baseR,
+                   float speed,
+                   float amplitude,
+                   float spread);
 
 /// Draw a static top-edge shine overlay on top of already-rendered text.
 /// Simulates overhead lighting by brightening vertices near the top of
