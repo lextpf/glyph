@@ -121,6 +121,17 @@ float ExpApproachAlpha(float dt, float settleTime, float epsilon)
     return std::clamp(1.0f - std::pow(epsilon, dt / settleTime), .0f, 1.0f);
 }
 
+static void ResetTrailHistory(ActorCache& entry, const ImVec2* seedPos = nullptr)
+{
+    const ImVec2 initPos = seedPos ? *seedPos : ImVec2(.0f, .0f);
+    for (int i = 0; i < ActorCache::TRAIL_HISTORY_SIZE; ++i)
+    {
+        entry.trailHistory[i] = initPos;
+    }
+    entry.trailIndex = seedPos ? 1 : 0;
+    entry.trailFilled = false;
+}
+
 // ============================================================================
 // Distance and smoothing helpers (file-local)
 // ============================================================================
@@ -251,6 +262,7 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
         entry.occlusionSmooth = occlusionTarget;
         entry.typewriterTime = .0f;
         entry.typewriterComplete = false;
+        ResetTrailHistory(entry, &initPos);
     }
     else
     {
@@ -284,6 +296,7 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
         {
             entry.smooth.x += (smoothedPos.x - entry.smooth.x) * snap.visual.LargeMovementBlend;
             entry.smooth.y += (smoothedPos.y - entry.smooth.y) * snap.visual.LargeMovementBlend;
+            ResetTrailHistory(entry, &entry.smooth);
         }
         else
         {
@@ -353,6 +366,7 @@ static void DrawLabel(const ActorDrawData& d,
                 entry.entrancePhase = .0f;
                 entry.entranceDone = false;
             }
+            ResetTrailHistory(entry);
         }
     }
 
@@ -466,8 +480,14 @@ static void DrawLabel(const ActorDrawData& d,
     if (snap.visual.EnableMotionTrail && style.tierIdx >= snap.visual.TrailMinTier &&
         entry.entranceDone)
     {
-        ImVec2 curPos = layout.startPos;
-        entry.trailHistory[entry.trailIndex] = curPos;
+        // Track a stable base anchor in history. Layout-only offsets such as
+        // overlap prevention are applied at draw time so the ghost trail does
+        // not inherit per-frame resolver wobble.
+        const ImVec2 trailBasePos = entry.smooth;
+        const ImVec2 trailTransientOffset(layout.startPos.x - trailBasePos.x,
+                                          layout.startPos.y - trailBasePos.y);
+
+        entry.trailHistory[entry.trailIndex] = trailBasePos;
         entry.trailIndex = (entry.trailIndex + 1) % ActorCache::TRAIL_HISTORY_SIZE;
         if (entry.trailIndex == 0)
         {
@@ -499,7 +519,8 @@ static void DrawLabel(const ActorDrawData& d,
                 {
                     int idx = (entry.trailIndex - 1 - i + ActorCache::TRAIL_HISTORY_SIZE) %
                               ActorCache::TRAIL_HISTORY_SIZE;
-                    ImVec2 ghostPos = entry.trailHistory[idx];
+                    ImVec2 ghostPos(entry.trailHistory[idx].x + trailTransientOffset.x,
+                                    entry.trailHistory[idx].y + trailTransientOffset.y);
 
                     float t = (float)i / (float)trailLen;
                     float ghostAlpha =
@@ -544,6 +565,7 @@ static void DrawLabel(const ActorDrawData& d,
         }
     }
 
+    DrawBackgroundGlow(drawList, style, layout, df.lodTitleFactor, splitter, snap);
     DrawParticles(drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap);
     DrawOrnaments(
         drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap.fastOutlines, snap);
@@ -1052,7 +1074,7 @@ void Draw()
         ResolveOverlaps(localSnap, snap);
     }
 
-    // 3-channel splitter: [0]=glow (GPU blur), [1]=particles, [2]=text+shadow+outline
+    // 3-channel splitter: [0]=glow capture/backplate, [1]=particles, [2]=text+shadow+outline
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const bool gpuDivide = snap.glowDivideStrength > .0f && TextPostProcess::IsInitialized();
     ImDrawListSplitter splitter;

@@ -102,13 +102,13 @@ cbuffer CompositeCB : register(b0) {
 };
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
     float4 c = InputTex.Sample(Sampler, uv);
-    // Scale bloom RGB by intensity.  Alpha is NOT scaled here because the
-    // blend state uses SRC_ALPHA.
-    float3 bloom = saturate(c.rgb * (Intensity * 0.82));
-    // Shape alpha with an intensity-scaled exponent: at low intensity the
-    // glow fades softly, at high intensity it keeps a punchy bright core.
-    float exponent = lerp(1.35, 2.35, Intensity);
-    float glowAlpha = saturate(pow(c.a, exponent) * 0.88);
+    // Preserve the captured hue: intensity scales the colored fog, but does
+    // not add a white-ish haze term on top.
+    float3 bloom = saturate(c.rgb * (0.46 + Intensity * 0.34));
+    float veilAlpha = saturate(pow(c.a, 0.72) * (0.14 + Intensity * 0.16));
+    float coreExponent = lerp(1.18, 1.78, Intensity);
+    float coreAlpha = saturate(pow(c.a, coreExponent) * (0.34 + Intensity * 0.18));
+    float glowAlpha = saturate(veilAlpha + coreAlpha * 0.55);
     return float4(bloom, glowAlpha);
 }
 )";
@@ -648,9 +648,9 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     // RT A now contains the glow text rendered at half-res.
     // Apply separable Gaussian blur: A -> B (horizontal), B -> A (vertical).
 
-    // Use a tighter radius-to-sigma mapping so high GlowRadius values stay
-    // controlled instead of producing an overly diffuse blur.
-    const float sigma = (std::max)(0.75f, s_GlowRadius * .30f);
+    // Bias slightly wider so the background glow diffuses into a soft veil
+    // instead of resolving as a hard plate behind the text.
+    const float sigma = (std::max)(0.90f, s_GlowRadius * .36f);
 
     // Unbind RT A as target, we'll read from it
     ID3D11RenderTargetView* nullRTV = nullptr;
