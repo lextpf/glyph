@@ -118,8 +118,13 @@ bool CopyHeadParts(RE::TESNPC* templateNPC, RE::TESNPC* playerBase)
             "memory (safety over potential invalid free)");
     }
 
-    // For the primary visible face-part categories, also go through the engine
-    // swap path so the live NPC state tracks the newly copied parts.
+    // For the attachment-style categories, also go through the engine swap
+    // path so the live NPC state tracks the copied parts immediately.
+    //
+    // Do not live-swap the face part here. The face mesh is rebuilt later via
+    // RegenerateHead()/DoReset3D() and may also be driven by faceNPC when
+    // FaceGen is active. Swapping the face part eagerly can leave custom heads
+    // such as High Poly Head in a mixed state.
     for (uint8_t i = 0; i < templateNPC->numHeadParts; ++i)
     {
         auto* part = templateNPC->headParts[i];
@@ -130,7 +135,6 @@ bool CopyHeadParts(RE::TESNPC* templateNPC, RE::TESNPC* playerBase)
 
         switch (part->type.get())
         {
-            case RE::BGSHeadPart::HeadPartType::kFace:
             case RE::BGSHeadPart::HeadPartType::kEyes:
             case RE::BGSHeadPart::HeadPartType::kHair:
             case RE::BGSHeadPart::HeadPartType::kFacialHair:
@@ -535,12 +539,12 @@ bool CopyAppearanceToPlayer(RE::TESNPC* templateNPC, bool includeRace, bool incl
     playerBase->weight = templateNPC->weight;
     logger::info("AppearanceTemplate: Copied weight: {}", templateNPC->weight);
 
-    // Face morphs control the facial structure
-    if (templateNPC->faceNPC)
-    {
-        playerBase->faceNPC = templateNPC->faceNPC;
-        logger::info("AppearanceTemplate: Copied face NPC reference");
-    }
+    // Record-only appearance copies should build from the player's copied head
+    // parts/morphs unless ApplyFaceGen() later installs a known-good source.
+    // Keeping a borrowed faceNPC here can make the engine load mismatched baked
+    // face data and produce corrupted meshes.
+    playerBase->faceNPC = nullptr;
+    logger::debug("AppearanceTemplate: Cleared faceNPC before copying face morph data");
 
     // Copy face data if present
     if (templateNPC->faceData && playerBase->faceData)

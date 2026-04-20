@@ -6,6 +6,16 @@
 
 namespace AppearanceTemplate
 {
+namespace
+{
+enum class ApplyResult
+{
+    Applied,
+    RetryableFailure,
+    PermanentFailure
+};
+}
+
 TemplateState& GetState()
 {
     static TemplateState state;
@@ -208,19 +218,19 @@ static void ApplyOutfitFromTemplate(RE::TESNPC* templateNPC, bool copyOutfit)
     }
 }
 
-bool ApplyIfConfigured()
+static ApplyResult ApplyIfConfiguredInternal()
 {
     if (IsAppliedState())
     {
         logger::debug("AppearanceTemplate: Already applied this session");
-        return true;
+        return ApplyResult::Applied;
     }
 
     bool expected = false;
     if (!s_applyInProgress.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
     {
         logger::debug("AppearanceTemplate: Apply already in progress");
-        return false;
+        return ApplyResult::RetryableFailure;
     }
     struct ApplyScope
     {
@@ -243,12 +253,12 @@ bool ApplyIfConfigured()
     if (!cfg.useTemplateAppearance)
     {
         logger::debug("AppearanceTemplate: Feature disabled in settings");
-        return false;
+        return ApplyResult::PermanentFailure;
     }
     if (cfg.templateFormID.empty() || cfg.templatePlugin.empty())
     {
         logger::warn("AppearanceTemplate: Enabled but no template configured");
-        return false;
+        return ApplyResult::PermanentFailure;
     }
 
     logger::info(
@@ -257,7 +267,7 @@ bool ApplyIfConfigured()
     RE::TESNPC* templateNPC = ResolveTemplateNPC(cfg);
     if (!templateNPC)
     {
-        return false;
+        return ApplyResult::PermanentFailure;
     }
 
     auto player = RE::PlayerCharacter::GetSingleton();
@@ -265,16 +275,18 @@ bool ApplyIfConfigured()
     if (!playerBase)
     {
         logger::error("AppearanceTemplate: Player base not available");
-        return false;
+        return ApplyResult::RetryableFailure;
     }
 
-    if (templateNPC->IsFemale() != playerBase->IsFemale())
+    const bool sexMismatch = templateNPC->IsFemale() != playerBase->IsFemale();
+    if (sexMismatch && !cfg.templateIncludeRace)
     {
         logger::info(
-            "AppearanceTemplate: Skipping template - sex mismatch (player: {}, template: {})",
+            "AppearanceTemplate: Deferring template - sex mismatch with TemplateIncludeRace=false "
+            "(player: {}, template: {})",
             playerBase->IsFemale() ? "Female" : "Male",
             templateNPC->IsFemale() ? "Female" : "Male");
-        return false;
+        return ApplyResult::RetryableFailure;
     }
 
     bool racesCompatible = IsRaceCompatible(templateNPC);
@@ -282,14 +294,15 @@ bool ApplyIfConfigured()
     {
         logger::warn("AppearanceTemplate: Race mismatch detected!");
         logger::warn(
-            "AppearanceTemplate: FaceGen may not work correctly without TemplateIncludeRace = "
-            "true");
+            "AppearanceTemplate: Deferring template until player race stabilizes or "
+            "TemplateIncludeRace is enabled");
+        return ApplyResult::RetryableFailure;
     }
 
     if (!CopyAppearanceToPlayer(templateNPC, cfg.templateIncludeRace, cfg.templateIncludeBody))
     {
         logger::error("AppearanceTemplate: Failed to copy appearance");
-        return false;
+        return ApplyResult::PermanentFailure;
     }
 
     if (cfg.templateCopyFaceGen)
@@ -320,18 +333,25 @@ bool ApplyIfConfigured()
     SetAppliedState(true);
     logger::info("AppearanceTemplate: Successfully applied template appearance");
 
-    return true;
+    return ApplyResult::Applied;
+}
+
+bool ApplyIfConfigured()
+{
+    return ApplyIfConfiguredInternal() == ApplyResult::Applied;
 }
 
 static std::atomic<bool> s_pendingAppearanceApply{false};
 static std::atomic<int> s_checkCount{0};
 static std::atomic<int> s_readyStreak{0};
+static std::atomic<int> s_applyAttempts{0};
 
 void SetPendingAppearanceApply()
 {
     s_pendingAppearanceApply.store(true);
     s_checkCount.store(0);
     s_readyStreak.store(0);
+    s_applyAttempts.store(0);
 }
 
 void CheckPendingAppearanceTemplate()
@@ -420,11 +440,65 @@ void CheckPendingAppearanceTemplate()
         s_readyStreak.store(0);
         if (auto* task = SKSE::GetTaskInterface())
         {
-            task->AddTask([]() { ApplyIfConfigured(); });
+            task->AddTask(
+                []()
+                {
+                    constexpr int MAX_RETRYABLE_ATTEMPTS = 6;
+                    ApplyResult result = ApplyIfConfiguredInternal();
+                    if (result == ApplyResult::RetryableFailure)
+                    {
+                        int attempts = s_applyAttempts.fetch_add(1) + 1;
+                        if (attempts < MAX_RETRYABLE_ATTEMPTS)
+                        {
+                            logger::info(
+                                "AppearanceTemplate: Transient apply failure, retrying ({}/{})",
+                                attempts,
+                                MAX_RETRYABLE_ATTEMPTS);
+                            s_pendingAppearanceApply.store(true);
+                            s_checkCount.store(0);
+                            s_readyStreak.store(0);
+                        }
+                        else
+                        {
+                            logger::warn(
+                                "AppearanceTemplate: Giving up after {} transient apply retries",
+                                attempts);
+                            s_applyAttempts.store(0);
+                        }
+                    }
+                    else
+                    {
+                        s_applyAttempts.store(0);
+                    }
+                });
         }
         else
         {
-            ApplyIfConfigured();
+            constexpr int MAX_RETRYABLE_ATTEMPTS = 6;
+            ApplyResult result = ApplyIfConfiguredInternal();
+            if (result == ApplyResult::RetryableFailure)
+            {
+                int attempts = s_applyAttempts.fetch_add(1) + 1;
+                if (attempts < MAX_RETRYABLE_ATTEMPTS)
+                {
+                    logger::info("AppearanceTemplate: Transient apply failure, retrying ({}/{})",
+                                 attempts,
+                                 MAX_RETRYABLE_ATTEMPTS);
+                    s_pendingAppearanceApply.store(true);
+                    s_checkCount.store(0);
+                    s_readyStreak.store(0);
+                }
+                else
+                {
+                    logger::warn("AppearanceTemplate: Giving up after {} transient apply retries",
+                                 attempts);
+                    s_applyAttempts.store(0);
+                }
+            }
+            else
+            {
+                s_applyAttempts.store(0);
+            }
         }
     }
 }
