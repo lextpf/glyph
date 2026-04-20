@@ -4,3 +4,10 @@ build/
 # Generated documentation
 docs/
 site/
+
+# Python
+__pycache__/
+*.pyc
+
+# Application assets
+assets/
