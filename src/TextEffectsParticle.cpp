@@ -73,12 +73,12 @@ static void DrawSoftOrb(
     ImDrawList* list, const ImVec2& pos, float size, int r, int g, int b, int baseAlpha)
 {
     // Multiple layers for smooth gradient falloff
-    const int layers = 5;
+    const int layers = 6;
     for (int i = layers - 1; i >= 0; --i)
     {
         float t = (float)i / (float)(layers - 1);
-        float radius = size * (.4f + .6f * t);
-        int layerAlpha = (int)(baseAlpha * (1.0f - t * .7f) * (1.0f - t * .3f));
+        float radius = size * (.38f + .82f * t);
+        int layerAlpha = (int)(baseAlpha * (1.0f - t * .62f) * (1.0f - t * .22f));
         layerAlpha = std::clamp(layerAlpha, 0, 255);
         list->AddCircleFilled(pos, radius, IM_COL32(r, g, b, layerAlpha), 16);
     }
@@ -109,16 +109,17 @@ static void DrawWisp(ImDrawList* list,
         float t = (float)i / (float)trailSegments;
         float segX = pos.x + dx * size * trailLength * t;
         float segY = pos.y + dy * size * trailLength * t;
-        float segSize = size * (1.0f - t * .6f);
-        int segAlpha = (int)(baseAlpha * (1.0f - t * .8f));
+        float segSize = size * (.94f - t * .48f);
+        int segAlpha = (int)(baseAlpha * (.58f - t * .34f));
         segAlpha = std::clamp(segAlpha, 0, 255);
         list->AddCircleFilled(ImVec2(segX, segY), segSize, IM_COL32(r, g, b, segAlpha), 12);
     }
 
     // Main wisp body with glow
-    list->AddCircleFilled(pos, size * 1.6f, IM_COL32(r, g, b, baseAlpha / 4), 14);
-    list->AddCircleFilled(pos, size, IM_COL32(r, g, b, baseAlpha), 12);
-    list->AddCircleFilled(pos, size * .4f, IM_COL32(255, 255, 255, baseAlpha / 2), 8);
+    list->AddCircleFilled(pos, size * 1.8f, IM_COL32(r, g, b, baseAlpha / 10), 16);
+    list->AddCircleFilled(pos, size * 1.22f, IM_COL32(r, g, b, baseAlpha / 6), 14);
+    list->AddCircleFilled(pos, size * .88f, IM_COL32(r, g, b, (int)(baseAlpha * .72f)), 12);
+    list->AddCircleFilled(pos, size * .28f, IM_COL32(255, 255, 255, baseAlpha / 4), 8);
 }
 
 // Draw magical rune symbol with glow
@@ -448,28 +449,32 @@ static void RenderWispParticle(const ParticleContext& ctx)
     float y = ctx.center.y + std::sin(orbit * .7f) * ctx.radiusY * radiusMod +
               std::sin(ctx.jitterAngle) * ctx.radiusY * ctx.jitterDist;
 
-    float pulse = .6f + .4f * std::sin(wispTime * 2.0f + ctx.golden * 2.0f);
-    float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation;
+    float pulse = .52f + .28f * std::sin(wispTime * 2.0f + ctx.golden * 2.0f);
+    float finalAlpha = ctx.alpha * pulse * ctx.alphaVariation * .82f;
+    if (finalAlpha < .03f)
+    {
+        return;
+    }
     float finalSize =
-        ctx.particleSize * (1.0f + .08f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
+        ctx.particleSize * (.88f + .06f * std::sin(ctx.timeScaled * 1.2f + ctx.golden * 2.0f));
     int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
 
-    int wr = std::min(255, ctx.r + 40);
-    int wg = std::min(255, ctx.g + 50);
-    int wb = std::min(255, ctx.b + 60);
+    int wr = std::min(255, ctx.r + 24);
+    int wg = std::min(255, ctx.g + 30);
+    int wb = std::min(255, ctx.b + 36);
 
     float moveAngle = orbit + wave1 * 2.0f;
-    float trailLength = 1.5f + .5f * std::sin(ctx.golden);
+    float trailLength = 1.12f + .32f * std::sin(ctx.golden);
 
     if (ctx.hasTextures)
     {
         float echoDist = finalSize * 5.0f;
         float ex = x - std::cos(moveAngle) * echoDist;
         float ey = y - std::sin(moveAngle) * echoDist;
-        int echoA = std::clamp(static_cast<int>(a * .3f), 0, 255);
+        int echoA = std::clamp(static_cast<int>(a * .24f), 0, 255);
         ParticleTextures::DrawSpriteWithIndex(ctx.list,
                                               ImVec2(ex, ey),
-                                              finalSize * 5.0f,
+                                              finalSize * 4.8f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
                                               IM_COL32(ctx.r, ctx.g, ctx.b, echoA),
@@ -477,7 +482,7 @@ static void RenderWispParticle(const ParticleContext& ctx)
                                               moveAngle);
         ParticleTextures::DrawSpriteWithIndex(ctx.list,
                                               ImVec2(x, y),
-                                              finalSize * 6.0f,
+                                              finalSize * 5.8f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
                                               IM_COL32(ctx.r, ctx.g, ctx.b, a),
@@ -556,7 +561,7 @@ static void RenderOrbParticle(const ParticleContext& ctx)
     {
         ParticleTextures::DrawSpriteWithIndex(ctx.list,
                                               ImVec2(x, y),
-                                              finalSize * 6.0f,
+                                              finalSize * 7.0f,
                                               ctx.texStyleId,
                                               ctx.particleIndex,
                                               IM_COL32(ctx.r, ctx.g, ctx.b, a),
@@ -648,7 +653,7 @@ void DrawParticleAura(const ParticleAuraParams& params)
     float alpha = params.alpha;
     if (params.enabledStyleCount > 1)
     {
-        alpha /= (1.0f + .15f * (params.enabledStyleCount - 1));
+        alpha /= (1.0f + .10f * (params.enabledStyleCount - 1));
     }
 
     int baseR = (params.color >> IM_COL32_R_SHIFT) & 0xFF;

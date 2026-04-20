@@ -539,18 +539,18 @@ static float SparkFlash(float nx, float ny)
     return std::clamp(core + glow + (std::max)(sH, sV) + ring, .0f, 1.0f);
 }
 
-// Elongated shard with directional bias and accent
+// Compact spark glint with faceted edges instead of a needle-like shard
 static float SparkShard(float nx, float ny)
 {
-    float ex = nx * 1.5f;
-    float r = std::sqrt(ex * ex + ny * ny);
-    float core = std::pow(PGaussian(r, .12f), .5f);
-    float glow = PGaussian(r, .35f) * .25f;
-    // Vertical spike (main direction)
-    float spike = PGaussian(nx, .04f) * PGaussian(ny, .5f) * .5f;
-    // Slight horizontal accent
-    float accent = PGaussian(ny, .04f) * PGaussian(nx, .25f) * .15f;
-    return std::clamp(core + glow + spike + accent, .0f, 1.0f);
+    float r = std::sqrt(nx * nx + ny * ny);
+    float diamond = std::abs(nx) / .48f + std::abs(ny) / .56f;
+    float body = PSmoothstep(1.0f, .72f, diamond) * .38f;
+    float edge = PGaussian(std::abs(diamond - .86f), .06f) * .42f;
+    float facetA = PLineAlpha(PLineDist(nx, ny, -.30f, -.18f, .26f, .24f), .015f, .012f) * .20f;
+    float facetB = PLineAlpha(PLineDist(nx, ny, -.24f, .24f, .30f, -.12f), .015f, .012f) * .18f;
+    float core = std::pow(PGaussian(r, .10f), .5f) * .55f;
+    float glow = PGaussian(r, .34f) * .16f;
+    return std::clamp(body + edge + facetA + facetB + core + glow, .0f, 1.0f);
 }
 
 // Teardrop comet with bright head and fading tail
@@ -1059,22 +1059,29 @@ static float CrystalHex(float nx, float ny)
     return std::clamp(hexOutline + facets * .3f + core + glow, .0f, 1.0f);
 }
 
-// Elongated angular crystal shard (pointed top/bottom)
+// Emerald-cut crystal with short facets instead of a thin rod silhouette
 static float CrystalShard(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Elongated diamond shape: pointed top and bottom, angled sides
-    float s = .6f;
-    float shardW = .3f;
-    // Diamond with different aspect ratio for elongation
-    float shardDist = std::abs(nx) / shardW + std::abs(ny) / s;
-    float shape = PSmoothstep(1.1f, .85f, shardDist);
-    // Edge highlight
-    float edge = PGaussian(std::abs(shardDist - 1.0f), .06f) * .4f;
-    // Internal facet line (vertical)
-    float facet = PLineAlpha(std::abs(nx), .01f, .008f) * PSmoothstep(s, .0f, std::abs(ny)) * .25f;
-    float core = PGaussian(r, .1f) * .5f;
-    return std::clamp(shape * .4f + edge + facet + core + PGaussian(r, .4f) * .08f, .0f, 1.0f);
+    float sx = nx + ny * .08f;
+    float sy = ny * .92f;
+    float gemDist = std::abs(sx) / .48f + std::abs(sy) / .58f;
+    float body = PSmoothstep(1.06f, .80f, gemDist) * .40f;
+    float edge = PGaussian(std::abs(gemDist - .94f), .055f) * .52f;
+
+    float topLeft = PLineAlpha(PLineDist(sx, sy, -.28f, -.10f, .0f, -.46f), .014f, .012f) * .18f;
+    float topRight = PLineAlpha(PLineDist(sx, sy, .28f, -.10f, .0f, -.46f), .014f, .012f) * .18f;
+    float botLeft = PLineAlpha(PLineDist(sx, sy, -.24f, .18f, .0f, .42f), .014f, .012f) * .16f;
+    float botRight = PLineAlpha(PLineDist(sx, sy, .24f, .18f, .0f, .42f), .014f, .012f) * .16f;
+    float centerFacet =
+        PLineAlpha(PLineDist(sx, sy, -.18f, -.02f, .18f, -.02f), .012f, .010f) * .14f;
+
+    float core = PGaussian(r, .10f) * .45f;
+    float glow = PGaussian(r, .40f) * .08f;
+    return std::clamp(
+        body + edge + topLeft + topRight + botLeft + botRight + centerFacet + core + glow,
+        .0f,
+        1.0f);
 }
 
 // Triangular prism cross-section with radial lines to center
