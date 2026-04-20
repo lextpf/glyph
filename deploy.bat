@@ -84,12 +84,13 @@ echo ---------------------------------------------------------------------------
 
 :: Clean previous staging
 if exist "build\staging" rmdir /S /Q "build\staging"
-mkdir "build\staging\SKSE\Plugins\glyph"
+mkdir "build\staging\SKSE\Plugins"
 
-:: Stage files
+:: Stage files (flat under SKSE\Plugins: dll, ini, manifest, and the assets tree)
 copy /Y "build\Release\glyph.dll" "build\staging\SKSE\Plugins\glyph.dll" >nul
-copy /Y "skse\plugins\glyph.ini" "build\staging\SKSE\Plugins\glyph.ini" >nul
-xcopy /E /I /Y "skse\plugins\glyph" "build\staging\SKSE\Plugins\glyph" >nul
+copy /Y "glyph.ini" "build\staging\SKSE\Plugins\glyph.ini" >nul
+copy /Y "glyph.project.json" "build\staging\SKSE\Plugins\glyph.project.json" >nul
+xcopy /E /I /Y "assets" "build\staging\SKSE\Plugins\glyph" >nul
 
 :: Create zip (remove old one first)
 if exist "build\glyph-dev.zip" del /Q "build\glyph-dev.zip"
@@ -173,11 +174,11 @@ echo.
 echo Installed Files:
 echo   - SKSE\Plugins\glyph.dll
 echo   - SKSE\Plugins\glyph.ini
-echo   - SKSE\Plugins\glyph\  (assets)
+echo   - SKSE\Plugins\glyph.project.json
+echo   - SKSE\Plugins\glyph\  (badges, duotone, fonts, particles)
 echo.
 echo  *** Launch Skyrim through MO2 to test the plugin ***
 echo.
 echo ============================================================================
 
 endlocal
-pause
