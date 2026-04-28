@@ -2,7 +2,7 @@
 # https://doxide.org
 
 title: glyph
-description: SKSE overlay for actor info and appearance templates
+description: SKSE overlay for immersive actor nameplates
 
 output: docs
 
@@ -15,9 +15,6 @@ groups:
     title: ":material-cube: Core Systems"
     description: Plugin entry points and initialization.
     groups:
-      - name: AppearanceTemplate
-        title: AppearanceTemplate
-        description: NPC appearance template system for copying appearance to player.
       - name: ConsoleCommands
         title: ConsoleCommands
         description: Console command registration and handlers.
