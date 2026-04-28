@@ -183,12 +183,6 @@ TransitionSettings& Transition()
     return s;
 }
 
-AppearanceSettings& Appearance()
-{
-    static AppearanceSettings s;
-    return s;
-}
-
 VisualSettings& Visual()
 {
     static VisualSettings vs;
@@ -368,6 +362,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
 
     // Display Options
     {"VerticalOffset",         "", &Display().VerticalOffset,         8.0f,     NoClamping{}},
+    {"HorizontalOffset",       "", &Display().HorizontalOffset,      -10.0f,    ClampFloat{-200.0f, 200.0f}},
     {"HidePlayer",             "", &Display().HidePlayer,             false,    NoClamping{}},
     {"HideCreatures",          "", &Display().HideCreatures,          false,    NoClamping{}},
     {"ReloadKey",              "", &Display().ReloadKey,              0,        NoClamping{}},
@@ -425,19 +420,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"TitleFontSize",          "", &Font().TitleFontSize,          42.0f,    NoClamping{}},
     {"OrnamentFontPath",       "", &Ornament().FontPath,           std::string(kDefaultOrnamentFontPath), NoClamping{}},
     {"OrnamentFontSize",       "", &Ornament().FontSize,           64.0f,    NoClamping{}},
-
-    // Appearance Template
-    {"TemplateFormID",         "", &Appearance().TemplateFormID,        std::string(),  NoClamping{}},
-    {"TemplatePlugin",         "", &Appearance().TemplatePlugin,        std::string(),  NoClamping{}},
-    {"UseTemplateAppearance",  "", &Appearance().UseTemplateAppearance, false,    NoClamping{}},
-    {"TemplateIncludeRace",    "", &Appearance().TemplateIncludeRace,   false,    NoClamping{}},
-    {"TemplateIncludeBody",    "", &Appearance().TemplateIncludeBody,   false,    NoClamping{}},
-    {"TemplateCopyFaceGen",    "", &Appearance().TemplateCopyFaceGen,   true,     NoClamping{}},
-    {"TemplateCopySkin",       "", &Appearance().TemplateCopySkin,      false,    NoClamping{}},
-    {"TemplateCopyOverlays",   "", &Appearance().TemplateCopyOverlays,  false,    NoClamping{}},
-    {"TemplateCopyOutfit",     "", &Appearance().TemplateCopyOutfit,    false,    NoClamping{}},
-    {"TemplateReapplyOnReload","", &Appearance().TemplateReapplyOnReload, false,  NoClamping{}},
-    {"TemplateFaceGenPlugin",  "", &Appearance().TemplateFaceGenPlugin, std::string(),  NoClamping{}},
 
     // Contextual Label Tokens -- %r relationship, %d level delta, %c creature kind.
     // Empty defaults render as nothing; pair with a trailing "?" in Format/InfoFormat
@@ -519,6 +501,31 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"TierBadgeFolder",        "", &Icons().TierBadgeFolder,   std::string("Data/SKSE/Plugins/glyph/badges"), NoClamping{}},
     {"TierBadgeGamma",         "", &Icons().TierBadgeGamma,    1.8f,                             ClampFloat{.5f, 4.0f}},
     {"TierBadgeScale",         "", &Icons().TierBadgeScale,    1.7f,                             ClampFloat{1.0f, 4.0f}},
+
+    {"PlayerStripBedEnabled",   "", &Icons().PlayerStripBedEnabled,   true,             NoClamping{}},
+    {"PlayerStripBedAlpha",     "", &Icons().PlayerStripBedAlpha,     0.10f,            ClampFloat{0.0f, 0.2f}},
+    {"PlayerStripBedSize",      "", &Icons().PlayerStripBedSize,      2.6f,             ClampFloat{1.8f, 4.0f}},
+    {"PlayerStripBedBreatheHz", "", &Icons().PlayerStripBedBreatheHz, 0.14f,            ClampFloat{0.0f, 2.0f}},
+    {"PlayerStripBedColor",     "", &Icons().PlayerStripBedColorStr,  std::string(""),  NoClamping{}},
+    {"EmblemBacklightEnabled",  "", &Icons().EmblemBacklightEnabled,  true,             NoClamping{}},
+    {"EmblemBacklightSize",     "", &Icons().EmblemBacklightSize,     2.6f,             ClampFloat{1.8f, 4.0f}},
+    {"EmblemBacklightAlpha",    "", &Icons().EmblemBacklightAlpha,    0.55f,            ClampFloat{0.0f, 1.0f}},
+    {"EmblemBacklightBreatheHz","", &Icons().EmblemBacklightBreatheHz,0.167f,           ClampFloat{0.0f, 2.0f}},
+    {"EmblemCrispAlpha",        "", &Icons().EmblemCrispAlpha,        0.92f,            ClampFloat{0.5f, 1.0f}},
+    {"EmblemBacklightColor",    "", &Icons().EmblemBacklightColorStr, std::string(""),  NoClamping{}},
+
+    {"PlayerRimLightEnabled",   "", &Icons().PlayerRimLightEnabled,  true,             NoClamping{}},
+    {"PlayerRimAlpha",          "", &Icons().PlayerRimAlpha,         0.22f,            ClampFloat{0.0f, 0.6f}},
+    {"PlayerCarveAlpha",        "", &Icons().PlayerCarveAlpha,       0.26f,            ClampFloat{0.0f, 0.6f}},
+    {"PlayerRimOffset",         "", &Icons().PlayerRimOffset,        1.0f,             ClampFloat{0.0f, 3.0f}},
+    {"PlayerRimColor",          "", &Icons().PlayerRimColorStr,      std::string(""),  NoClamping{}},
+    {"EmblemKeyFillEnabled",    "", &Icons().EmblemKeyFillEnabled,   true,             NoClamping{}},
+    {"EmblemKeyAlpha",          "", &Icons().EmblemKeyAlpha,         0.35f,            ClampFloat{0.0f, 1.0f}},
+    {"EmblemFillAlpha",         "", &Icons().EmblemFillAlpha,        0.15f,            ClampFloat{0.0f, 1.0f}},
+    {"EmblemKeyRise",           "", &Icons().EmblemKeyRise,          0.18f,            ClampFloat{0.0f, 0.6f}},
+    {"EmblemFillDrop",          "", &Icons().EmblemFillDrop,         0.15f,            ClampFloat{0.0f, 0.6f}},
+    {"EmblemKeyColor",          "", &Icons().EmblemKeyColorStr,      std::string(""),  NoClamping{}},
+    {"EmblemFillColor",         "", &Icons().EmblemFillColorStr,     std::string(""),  NoClamping{}},
 
     // Expanded slots -- lit (active) colors.
     {"IconGuardColor",         "", &Icons().GuardColorStr,         std::string("0.60, 0.68, 0.84"),  NoClamping{}},
@@ -892,6 +899,28 @@ static void ClampAndValidate()
     deriveColor(ic.NormalWeightColorStr, ic.NormalWeightColor);
     deriveColor(ic.BountyClearColorStr, ic.BountyClearColor);
     deriveColor(ic.MutedColorStr, ic.MutedColor);
+
+    // Player "Seat of Light" accents: empty INI string => leave the optional
+    // EMPTY so the render thread derives from the tier Name color at draw time
+    // (INI-values-win, lazy). Non-empty => parse + clamp and honor it. This is
+    // deliberately NOT the deriveColor path above (which resolves empty->White).
+    const auto deriveOptionalColor = [](const std::string& str, std::optional<Color3>& out)
+    {
+        if (Trim(str).empty())
+        {
+            out.reset();
+            return;
+        }
+        Color3 c = Color3::White();
+        ParseColor3(str, c);
+        c.clamp01();
+        out = c;
+    };
+    deriveOptionalColor(ic.PlayerStripBedColorStr, ic.PlayerStripBedColor);
+    deriveOptionalColor(ic.EmblemBacklightColorStr, ic.EmblemBacklightColor);
+    deriveOptionalColor(ic.PlayerRimColorStr, ic.PlayerRimColor);
+    deriveOptionalColor(ic.EmblemKeyColorStr, ic.EmblemKeyColor);
+    deriveOptionalColor(ic.EmblemFillColorStr, ic.EmblemFillColor);
 
     // Derive NPC text colors from their INI string forms.
     auto& nc = NpcColors();
@@ -1694,8 +1723,6 @@ void Load()
                 static const std::unordered_set<std::string> kKnownSections = {"",
                                                                                "general",
                                                                                "display",
-                                                                               "appearance",
-                                                                               "appearancetemplate",
                                                                                "debug",
                                                                                "visual",
                                                                                "fonts",
