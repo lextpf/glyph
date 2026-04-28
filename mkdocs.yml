@@ -4,7 +4,7 @@ use_directory_urls: false
 validation:
   links:
     not_found: info
-site_description: SKSE overlay for actor info and appearance templates
+site_description: SKSE overlay for immersive actor nameplates
 site_author: lextpf
 
 theme:
@@ -71,11 +71,6 @@ nav:
   - API Reference:
     - Core:
       - Core/index.md
-      - AppearanceTemplate:
-        - AppearanceTemplate/index.md
-        - ApplyConfig: AppearanceTemplate/ApplyConfig.md
-        - TemplateState: AppearanceTemplate/TemplateState.md
-        - OutfitCopy: OutfitCopy/index.md
       - ConsoleCommands: ConsoleCommands/index.md
 
     - Rendering:
@@ -120,7 +115,6 @@ nav:
       - Settings:
         - Settings/index.md
         - AnimColorSettings: Settings/AnimColorSettings.md
-        - AppearanceSettings: Settings/AppearanceSettings.md
         - Color3: Settings/Color3.md
         - DisplaySettings: Settings/DisplaySettings.md
         - DistanceSettings: Settings/DistanceSettings.md
