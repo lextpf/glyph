@@ -15,6 +15,7 @@
 #include <cctype>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -148,6 +149,7 @@ struct RenderSettingsSnapshot
     bool enableDebugOverlay = false;
     bool enableOcclusionCulling = false;
     float verticalOffset = .0f;
+    float horizontalOffset = .0f;
     bool hidePlayer = false;
     int reloadKey = 0;
 
@@ -303,6 +305,32 @@ struct RenderSettingsSnapshot
         // Muted styling: alpha multiplier and desaturation strength [0,1].
         float mutedAlpha = 0.45f;
         float mutedDesat = 0.18f;
+        // Player "Seat of Light" block elevation (player-only; see DrawBadges /
+        // DrawTierEmblem). Colors are optional: empty => derive from Name color.
+        bool playerStripBedEnabled = true;
+        float playerStripBedAlpha = 0.10f;
+        float playerStripBedSize = 2.6f;
+        float playerStripBedBreatheHz = 0.14f;
+        std::optional<Settings::Color3> playerStripBedColor;
+        bool emblemBacklightEnabled = true;
+        float emblemBacklightSize = 2.6f;
+        float emblemBacklightAlpha = 0.55f;
+        float emblemBacklightBreatheHz = 0.167f;
+        float emblemCrispAlpha = 0.92f;
+        std::optional<Settings::Color3> emblemBacklightColor;
+
+        bool playerRimLightEnabled = true;
+        float playerRimAlpha = 0.22f;
+        float playerCarveAlpha = 0.26f;
+        float playerRimOffset = 1.0f;
+        std::optional<Settings::Color3> playerRimColor;
+        bool emblemKeyFillEnabled = true;
+        float emblemKeyAlpha = 0.35f;
+        float emblemFillAlpha = 0.15f;
+        float emblemKeyRise = 0.18f;
+        float emblemFillDrop = 0.15f;
+        std::optional<Settings::Color3> emblemKeyColor;
+        std::optional<Settings::Color3> emblemFillColor;
     };
     IconTokens icons = {};
 
@@ -793,15 +821,17 @@ struct LabelStyle
 
 /// Text measurement, font selection, and position data for a label.
 /// Coordinates are in screen pixels (Y increases downward).  startPos is
-/// the screen-space anchor computed from WorldToScreen.
+/// the screen-space anchor computed from WorldToScreen after the configured
+/// horizontal optical-centering correction is applied.
 struct LabelLayout
 {
-    ImFont* fontName;     ///< Name font pointer
-    ImFont* fontLevel;    ///< Level font pointer
-    ImFont* fontTitle;    ///< Title font pointer
-    float nameFontSize;   ///< Scaled name font size in pixels
-    float levelFontSize;  ///< Scaled level font size in pixels
-    float titleFontSize;  ///< Scaled title font size in pixels
+    ImFont* fontName;       ///< Name font pointer
+    ImFont* fontLevel;      ///< Level font pointer
+    ImFont* fontTitle;      ///< Title font pointer
+    float nameFontSize;     ///< Scaled name font size in pixels
+    float levelFontSize;    ///< Scaled level font size in pixels
+    float titleFontSize;    ///< Scaled title font size in pixels
+    bool isPlayer = false;  ///< Copied from ActorDrawData; gates player-only block light
 
     std::vector<RenderSeg> segments;  ///< Main line segments (built from DisplayFormat)
     float mainLineWidth;              ///< Total width of all segments plus padding
