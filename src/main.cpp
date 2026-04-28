@@ -17,8 +17,8 @@
  *  ============================================================================================  *
  *
  *      An SKSE plugin for Skyrim SE/AE that renders an ImGui overlay
- *      displaying actor information and allows copying NPC appearance
- *      templates onto the player character via the game's D3D11 pipeline.
+ *      displaying actor
+ * nameplates via the game's D3D11 pipeline.
  *
  *    ----------------------------------------------------------------------
  *
@@ -27,7 +27,6 @@
  */
 #include "PCH.hpp"
 
-#include "AppearanceTemplate.hpp"
 #include "ConsoleCommands.hpp"
 #include "Hooks.hpp"
 #include "HudCompat.hpp"
@@ -69,10 +68,7 @@ public:
 };
 }  // namespace
 
-// SKSE message handler - key lifecycle states:
-// - kDataLoaded: register console commands, retry NiOverride
-// - kPostLoadGame / kNewGame: no auto-apply; the appearance template is applied
-//   only via the 'glyph appearance on' console command.
+// SKSE message handler for plugin lifecycle events.
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
     switch (a_msg->type)
@@ -92,8 +88,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
         case SKSE::MessagingInterface::kDataLoaded:
             logger::debug("Data loaded event received");
             ConsoleCommands::Register();
-            // Retry getting NiOverride interface, SKEE should be fully loaded by now
-            AppearanceTemplate::RetryNiOverrideInterface();
             // RaceMenu rename -> prompt player-name refresh (see RaceMenuCloseSink).
             if (auto* ui = RE::UI::GetSingleton())
             {
@@ -102,15 +96,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
             break;
 
         case SKSE::MessagingInterface::kPostLoadGame:
-            // Loading a save. The appearance template is never auto-applied;
-            // trigger it on demand with the 'glyph appearance on' console command.
             logger::debug("Post load game event received");
-            AppearanceTemplate::TestOverlayOnPlayer();
             break;
 
         case SKSE::MessagingInterface::kNewGame:
-            // New game. The appearance template is never auto-applied; trigger it
-            // on demand with the 'glyph appearance on' console command.
             logger::debug("New game event received");
             break;
     }
@@ -158,11 +147,6 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
     {
         messaging->RegisterListener(MessageHandler);
         logger::debug("Registered SKSE message listener");
-
-        // Register for NiOverride/SKEE interface exchange
-        // This must happen before PostLoad so we receive the interface broadcast
-        // TODO: This does not work at all on 1.5.97, newer Racemenu (4.19 on 1.6.xx)
-        AppearanceTemplate::QueryNiOverrideInterface();
     }
 
     Hooks::Install();
