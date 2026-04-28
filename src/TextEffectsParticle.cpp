@@ -404,7 +404,7 @@ static int FlipFrame(
 // interior. With multiple styles enabled the shared band formula keeps the
 // styles radially separated instead. The orbiting types (Firefly/Dust/Mote/
 // Wisp/Spark/Leaf/CherryBlossom) consult the radial band; the non-orbiting
-// exceptions (Rain/Snow/Smoke fall/rise, Aurora flows) lay themselves out
+// exceptions (Snow/Smoke fall/rise, Aurora flows) lay themselves out
 // across the full aura and ignore it.
 static float SoloBandFloor(Settings::ParticleStyle style)
 {
@@ -861,24 +861,6 @@ static void DrawWeatherSprite(const ParticleContext& ctx,
     DrawHaloThenSprite(ctx, pos, finalSize, a, rotation, frame);
 }
 
-// Fast straight downpour with a touch of wind drift. The streak sprite stays
-// axis-aligned (no spin) so its pixels read crisp as it falls.
-static void RenderRainParticle(const ParticleContext& ctx)
-{
-    float fall, edge;
-    ImVec2 pos = FallLayout(ctx, 1.10f, .05f, 1.4f, fall, edge);
-    pos.x += .14f * (fall - .5f) * ctx.radiusX;  // wind drift accumulates with the fall
-
-    float finalAlpha = ctx.alpha * edge * (.7f + .3f * ctx.alphaVariation) * ctx.DepthAlphaScale();
-    if (finalAlpha < .04f)
-    {
-        return;
-    }
-    float finalSize = ctx.particleSize * ctx.sizeVar * ctx.DepthSizeScale();
-    int a = std::clamp((int)(finalAlpha * 255.0f), 0, 255);
-    DrawWeatherSprite(ctx, pos, finalSize, a, .0f, ctx.Flip(6.0f));
-}
-
 // Slow flakes that sway side to side as they settle.
 static void RenderSnowParticle(const ParticleContext& ctx)
 {
@@ -1126,13 +1108,6 @@ static const StyleMotionSpec* GetNewStyleMotion(Settings::ParticleStyle style)
     switch (style)
     {
         // ---- orbiters ----
-        case S::Rain:
-        {
-            // Suspended rain streaks circling slowly instead of falling.
-            static const StyleMotionSpec s{
-                .rate = .075f, .amp = .04f, .bobAmp = .025f, .shimmerAmp = .10f};
-            return &s;
-        }
         case S::Snow:
         {
             // Snowflakes drift around the ring with a broad, unhurried bob.
@@ -1959,16 +1934,6 @@ void DrawParticleAura(const ParticleAuraParams& params)
         {
             case Settings::ParticleStyle::Firefly:
                 RenderFireflyParticle(ctx);
-                break;
-            case Settings::ParticleStyle::Rain:
-                if (newSpec)
-                {
-                    RenderArchOrbitParticle(ctx, *newSpec);
-                }
-                else
-                {
-                    RenderRainParticle(ctx);
-                }
                 break;
             case Settings::ParticleStyle::Snow:
                 if (newSpec)
