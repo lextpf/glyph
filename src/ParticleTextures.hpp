@@ -211,6 +211,14 @@ void DrawPopSprite(ImDrawList* list,
 void DrawSoftGlow(ImDrawList* list, const ImVec2& center, float size, ImU32 color);
 
 /**
+ * Whether the shared soft light disc (see DrawSoftGlow) is currently drawable.
+ * False before Initialize, or after a teardown that released the disc SRV
+ * (e.g. the no-particle-textures fallback path). Callers that draw a glow via
+ * DrawSoftGlow should gate on this and provide their own fallback when false.
+ */
+bool HasSoftGlow();
+
+/**
  * Push additive blend state onto the draw list via callback.
  * All subsequent draws will use additive blending until PopBlendState.
  * @param dl ImGui draw list
