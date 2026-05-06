@@ -2,7 +2,6 @@
 
 #include "RendererInternal.hpp"
 
-#include "AppearanceTemplate.hpp"
 #include "BadgeTextures.hpp"
 #include "DepthClip.hpp"
 #include "GameState.hpp"
@@ -1283,18 +1282,6 @@ static void HandleHotReload()
             {
                 Settings::Load();
 
-                bool shouldReapply = false;
-                {
-                    const std::shared_lock<std::shared_mutex> lock(Settings::Mutex());
-                    shouldReapply = Settings::Appearance().TemplateReapplyOnReload &&
-                                    Settings::Appearance().UseTemplateAppearance;
-                }
-                if (shouldReapply)
-                {
-                    AppearanceTemplate::ResetAppliedFlag();
-                    AppearanceTemplate::ApplyIfConfigured();
-                }
-
                 // Signal the render thread to finalize the reload on the next frame.
                 GetState().reloadCompleted.store(true, std::memory_order_release);
             });
@@ -1306,21 +1293,6 @@ static void HandleHotReload()
         GetState().lastReloadTime = static_cast<float>(ImGui::GetTime());
         GetState().cache.clear();
         GetState().clearOcclusionCacheRequested.store(true, std::memory_order_release);
-
-        bool shouldReapplyFallback = false;
-        {
-            const std::shared_lock<std::shared_mutex> lock(Settings::Mutex());
-            shouldReapplyFallback = Settings::Appearance().TemplateReapplyOnReload &&
-                                    Settings::Appearance().UseTemplateAppearance;
-        }
-        if (shouldReapplyFallback)
-        {
-            AppearanceTemplate::ResetAppliedFlag();
-            if (auto* fallbackTask = SKSE::GetTaskInterface())
-            {
-                fallbackTask->AddTask([]() { AppearanceTemplate::ApplyIfConfigured(); });
-            }
-        }
 
         GetState().pauseSnapshotUpdates.store(false, std::memory_order_release);
         GetState().reloadRequested.store(false, std::memory_order_release);
@@ -1641,6 +1613,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.enableDebugOverlay = disp.EnableDebugOverlay;
     snap.enableOcclusionCulling = Settings::Occlusion().Enabled;
     snap.verticalOffset = disp.VerticalOffset;
+    snap.horizontalOffset = disp.HorizontalOffset;
     snap.hidePlayer = disp.HidePlayer;
     snap.reloadKey = disp.ReloadKey;
 
@@ -1759,6 +1732,29 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.icons.tierEnabled = ic.TierEnabled;
     snap.icons.mutedAlpha = ic.MutedAlpha;
     snap.icons.mutedDesat = ic.MutedDesat;
+    snap.icons.playerStripBedEnabled = ic.PlayerStripBedEnabled;
+    snap.icons.playerStripBedAlpha = ic.PlayerStripBedAlpha;
+    snap.icons.playerStripBedSize = ic.PlayerStripBedSize;
+    snap.icons.playerStripBedBreatheHz = ic.PlayerStripBedBreatheHz;
+    snap.icons.playerStripBedColor = ic.PlayerStripBedColor;
+    snap.icons.emblemBacklightEnabled = ic.EmblemBacklightEnabled;
+    snap.icons.emblemBacklightSize = ic.EmblemBacklightSize;
+    snap.icons.emblemBacklightAlpha = ic.EmblemBacklightAlpha;
+    snap.icons.emblemBacklightBreatheHz = ic.EmblemBacklightBreatheHz;
+    snap.icons.emblemCrispAlpha = ic.EmblemCrispAlpha;
+    snap.icons.emblemBacklightColor = ic.EmblemBacklightColor;
+    snap.icons.playerRimLightEnabled = ic.PlayerRimLightEnabled;
+    snap.icons.playerRimAlpha = ic.PlayerRimAlpha;
+    snap.icons.playerCarveAlpha = ic.PlayerCarveAlpha;
+    snap.icons.playerRimOffset = ic.PlayerRimOffset;
+    snap.icons.playerRimColor = ic.PlayerRimColor;
+    snap.icons.emblemKeyFillEnabled = ic.EmblemKeyFillEnabled;
+    snap.icons.emblemKeyAlpha = ic.EmblemKeyAlpha;
+    snap.icons.emblemFillAlpha = ic.EmblemFillAlpha;
+    snap.icons.emblemKeyRise = ic.EmblemKeyRise;
+    snap.icons.emblemFillDrop = ic.EmblemFillDrop;
+    snap.icons.emblemKeyColor = ic.EmblemKeyColor;
+    snap.icons.emblemFillColor = ic.EmblemFillColor;
     snap.focus = Settings::Focus();
     snap.quiet = Settings::Quiet();
 
