@@ -1,0 +1,162 @@
+# clangd configuration for glyph.
+#
+# Why this file exists
+# --------------------
+# The Visual Studio 2022 CMake generator (used by the `vs2022-windows`
+# preset and `build.bat`) does not emit compile_commands.json - only the
+# Ninja and Makefile generators do, and even then only when
+# CMAKE_EXPORT_COMPILE_COMMANDS is ON. CMakeLists.txt does not turn it
+# on. So out of the box, clangd has no per-file flags, the FetchContent'd
+# CommonLibSSE-NG headers under build/_deps/ look unresolved, and most
+# RE::/SKSE:: types are red even though the project builds.
+#
+# Two ways to get accurate diagnostics:
+#
+#   (A) Recommended - generate a side-by-side Ninja build that produces
+#       compile_commands.json. clangd auto-discovers it via the
+#       CompilationDatabase entry below; the main build/ tree (used by
+#       build.bat / test.bat / deploy.bat) is untouched.
+#
+#         cmake -B build_clangd -G Ninja `
+#               -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake `
+#               -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+#               -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+#         cmake --build build_clangd --target glyph
+#
+#       (Re-run the configure step whenever you add new source files to
+#       CMakeLists.txt, and after a CommonLibSSE-NG upgrade so the
+#       fetched headers re-populate.)
+#
+#   (B) Skip the Ninja build. The Add: flags below cover C++23 mode, the
+#       project's include paths (src/, tests/, external/, external/skse64/,
+#       external/skse64_common/, vcpkg_installed/, and the FetchContent'd
+#       CommonLibSSE-NG headers under build/_deps/), and the runtime
+#       defines from CMakeLists.txt + PCH.h + CommonLibSSE-NG's public
+#       interface (SKYRIM_SE, ENABLE_SKYRIM_*, WIN32_LEAN_AND_MEAN,
+#       IMGUI_DEFINE_MATH_OPERATORS, etc.). Navigation and most
+#       diagnostics work; some MSVC-specific extensions and per-file
+#       defines won't.
+#
+# If clangd still can't find <Windows.h> / the MSVC STL, point it at
+# cl.exe in your editor's clangd args (NOT here - .clangd doesn't accept
+# it):
+#
+#       --query-driver=C:\\Program*Files*\\Microsoft*Visual*Studio\\**\\cl.exe
+#
+# Note: the CommonLibSSE-NG headers under build/_deps/ exist only after a
+# successful configure of either build/ or build_clangd/. A fresh clone
+# will show those includes unresolved until the first CMake configure
+# runs.
+
+CompileFlags:
+  CompilationDatabase: build_clangd
+
+  Add:
+    - -std=c++23
+    - --target=x86_64-pc-windows-msvc
+    - -fms-extensions
+    - -fms-compatibility
+    - -fdelayed-template-parsing
+    - -Wno-microsoft-include
+    - -Wno-pragma-once-outside-header
+    - -Wno-unknown-attributes
+
+    # Project defines (mirrors CMakeLists.txt + PCH.h)
+    - -DSKYRIM_SE
+    - -DWIN32_LEAN_AND_MEAN
+    - -DNOMINMAX
+    - -DDIRECTINPUT_VERSION=0x0800
+    - -DIMGUI_DEFINE_MATH_OPERATORS
+
+    # CommonLibSSE-NG public compile definitions (PUBLIC on the
+    # CommonLibSSE target, so they propagate to glyph). Mirrors the
+    # defaults from build/_deps/commonlibsse-ng-src/CMakeLists.txt and
+    # the SKSE_SUPPORT_XBYAK=ON we set in glyph's CMakeLists.txt.
+    - -DENABLE_SKYRIM_SE=1
+    - -DENABLE_SKYRIM_AE=1
+    - -DENABLE_SKYRIM_VR=1
+    - -DHAS_SKYRIM_MULTI_TARGETING=1
+    - -DSKSE_SUPPORT_XBYAK=1
+    - -DWINVER=0x0601
+    - -D_WIN32_WINNT=0x0601
+
+    # Project sources
+    - -Isrc
+    - -Itests
+
+    # Bundled SKSE64 / NetImmerse headers (NiOverride, IPluginInterface,
+    # OverlayInterface, GameAPI/GameObjects/etc.)
+    - -Iexternal
+    - -Iexternal/skse64
+    - -Iexternal/skse64_common
+
+    # vcpkg-installed deps (x64-windows-static triplet). Either build
+    # tree works; whichever exists wins.
+    - -Ibuild/vcpkg_installed/x64-windows-static/include
+    - -Ibuild_clangd/vcpkg_installed/x64-windows-static/include
+
+    # CommonLibSSE-NG (fetched via FetchContent into the build tree).
+    # Same fallback applies - pick up whichever build tree was configured
+    # most recently. Also the path ClibUtil/* resolves through.
+    - -Ibuild/_deps/commonlibsse-ng-src/include
+    - -Ibuild_clangd/_deps/commonlibsse-ng-src/include
+
+  Remove:
+    # MSVC-only flags clangd's GCC-style parser chokes on if a
+    # compile_commands.json from cl.exe is consumed directly.
+    - /EHa
+    - /EHs
+    - /EHsc
+    - /MP
+    - /MD
+    - /MDd
+    - /MT
+    - /MTd
+    - /Gd
+    - /Gm-
+    - /GS
+    - /GR
+    - /Gy
+    - /Oi
+    - /Ot
+    - /permissive-
+    - /std:*
+    - /Zc*
+    - /ZI
+    - /Zi
+    - /Z7
+    - /JMC
+    - /sdl
+    - /diagnostics:*
+    - /external:*
+    - -external:*
+    - /Fp*
+    - /Fd*
+    - /Fo*
+    - /FS
+
+Diagnostics:
+  # CONTRIBUTING.md prescribes a manual include order (corresponding
+  # header, project headers, third-party, std), not include-what-you-use,
+  # so don't surface include-graph nits.
+  UnusedIncludes: None
+  MissingIncludes: None
+  Suppress:
+    - unknown_attribute
+    - pp_including_mainfile_in_preamble
+
+Index:
+  Background: Build
+  StandardLibrary: Yes
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+  Designators: Yes
+
+Hover:
+  ShowAKA: Yes
+
+Completion:
+  AllScopes: Yes
