@@ -1,11 +1,8 @@
-#include "AppearanceTemplateInternal.h"
+#include "AppearanceTemplateInternal.hpp"
 
 #include <iomanip>
 #include <vector>
 
-// ============================================================================
-// Ownership contract for RE::calloc-managed memory
-//
 // Head part arrays and tint layers allocated via RE::calloc() are tracked in
 // OwnedHeadPartArrays() and OwnedTintLayers() respectively. Only pointers
 // present in these sets are freed by this code. Engine-owned pointers (the
@@ -14,7 +11,6 @@
 // Invariant: Before mutating playerBase->headParts or tintLayers, the NEW
 // allocation is inserted into the tracking set FIRST. Only then is the old
 // pointer checked against the set and conditionally freed.
-// ============================================================================
 
 namespace AppearanceTemplate
 {

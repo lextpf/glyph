@@ -1,4 +1,4 @@
-#include "TextEffectsInternal.h"
+#include "TextEffectsInternal.hpp"
 
 namespace TextEffects
 {

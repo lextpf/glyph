@@ -1,4 +1,4 @@
-#include "AppearanceTemplateInternal.h"
+#include "AppearanceTemplateInternal.hpp"
 
 #include <limits>
 #include <stdexcept>

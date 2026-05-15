@@ -1,6 +1,6 @@
-#include "Occlusion.h"
+#include "Occlusion.hpp"
 
-#include "Settings.h"
+#include "Settings.hpp"
 
 #include <RE/A/Actor.h>
 #include <RE/P/PlayerCamera.h>
