@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM test.bat - Run glyph plugin unit tests using Google Test
+REM test.bat - Run glyph unit tests using Google Test
 REM ============================================================================
 REM This script:
 REM   1. Configures CMake if needed
@@ -22,7 +22,7 @@ echo [1/3] Checking CMake configuration...
 echo ----------------------------------------------------------------------------
 if not exist "build\CMakeCache.txt" (
     echo   Configuring CMake...
-    cmake --preset vs2022-windows
+    cmake --preset default
     if errorlevel 1 (
         echo ERROR: CMake configuration failed!
         pause
