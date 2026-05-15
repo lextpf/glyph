@@ -28,7 +28,6 @@ theme:
     - content.code.annotate
     - navigation.tabs
     - navigation.sections
-
     - navigation.top
     - navigation.indexes
     - search.highlight
@@ -68,46 +67,93 @@ extra_javascript:
 nav:
   - Home:
     - index.md
+
   - API Reference:
     - Core:
       - Core/index.md
-      - AppearanceTemplate: AppearanceTemplate/index.md
+      - AppearanceTemplate:
+        - AppearanceTemplate/index.md
+        - ApplyConfig: AppearanceTemplate/ApplyConfig.md
+        - TemplateState: AppearanceTemplate/TemplateState.md
+        - OutfitCopy: OutfitCopy/index.md
       - ConsoleCommands: ConsoleCommands/index.md
+
     - Rendering:
       - Rendering/index.md
       - Renderer:
         - Renderer/index.md
-        - Renderer/ActorCache.md
-        - Renderer/ActorDrawData.md
-        - Renderer/Disposition.md
-        - Renderer/LabelLayout.md
-        - Renderer/LabelStyle.md
-        - Renderer/RenderSeg.md
-        - Renderer/RendererState.md
-      - TextEffects: TextEffects/index.md
+        - ActorCache: Renderer/ActorCache.md
+        - ActorDrawData: Renderer/ActorDrawData.md
+        - Disposition: Renderer/Disposition.md
+        - DistanceFactors: Renderer/DistanceFactors.md
+        - LabelLayout: Renderer/LabelLayout.md
+        - LabelStyle: Renderer/LabelStyle.md
+        - OcclusionCacheEntry: Renderer/OcclusionCacheEntry.md
+        - OrnamentMetrics: Renderer/OrnamentMetrics.md
+        - RendererState: Renderer/RendererState.md
+        - RenderSeg: Renderer/RenderSeg.md
+        - RenderSettingsSnapshot: Renderer/RenderSettingsSnapshot.md
+        - SnapshotState: Renderer/SnapshotState.md
+      - TextEffects:
+        - TextEffects/index.md
+        - DualOutlineParams: TextEffects/DualOutlineParams.md
+        - OutlineGlowParams: TextEffects/OutlineGlowParams.md
+        - ParticleAuraParams: TextEffects/ParticleAuraParams.md
+        - ShineParams: TextEffects/ShineParams.md
+        - TextVertexSetup: TextEffects/TextVertexSetup.md
+        - WaveParams: TextEffects/WaveParams.md
       - Occlusion:
         - Occlusion/index.md
-        - Occlusion/Constants/index.md
+        - Constants: Occlusion/Constants/index.md
       - RenderConstants: RenderConstants/index.md
-      - ParticleTextures: ParticleTextures/index.md
+      - ParticleTextures:
+        - ParticleTextures/index.md
+        - BlendMode: ParticleTextures/BlendMode.md
       - DebugOverlay:
         - DebugOverlay/index.md
-        - DebugOverlay/Context.md
-        - DebugOverlay/Stats.md
+        - Context: DebugOverlay/Context.md
+        - Stats: DebugOverlay/Stats.md
+      - TextPostProcess: TextPostProcess/index.md
+
     - Configuration:
       - Configuration/index.md
       - Settings:
         - Settings/index.md
-        - Settings/EffectParams.md
-        - Settings/EffectType.md
-        - Settings/ParticleStyle.md
-        - Settings/Segment.md
-        - Settings/SpecialTitleDefinition.md
-        - Settings/TierDefinition.md
-        - Settings/VisualSettings.md
+        - AnimColorSettings: Settings/AnimColorSettings.md
+        - AppearanceSettings: Settings/AppearanceSettings.md
+        - Color3: Settings/Color3.md
+        - DisplaySettings: Settings/DisplaySettings.md
+        - DistanceSettings: Settings/DistanceSettings.md
+        - EffectParams: Settings/EffectParams.md
+        - EffectType: Settings/EffectType.md
+        - FontSettings: Settings/FontSettings.md
+        - GlowSettings: Settings/GlowSettings.md
+        - OcclusionSettings: Settings/OcclusionSettings.md
+        - OrnamentSettings: Settings/OrnamentSettings.md
+        - ParticleSettings: Settings/ParticleSettings.md
+        - ParticleStyle: Settings/ParticleStyle.md
+        - Segment: Settings/Segment.md
+        - SettingEntry: Settings/SettingEntry.md
+        - ShadowOutlineSettings: Settings/ShadowOutlineSettings.md
+        - ShineSettings: Settings/ShineSettings.md
+        - SpecialTitleDefinition: Settings/SpecialTitleDefinition.md
+        - TierDefinition: Settings/TierDefinition.md
+        - TransitionSettings: Settings/TransitionSettings.md
+        - TypewriterSettings: Settings/TypewriterSettings.md
+        - VisualSettings: Settings/VisualSettings.md
+        - overloaded: Settings/overloaded.md
+
     - Hooks:
       - Hooks/index.md
-      - Hooks/PostDisplay.md
 
     - Utilities:
       - Utilities/index.md
+      - GameState: GameState/index.md
+      - Utf8Utils: Utf8Utils/index.md
+
+    - Namespaces:
+      - Stl:
+        - Stl/index.md
+        - EnumStringMap: Stl/EnumStringMap.md
+        - "EnumStringMap::Entry": Stl/EnumStringMap/Entry.md
+      - "RE (extensions)": RE/index.md
