@@ -1,8 +1,8 @@
-#include "Settings.h"
+#include "Settings.hpp"
 
-#include "PCH.h"
-#include "RenderConstants.h"
-#include "SettingsBinding.h"
+#include "PCH.hpp"
+#include "RenderConstants.hpp"
+#include "SettingsBinding.hpp"
 
 #include <SKSE/SKSE.h>
 

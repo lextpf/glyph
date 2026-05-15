@@ -1,11 +1,11 @@
 #pragma once
 
-#include "PCH.h"
+#include "PCH.hpp"
 
-#include "ParticleTextures.h"
-#include "Settings.h"
-#include "TextEffects.h"
-#include "Utf8Utils.h"
+#include "ParticleTextures.hpp"
+#include "Settings.hpp"
+#include "TextEffects.hpp"
+#include "Utf8Utils.hpp"
 
 #include <algorithm>
 #include <cmath>

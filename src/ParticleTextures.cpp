@@ -1,7 +1,7 @@
 #include <SKSE/SKSE.h>
 
-#include "ParticleTextures.h"
-#include "Settings.h"
+#include "ParticleTextures.hpp"
+#include "Settings.hpp"
 
 #include <wincodec.h>
 #include <wrl/client.h>

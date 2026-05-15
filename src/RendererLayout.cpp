@@ -1,4 +1,4 @@
-#include "RendererInternal.h"
+#include "RendererInternal.hpp"
 
 namespace Renderer
 {

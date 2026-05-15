@@ -1,7 +1,7 @@
 #pragma once
 
-#include "PCH.h"
-#include "Settings.h"
+#include "PCH.hpp"
+#include "Settings.hpp"
 
 #include <algorithm>
 

@@ -25,12 +25,12 @@
  *      Repository:   https://github.com/lextpf/glyph
  *      License:      MIT
  */
-#include "PCH.h"
+#include "PCH.hpp"
 
-#include "AppearanceTemplate.h"
-#include "Hooks.h"
-#include "Renderer.h"
-#include "Settings.h"
+#include "AppearanceTemplate.hpp"
+#include "Hooks.hpp"
+#include "Renderer.hpp"
+#include "Settings.hpp"
 
 #include <string>
 
