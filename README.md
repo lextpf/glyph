@@ -284,19 +284,19 @@ graph TB
 
 ```
 glyph/
-|-- src/                          # Source code
-|   |-- main.cpp                  # Entry point, SKSE interface
-|   |-- Hooks.cpp/h               # D3D11 present and HUD menu hooks
-|   |-- Renderer.cpp/h            # World-to-screen projection
-|   |-- TextEffects.cpp/h         # Visual effect implementations
-|   |-- Settings.cpp/h            # ini parsing and configuration
-|   |-- Occlusion.cpp/h           # Raycast visibility checks
-|   |-- ParticleTextures.cpp/h    # Particle sprite atlas generation
-|   |-- AppearanceTemplate.cpp/h  # NPC appearance copying
-|   |-- DebugOverlay.cpp/h        # Debug HUD
-|   |-- RenderConstants.h         # Shared rendering constants
-|   |-- PCH.h
-|   +-- Version.h
+|-- src/                            # Source code
+|   |-- main.cpp                    # Entry point, SKSE interface
+|   |-- Hooks.cpp/hpp               # D3D11 present and HUD menu hooks
+|   |-- Renderer.cpp/hpp            # World-to-screen projection
+|   |-- TextEffects.cpp/hpp         # Visual effect implementations
+|   |-- Settings.cpp/hpp            # ini parsing and configuration
+|   |-- Occlusion.cpp/hpp           # Raycast visibility checks
+|   |-- ParticleTextures.cpp/hpp    # Particle sprite atlas generation
+|   |-- AppearanceTemplate.cpp/hpp  # NPC appearance copying
+|   |-- DebugOverlay.cpp/hpp        # Debug HUD
+|   |-- RenderConstants.hpp         # Shared rendering constants
+|   |-- PCH.hpp
+|   +-- Version.hpp
 |-- skse/plugins/                 # Runtime assets
 |   |-- glyph.ini                 # Default config
 |   +-- glyph/
