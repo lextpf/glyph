@@ -1,0 +1,79 @@
+# glyph clang-tidy configuration.
+
+Checks: >
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-branch-clone,
+  clang-analyzer-*,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-init-variables,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-narrowing-conversions,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-static-cast-downcast,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-special-member-functions,
+  -cppcoreguidelines-use-default-member-init,
+  modernize-*,
+  -modernize-avoid-c-arrays,
+  -modernize-use-nodiscard,
+  -modernize-use-trailing-return-type,
+  performance-*,
+  -performance-avoid-endl,
+  portability-*,
+  readability-*,
+  -readability-braces-around-statements,
+  -readability-convert-member-functions-to-static,
+  -readability-else-after-return,
+  -readability-function-cognitive-complexity,
+  -readability-function-size,
+  -readability-identifier-length,
+  -readability-identifier-naming,
+  -readability-implicit-bool-conversion,
+  -readability-magic-numbers,
+  -readability-named-parameter,
+  -readability-redundant-access-specifiers,
+  -readability-uppercase-literal-suffix
+
+# Treat nothing as an error by default - this is advisory until the
+# codebase is fully clean. Flip selected checks to WarningsAsErrors below
+# once they reach zero outstanding findings.
+WarningsAsErrors: ''
+
+# Limit scope to project sources. The negative lookahead keeps
+# CommonLibSSE-NG (FetchContent'd into build/_deps/), vcpkg headers, and
+# anything under external/ out of analysis.
+HeaderFilterRegex: '.*[/\\]src[/\\][^/\\]+\.(h|hpp)$'
+
+FormatStyle: file
+User: glyph
+
+CheckOptions:
+  # Modernize: keep these conservative so we don't churn the codebase.
+  - key: modernize-use-override.IgnoreDestructors
+    value: 'true'
+  - key: modernize-loop-convert.MinConfidence
+    value: reasonable
+  - key: modernize-use-default-member-init.UseAssignment
+    value: 'true'
+
+  # Readability: integer-literal suffix style mirrors the rest of the code.
+  - key: readability-uppercase-literal-suffix.NewSuffixes
+    value: 'L;LL;LU;LLU'
+
+  # Performance: STL containers passed by value in hot rendering paths are
+  # rare here; nudge people to const-ref instead.
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: ''
