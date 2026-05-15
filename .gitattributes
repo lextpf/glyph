@@ -1,0 +1,135 @@
+# ============================================================================
+# .gitattributes for glyph
+# ============================================================================
+
+# Default: auto-detect text and normalize to LF on commit.
+* text=auto eol=lf
+
+# ----------------------------------------------------------------------------
+# C / C++ source
+# ----------------------------------------------------------------------------
+*.c                     text eol=lf diff=cpp
+*.cc                    text eol=lf diff=cpp
+*.cpp                   text eol=lf diff=cpp
+*.cxx                   text eol=lf diff=cpp
+*.h                     text eol=lf diff=cpp
+*.hh                    text eol=lf diff=cpp
+*.hpp                   text eol=lf diff=cpp
+*.hxx                   text eol=lf diff=cpp
+*.inl                   text eol=lf diff=cpp
+*.ipp                   text eol=lf diff=cpp
+*.tcc                   text eol=lf diff=cpp
+
+# ----------------------------------------------------------------------------
+# Build system
+# ----------------------------------------------------------------------------
+CMakeLists.txt          text eol=lf
+*.cmake                 text eol=lf
+*.cmake.in              text eol=lf
+CMakePresets.json       text eol=lf
+*.clang-format          text eol=lf
+*.clang-tidy            text eol=lf
+.clang-format           text eol=lf
+.clang-tidy             text eol=lf
+.clangd                 text eol=lf
+.editorconfig           text eol=lf
+*.json                  text eol=lf
+*.yml                   text eol=lf
+*.yaml                  text eol=lf
+*.toml                  text eol=lf
+*.ini                   text
+*.cfg                   text
+*.md                    text diff=markdown
+*.xml                   text
+*.txt                   text
+vcpkg.json              text eol=lf
+LICENSE                 text
+Doxyfile                text
+Doxyfile.in             text
+.gitattributes          text eol=lf
+.gitignore              text eol=lf
+
+# ----------------------------------------------------------------------------
+# Scripts
+# ----------------------------------------------------------------------------
+*.bat                   text eol=crlf
+*.cmd                   text eol=crlf
+*.ps1                   text eol=crlf
+*.psm1                  text eol=crlf
+*.sh                    text eol=lf
+*.bash                  text eol=lf
+*.py                    text eol=lf
+
+# ----------------------------------------------------------------------------
+# Archives
+# ----------------------------------------------------------------------------
+*.7z                    binary
+*.bz2                   binary
+*.gz                    binary
+*.rar                   binary
+*.tar                   binary
+*.tgz                   binary
+*.xz                    binary
+*.zip                   binary
+
+# ----------------------------------------------------------------------------
+# Compiled
+# ----------------------------------------------------------------------------
+*.a                     binary
+*.dll                   binary
+*.exe                   binary
+*.exp                   binary
+*.idb                   binary
+*.ilk                   binary
+*.lib                   binary
+*.o                     binary
+*.obj                   binary
+*.pdb                   binary
+*.so                    binary
+*.so.*                  binary
+*.dylib                 binary
+
+# ----------------------------------------------------------------------------
+# Fonts
+# ----------------------------------------------------------------------------
+*.eot                   binary
+*.otf                   binary
+*.ttc                   binary
+*.ttf                   binary
+*.woff                  binary
+*.woff2                 binary
+
+# ----------------------------------------------------------------------------
+# Images / media
+# ----------------------------------------------------------------------------
+*.bmp                   binary
+*.dds                   binary
+*.gif                   binary
+*.ico                   binary
+*.jpg                   binary
+*.jpeg                  binary
+*.png                   binary
+*.psd                   binary
+*.svg                   text eol=lf
+*.tga                   binary
+*.webp                  binary
+
+# ----------------------------------------------------------------------------
+# Skyrim / Bethesda formats
+# ----------------------------------------------------------------------------
+*.bsa                   binary
+*.esl                   binary
+*.esm                   binary
+*.esp                   binary
+*.nif                   binary
+*.pex                   binary
+
+# ----------------------------------------------------------------------------
+# GitHub language statistics
+# ----------------------------------------------------------------------------
+external/**             linguist-vendored
+build/**                linguist-generated
+build-cdb/**            linguist-generated
+docs/**                 linguist-generated
+site/**                 linguist-generated
+scripts/**              linguist-documentation
