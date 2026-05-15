@@ -2,54 +2,14 @@
 #
 # Why this file exists
 # --------------------
-# The Visual Studio 2022 CMake generator (used by the `vs2022-windows`
-# preset and `build.bat`) does not emit compile_commands.json - only the
-# Ninja and Makefile generators do, and even then only when
-# CMAKE_EXPORT_COMPILE_COMMANDS is ON. CMakeLists.txt does not turn it
-# on. So out of the box, clangd has no per-file flags, the FetchContent'd
-# CommonLibSSE-NG headers under build/_deps/ look unresolved, and most
-# RE::/SKSE:: types are red even though the project builds.
-#
-# Two ways to get accurate diagnostics:
-#
-#   (A) Recommended - generate a side-by-side Ninja build that produces
-#       compile_commands.json. clangd auto-discovers it via the
-#       CompilationDatabase entry below; the main build/ tree (used by
-#       build.bat / test.bat / deploy.bat) is untouched.
-#
-#         cmake -B build_clangd -G Ninja `
-#               -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake `
-#               -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-#               -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-#         cmake --build build_clangd --target glyph
-#
-#       (Re-run the configure step whenever you add new source files to
-#       CMakeLists.txt, and after a CommonLibSSE-NG upgrade so the
-#       fetched headers re-populate.)
-#
-#   (B) Skip the Ninja build. The Add: flags below cover C++23 mode, the
-#       project's include paths (src/, tests/, external/, external/skse64/,
-#       external/skse64_common/, vcpkg_installed/, and the FetchContent'd
-#       CommonLibSSE-NG headers under build/_deps/), and the runtime
-#       defines from CMakeLists.txt + PCH.h + CommonLibSSE-NG's public
-#       interface (SKYRIM_SE, ENABLE_SKYRIM_*, WIN32_LEAN_AND_MEAN,
-#       IMGUI_DEFINE_MATH_OPERATORS, etc.). Navigation and most
-#       diagnostics work; some MSVC-specific extensions and per-file
-#       defines won't.
-#
-# If clangd still can't find <Windows.h> / the MSVC STL, point it at
-# cl.exe in your editor's clangd args (NOT here - .clangd doesn't accept
-# it):
-#
-#       --query-driver=C:\\Program*Files*\\Microsoft*Visual*Studio\\**\\cl.exe
-#
-# Note: the CommonLibSSE-NG headers under build/_deps/ exist only after a
-# successful configure of either build/ or build_clangd/. A fresh clone
-# will show those includes unresolved until the first CMake configure
-# runs.
+# CMakeLists.txt sets CMAKE_EXPORT_COMPILE_COMMANDS ON, but Visual Studio's
+# CMake generator silently ignores it - only the Ninja and Makefile
+# generators emit compile_commands.json. So if you configured with the
+# default `cmake -B build`, build/ has no compile DB, clangd has no per-file
+# flags, and most #includes look unresolved even though the project builds.
 
 CompileFlags:
-  CompilationDatabase: build_clangd
+  CompilationDatabase: build-cdb
 
   Add:
     - -std=c++23
@@ -61,7 +21,7 @@ CompileFlags:
     - -Wno-pragma-once-outside-header
     - -Wno-unknown-attributes
 
-    # Project defines (mirrors CMakeLists.txt + PCH.h)
+    # Project defines (mirrors CMakeLists.txt + PCH.hpp)
     - -DSKYRIM_SE
     - -DWIN32_LEAN_AND_MEAN
     - -DNOMINMAX
@@ -90,16 +50,15 @@ CompileFlags:
     - -Iexternal/skse64
     - -Iexternal/skse64_common
 
-    # vcpkg-installed deps (x64-windows-static triplet). Either build
-    # tree works; whichever exists wins.
+    # vcpkg-installed deps. The compile-db preset shares
+    # build/vcpkg_installed/ with the default preset (same triplet, so
+    # no second install runs).
     - -Ibuild/vcpkg_installed/x64-windows-static/include
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-static/include
 
-    # CommonLibSSE-NG (fetched via FetchContent into the build tree).
-    # Same fallback applies - pick up whichever build tree was configured
-    # most recently. Also the path ClibUtil/* resolves through.
+    # CommonLibSSE-NG (fetched via FetchContent into the main build tree
+    # by the default preset). Also the path ClibUtil/* resolves through.
     - -Ibuild/_deps/commonlibsse-ng-src/include
-    - -Ibuild_clangd/_deps/commonlibsse-ng-src/include
+    - -Ibuild-cdb/_deps/commonlibsse-ng-src/include
 
   Remove:
     # MSVC-only flags clangd's GCC-style parser chokes on if a
