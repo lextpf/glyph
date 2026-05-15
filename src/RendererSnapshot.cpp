@@ -1,7 +1,7 @@
-#include "RendererInternal.h"
+#include "RendererInternal.hpp"
 
-#include "GameState.h"
-#include "Occlusion.h"
+#include "GameState.hpp"
+#include "Occlusion.hpp"
 
 #include <SKSE/SKSE.h>
 
@@ -154,8 +154,23 @@ static Disposition GetDisposition(RE::Actor* a, RE::Actor* player)
     }
 }
 
+// @author Claude (https://github.com/claude)
 // Check whether an actor is a humanoid NPC (as opposed to a creature/animal).
-// Prefer ActorTypeNPC on actor, then base, then race for robustness across mods.
+//
+// The authoritative signal is the `ActorTypeNPC` keyword (Skyrim.esm
+// FormID 0x13794). We look it up once lazily and cache it, because the
+// data handler is not guaranteed to be ready at plugin load time but is
+// always ready by the time the renderer is asking about live actors.
+//
+// We probe the keyword in three places, in this order, because mods
+// disagree about where they tag NPC-ness:
+//
+//   1. Actor instance keywords - some scripts inject the tag at runtime.
+//   2. Actor base (TESNPC) keywords - the most common author location.
+//   3. Race keywords - vanilla Bethesda content tags it here.
+//
+// If none of those match, the actor is treated as a creature and
+// HideCreatures will filter it out.
 static bool IsHumanoidNPC(RE::Actor* actor)
 {
     if (!actor)
@@ -231,10 +246,18 @@ static void UpdateOcclusionForActor(ActorDrawData& d,
     entry.cachedOccluded = d.isOccluded;
 }
 
-// ============================================================================
-// Main snapshot functions
-// ============================================================================
-
+// @author Claude (https://github.com/claude)
+// `UpdateSnapshot_GameThread()` runs *only* on the game thread (scheduled
+// via SKSE::GetTaskInterface()) because CommonLibSSE's `RE::*` types -
+// ProcessLists, Actor, TESDataHandler - are not safe to touch from the
+// render thread.
+//
+// The render thread never reads these types directly. Instead it reads a
+// plain-old-data `std::vector<ActorDrawData>` snapshot under
+// `snapshotLock`. Everything the renderer needs (FormID, name, world
+// position, level, disposition, occlusion result) is precomputed here
+// so the render-thread copy can run without any further game-thread
+// trips.
 void UpdateSnapshot_GameThread()
 {
     // RAII guard to ensure flags are cleared when this task exits.
