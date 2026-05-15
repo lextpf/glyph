@@ -1,0 +1,92 @@
+name: Bug report
+description: Report incorrect or unexpected behaviour in glyph.
+title: "[Bug] <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please complete the
+        sections below so the maintainers can reproduce the issue and triage quickly.
+
+        **Before filing**, please:
+        - Search existing issues to avoid duplicates.
+        - Confirm you are on a recent glyph release.
+        - Try a clean reproduction without unrelated SKSE plugins if possible.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what is wrong.
+      placeholder: Nameplates flicker for ~1 second after fast-travel.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact sequence that consistently trigger the bug.
+      placeholder: |
+        1. Load a save in Whiterun.
+        2. Open the console and type `glyph` to enable the overlay.
+        3. Fast-travel to Riverwood.
+        4. Observe nameplates flicker briefly before stabilizing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Paste any error message verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Paste any relevant sections of `*.log`.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: glyph_version
+    attributes:
+      label: glyph version
+      description: Plugin version from `vcpkg.json` or the deployed mod folder name.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: skyrim-version
+    attributes:
+      label: Skyrim version
+      options:
+        - SE 1.5.97 (primary)
+        - AE (latest)
+        - VR
+        - GOG
+        - Other / unknown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
