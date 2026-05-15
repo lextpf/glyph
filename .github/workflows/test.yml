@@ -22,10 +22,10 @@ jobs:
           vcpkgGitCommitId: edffab1bcd2cb5b8c17d6ba34d5651ea0bf82979
 
       - name: Configure CMake
-        run: cmake --preset vs2022-windows
+        run: cmake --preset ci-windows
 
       - name: Build tests
-        run: cmake --build build --config Release --target glyph_test_utils glyph_test_settings -- /m
+        run: cmake --build --preset ci-windows-tests
 
       - name: Run tests
-        run: ctest --test-dir build --build-config Release --output-on-failure
+        run: ctest --preset ci-windows-release
