@@ -7,7 +7,7 @@ description: SKSE overlay for actor info and appearance templates
 output: docs
 
 files:
-  - "src/*.h"
+  - "src/*.hpp"
   - "src/*.cpp"
 
 groups:
