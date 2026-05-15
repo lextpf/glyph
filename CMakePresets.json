@@ -1,5 +1,10 @@
 {
   "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "windows-base",
@@ -17,26 +22,119 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows-static",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
         "CMAKE_VS_GLOBALS": "VCToolsVersion=14.44.35207"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
       }
     },
     {
-      "name": "vs2022-windows",
+      "name": "default",
       "inherits": "windows-base",
-      "displayName": "Visual Studio 2022 x64",
-      "description": "Target Windows with VS 2022"
+      "displayName": "Visual Studio 2022 x64 (default)",
+      "description": "Primary local + CI configure preset. Static MSVC runtime, x64-windows-static vcpkg triplet."
+    },
+    {
+      "name": "compile-db",
+      "displayName": "compile_commands.json (Ninja sidecar)",
+      "description": "Ninja-based configure whose only purpose is to emit a real compile_commands.json for clang-tidy/clangd. Reuses the default preset's vcpkg_installed/ via the same triplet, so configure is fast and no packages are rebuilt. Never built directly; only configured.",
+      "binaryDir": "${sourceDir}/build-cdb",
+      "generator": "Ninja",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "ci-windows",
+      "inherits": "default",
+      "displayName": "CI: Windows / VS 2022",
+      "description": "Configure preset used by GitHub Actions. Matches local default and keeps cache variables explicit so the build is reproducible."
     }
   ],
   "buildPresets": [
     {
       "name": "windows-release",
-      "configurePreset": "vs2022-windows",
+      "configurePreset": "default",
+      "displayName": "Release",
       "configuration": "Release"
     },
     {
       "name": "windows-debug",
-      "configurePreset": "vs2022-windows",
+      "configurePreset": "default",
+      "displayName": "Debug",
       "configuration": "Debug"
+    },
+    {
+      "name": "windows-tests",
+      "configurePreset": "default",
+      "displayName": "Release - tests only",
+      "configuration": "Release",
+      "targets": [
+        "glyph_test_utils",
+        "glyph_test_settings"
+      ]
+    },
+    {
+      "name": "ci-windows-release",
+      "configurePreset": "ci-windows",
+      "displayName": "CI: Release",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "/m"
+      ]
+    },
+    {
+      "name": "ci-windows-tests",
+      "configurePreset": "ci-windows",
+      "displayName": "CI: Tests",
+      "configuration": "Release",
+      "targets": [
+        "glyph_test_utils",
+        "glyph_test_settings"
+      ],
+      "nativeToolOptions": [
+        "/m"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "default",
+      "displayName": "Run all tests (Release)",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "ci-windows-release",
+      "configurePreset": "ci-windows",
+      "displayName": "CI: Run all tests",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "verbose"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
     }
   ]
 }
-
