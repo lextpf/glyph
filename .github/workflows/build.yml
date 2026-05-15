@@ -18,7 +18,7 @@ jobs:
 
       - name: Format check (clang-format)
         run: |
-          clang-format --dry-run --Werror src/*.cpp src/*.h
+          clang-format --dry-run --Werror src/*.cpp src/*.hpp
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
@@ -26,13 +26,29 @@ jobs:
           vcpkgGitCommitId: edffab1bcd2cb5b8c17d6ba34d5651ea0bf82979
 
       - name: Configure CMake
-        run: cmake --preset vs2022-windows
+        run: cmake --preset ci-windows
 
       - name: Build
-        run: cmake --build build --config Release -- /m
+        run: cmake --build --preset ci-windows-release
+
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          $stage = "artifact/SKSE/Plugins"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "build/Release/glyph.dll" $stage
+          if (Test-Path "build/Release/glyph.pdb") {
+            Copy-Item "build/Release/glyph.pdb" $stage
+          } else {
+            Write-Host "::warning::glyph.pdb not produced - symbols will not be in the artifact"
+          }
+          Get-ChildItem -Recurse $stage | Select-Object FullName, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: glyph
-          path: build/Release/glyph.dll
+          name: glyph-${{ github.sha }}
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
