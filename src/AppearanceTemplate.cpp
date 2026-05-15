@@ -1,6 +1,6 @@
-#include "AppearanceTemplateInternal.h"
+#include "AppearanceTemplateInternal.hpp"
 
-#include "OutfitCopy.h"
+#include "OutfitCopy.hpp"
 
 #include <atomic>
 
@@ -199,9 +199,20 @@ static void ApplyOutfitFromTemplate(RE::TESNPC* templateNPC, bool copyOutfit)
     auto* spawnedActor = spawned->As<RE::Actor>();
     if (spawnedActor)
     {
-        // Move below ground to prevent visibility and interaction during wait frames.
-        // Using SetPosition rather than Disable() because the actor needs to finish
-        // initializing its default outfit for GetInventory() to work during outfit copy.
+        // @author Codex (https://github.com/codex)
+        // The temporary actor MUST stay enabled for ~5 frames so the engine
+        // runs its default outfit equip pipeline (Bethesda's outfit system
+        // populates the actor's inventory asynchronously after spawn).
+        // Disable()-ing immediately leaves the inventory empty, which makes
+        // GetInventory() during the subsequent OutfitCopy::CopyOutfitBetweenActors
+        // return nothing - exactly the bug this hack is here to dodge.
+        //
+        // Hiding the actor in the meantime: we sink it 10000 units below the
+        // floor. Skyrim's draw-distance culling, audio falloff, and the
+        // player's interaction raycast all reject it at that depth, so the
+        // 5-frame window is invisible to the player. We deliberately do NOT
+        // use a no-collision flag here - the engine bypasses outfit equip
+        // for some no-collision states.
         auto pos = spawnedActor->GetPosition();
         pos.z -= 10000.0f;
         spawnedActor->SetPosition(pos, false);
@@ -354,6 +365,26 @@ void SetPendingAppearanceApply()
     s_applyAttempts.store(0);
 }
 
+// @author Claude (https://github.com/claude)
+// The SKSE load-game messages (`kPostLoadGame` / `kNewGame`) fire long
+// before the player is *visually* ready: the cell is still attaching, the
+// player's 3D may not be loaded, the Race / Fader menus may still be
+// active, and any tint / FaceGen swap done during that window flickers or
+// gets clobbered by the game's own initialization. There is no clean SKSE
+// event for "player is fully done loading", so we poll instead.
+//
+// Two counters cooperate:
+//
+//   s_checkCount  - total polls since the apply was requested (used only
+//                   for diagnostic logging cadence).
+//   s_readyStreak - consecutive polls in which the readiness predicate
+//                   has been TRUE. Reset to 0 on any FALSE reading; this
+//                   debounces transient unloads (e.g. a one-frame menu).
+//
+// The 120-frame stable streak (~2 s at 60 fps) is the empirical minimum
+// where outfit / FaceGen copies stick reliably across fade-in. Lower
+// values caused intermittent FaceGen reverts when the engine re-applied
+// the player's default tint a few frames into the load.
 void CheckPendingAppearanceTemplate()
 {
     static std::atomic<bool> loggedOnce{false};
