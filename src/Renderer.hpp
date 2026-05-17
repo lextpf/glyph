@@ -164,4 +164,19 @@ bool IsOverlayAllowedRT();
  * @return The new enabled state (true = enabled, false = disabled).
  */
 bool ToggleEnabled();
+
+/**
+ * Set the nameplate rendering state to a specific value.  Equivalent to the
+ * user-facing on/off toggle but with an absolute target instead of an XOR.
+ *
+ * @param enabled  New enabled state.
+ */
+void SetEnabled(bool enabled);
+
+/**
+ * Returns the current manual-enabled state (true if the user has not turned
+ * rendering off via console or hot-reload key).  Independent of game-state
+ * gating that may still suppress drawing for other reasons.
+ */
+bool IsEnabled();
 }  // namespace Renderer
