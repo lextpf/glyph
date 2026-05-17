@@ -4,10 +4,13 @@
 
 #include "AppearanceTemplate.hpp"
 #include "GameState.hpp"
+#include "Occlusion.hpp"
 #include "ParticleTextures.hpp"
 #include "TextPostProcess.hpp"
 
 #include <SKSE/SKSE.h>
+
+#include <cmath>
 
 namespace Renderer
 {
@@ -52,6 +55,16 @@ bool ToggleEnabled()
     {
     }
     return !expected;
+}
+
+void SetEnabled(bool enabled)
+{
+    GetState().manualEnabled.store(enabled, std::memory_order_release);
+}
+
+bool IsEnabled()
+{
+    return GetState().manualEnabled.load(std::memory_order_acquire);
 }
 
 // ============================================================================
@@ -322,7 +335,8 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
 static void DrawLabel(const ActorDrawData& d,
                       ImDrawList* drawList,
                       ImDrawListSplitter* splitter,
-                      const RenderSettingsSnapshot& snap)
+                      const RenderSettingsSnapshot& snap,
+                      uint32_t focusedFormID)
 {
     auto it = GetState().cache.find(d.formID);
     if (it == GetState().cache.end())
@@ -431,8 +445,29 @@ static void DrawLabel(const ActorDrawData& d,
         }
     }
 
+    // Focus-target state: drive a per-actor focusSmooth in [0,1] and use it
+    // to dim ambient (non-focused) actors and fade in the title/info rows
+    // for the focused actor.  Player is exempt -- always rendered as if
+    // "focused" so the player nameplate retains full alpha and full content.
+    const bool isFocused = snap.focus.Enabled && d.formID == focusedFormID && !d.isPlayer;
+    const bool focusAppliesToActor = snap.focus.Enabled && !d.isPlayer;
+    const float focusTarget = focusAppliesToActor ? (isFocused ? 1.0f : .0f) : 1.0f;
+    if (snap.focus.SettleTime <= .0f)
+    {
+        entry.focusSmooth = focusTarget;
+    }
+    else
+    {
+        entry.focusSmooth +=
+            (focusTarget - entry.focusSmooth) * ExpApproachAlpha(dt, snap.focus.SettleTime);
+    }
+    const float mainAlphaMul = !focusAppliesToActor
+                                   ? 1.0f
+                                   : snap.focus.AmbientDimFactor +
+                                         (1.0f - snap.focus.AmbientDimFactor) * entry.focusSmooth;
+
     // Cull off-screen labels
-    const float alpha = entry.alphaSmooth * entry.occlusionSmooth * entranceAlphaMul;
+    const float alpha = entry.alphaSmooth * entry.occlusionSmooth * entranceAlphaMul * mainAlphaMul;
     const float textSizeScale = entry.textSizeScale * entranceScaleMul;
 
     auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -463,6 +498,13 @@ static void DrawLabel(const ActorDrawData& d,
     style.levelOutlineWidth = style.CalcOutlineWidth(levelFont->FontSize * textSizeScale, snap);
     style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale, snap);
     style.outlineWidth = style.nameOutlineWidth;
+
+    // Fade title and info rows to zero on ambient (non-focused) actors so
+    // only the main line remains.  Crossfades on focus transitions via the
+    // same focusSmooth that drives the main-alpha dim.
+    const float auxAlphaMul = focusAppliesToActor ? entry.focusSmooth : 1.0f;
+    style.titleAlpha *= auxAlphaMul;
+    style.infoAlphaMul = auxAlphaMul;
 
     LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap);
 
@@ -571,6 +613,7 @@ static void DrawLabel(const ActorDrawData& d,
         drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap.fastOutlines, snap);
     DrawTitleText(drawList, d, style, layout, df.lodTitleFactor, splitter, snap.fastOutlines, snap);
     DrawMainLineSegments(drawList, d, style, layout, splitter, snap.fastOutlines, snap);
+    DrawInfoLineSegments(drawList, d, style, layout, splitter, snap.fastOutlines, snap);
 }
 
 // ============================================================================
@@ -665,11 +708,9 @@ static void HandleHotReload()
         return;
     }
 
-    // Use seq_cst to ensure the pause flag is globally visible before we
-    // re-check for in-flight updates.  A release/acquire pair alone is
-    // insufficient here because the store and loads target different
-    // atomic variables, so no happens-before is established between them
-    // on weakly-ordered architectures.
+    // seq_cst: the pause-flag store and the in-flight loads target *different*
+    // atomics, so a release/acquire pair alone establishes no happens-before
+    // on weakly-ordered archs. seq_cst gives the global ordering we need.
     GetState().pauseSnapshotUpdates.store(true, std::memory_order_seq_cst);
     const bool queuedAfterPause = GetState().updateQueued.load(std::memory_order_seq_cst);
     const bool runningAfterPause = GetState().snapshotUpdateRunning.load(std::memory_order_seq_cst);
@@ -763,6 +804,92 @@ static void UpdateDebugStats(const std::vector<ActorDrawData>& snap)
         }
     }
     ++GetState().updateCounter;
+}
+
+// ============================================================================
+// Focus-target selection
+// ============================================================================
+
+// Pick the formID of the actor whose direction from the camera lies inside the
+// configured cone with the smallest angular offset. Returns 0 if nothing
+// qualifies (camera unavailable, cone empty, all candidates filtered).
+// Tiebreakers: smaller player distance, then smaller formID for determinism.
+// The player is never picked.
+uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
+                            const RenderSettingsSnapshot& snapSettings)
+{
+    if (!snapSettings.focus.Enabled || snap.empty())
+    {
+        return 0;
+    }
+
+    RE::NiPoint3 camPos{};
+    RE::NiPoint3 camFwd{};
+    if (!Occlusion::GetCameraInfo(camPos, camFwd))
+    {
+        return 0;
+    }
+
+    // Resolve max distance: 0 = reuse global MaxScanDistance from snapshot.
+    // (The snapshot already filters actors beyond MaxScanDistance, but
+    // FocusMaxDistance can shrink the cone further.)
+    const float focusMaxDist =
+        snapSettings.focus.MaxDistance > .0f ? snapSettings.focus.MaxDistance : 1e9f;
+    const float maxDistSq = focusMaxDist * focusMaxDist;
+
+    constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+    const float coneRadians = snapSettings.focus.ConeAngleDegrees * kDegToRad;
+    const float cosMinDot = std::cos(coneRadians);
+
+    uint32_t bestID = 0;
+    float bestDot = -2.0f;  // Higher dot = closer to forward (1.0 = perfect)
+    float bestDist = std::numeric_limits<float>::infinity();
+
+    for (const auto& d : snap)
+    {
+        if (d.isPlayer)
+        {
+            continue;  // Player is never the focus target.
+        }
+        if (snapSettings.focus.IgnoreOccluded && d.isOccluded)
+        {
+            continue;
+        }
+
+        RE::NiPoint3 toActor = d.worldPos - camPos;
+        const float len = toActor.Length();
+        if (len < 1.0f)
+        {
+            continue;  // Coincident with camera; skip to avoid divide-by-zero.
+        }
+        if (len * len > maxDistSq)
+        {
+            continue;
+        }
+
+        const float invLen = 1.0f / len;
+        toActor.x *= invLen;
+        toActor.y *= invLen;
+        toActor.z *= invLen;
+
+        const float dot = toActor.x * camFwd.x + toActor.y * camFwd.y + toActor.z * camFwd.z;
+        if (dot < cosMinDot)
+        {
+            continue;  // Outside cone.
+        }
+
+        // Higher dot wins; ties broken by closer-to-player; then formID.
+        const bool better = dot > bestDot || (dot == bestDot && d.distToPlayer < bestDist) ||
+                            (dot == bestDot && d.distToPlayer == bestDist && d.formID < bestID);
+        if (better)
+        {
+            bestDot = dot;
+            bestDist = d.distToPlayer;
+            bestID = d.formID;
+        }
+    }
+
+    return bestID;
 }
 
 // ============================================================================
@@ -864,11 +991,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.titleShadowOffsetY = so.TitleShadowOffsetY;
     snap.mainShadowOffsetX = so.MainShadowOffsetX;
     snap.mainShadowOffsetY = so.MainShadowOffsetY;
-    snap.segmentPadding = so.SegmentPadding;
     snap.fastOutlines = so.FastOutlines;
-    snap.titleMainGap = so.TitleMainGap;
-    snap.outlineMinScale = so.OutlineMinScale;
-    snap.proportionalSpacing = so.ProportionalSpacing;
     snap.enableOutlineGlow = so.OutlineGlowEnabled;
     snap.outlineGlowScale = so.OutlineGlowScale;
     snap.outlineGlowAlpha = so.OutlineGlowAlpha;
@@ -923,12 +1046,6 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     const auto& part = Settings::Particle();
     snap.enableParticleAura = part.Enabled;
     snap.useParticleTextures = part.UseParticleTextures;
-    snap.enableStars = part.EnableStars;
-    snap.enableSparks = part.EnableSparks;
-    snap.enableWisps = part.EnableWisps;
-    snap.enableRunes = part.EnableRunes;
-    snap.enableOrbs = part.EnableOrbs;
-    snap.enableCrystals = part.EnableCrystals;
     snap.particleCount = part.Count;
     snap.particleSize = part.Size;
     snap.particleSpeed = part.Speed;
@@ -937,14 +1054,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.particleBlendMode = part.BlendMode;
 
     const auto& ac = Settings::AnimColor();
-    snap.animSpeedLowTier = ac.AnimSpeedLowTier;
-    snap.animSpeedMidTier = ac.AnimSpeedMidTier;
-    snap.animSpeedHighTier = ac.AnimSpeedHighTier;
     snap.nameColorMix = ac.NameColorMix;
-    snap.effectAlphaMin = ac.EffectAlphaMin;
-    snap.effectAlphaMax = ac.EffectAlphaMax;
-    snap.strengthMin = ac.StrengthMin;
-    snap.strengthMax = ac.StrengthMax;
     snap.tierVibrancyBoost = ac.TierVibrancyBoost;
     snap.innerTextAlpha = ac.InnerTextAlpha;
     snap.outlineAlpha = ac.OutlineAlpha;
@@ -966,7 +1076,28 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.tiers = Settings::Tiers();
     snap.titleFormat = Settings::TitleFormat();
     snap.displayFormat = Settings::DisplayFormat();
+    snap.infoFormat = Settings::InfoFormat();
     snap.specialTitles = Settings::SpecialTitles();
+
+    // Contextual label tokens + classification thresholds.
+    const auto& lb = Settings::Labels();
+    snap.labels.relFollower = lb.RelationshipFollower;
+    snap.labels.relAlly = lb.RelationshipAlly;
+    snap.labels.relNeutral = lb.RelationshipNeutral;
+    snap.labels.relHostile = lb.RelationshipHostile;
+    snap.labels.ldWeak = lb.LevelDeltaWeak;
+    snap.labels.ldEven = lb.LevelDeltaEven;
+    snap.labels.ldStrong = lb.LevelDeltaStrong;
+    snap.labels.ldDeadly = lb.LevelDeltaDeadly;
+    snap.labels.ctNPC = lb.CreatureTypeNPC;
+    snap.labels.ctBeast = lb.CreatureTypeBeast;
+    snap.labels.ctUndead = lb.CreatureTypeUndead;
+    snap.labels.ctDaedra = lb.CreatureTypeDaedra;
+    snap.labels.ctDragon = lb.CreatureTypeDragon;
+    snap.labels.deltaWeakBelow = lb.WeakAtOrBelow;
+    snap.labels.deltaStrongAbove = lb.StrongAtOrAbove;
+    snap.labels.deltaDeadlyAbove = lb.DeadlyAtOrAbove;
+    snap.focus = Settings::Focus();
 
     return snap;
 }
@@ -1074,6 +1205,8 @@ void Draw()
         ResolveOverlaps(localSnap, snap);
     }
 
+    const uint32_t focusedFormID = SelectFocusedActor(localSnap, snap);
+
     // 3-channel splitter: [0]=glow capture/backplate, [1]=particles, [2]=text+shadow+outline
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const bool gpuDivide = snap.glowDivideStrength > .0f && TextPostProcess::IsInitialized();
@@ -1097,7 +1230,7 @@ void Draw()
 
     for (auto& d : localSnap)
     {
-        DrawLabel(d, drawList, &splitter, snap);
+        DrawLabel(d, drawList, &splitter, snap, focusedFormID);
     }
 
     if (gpuGlow)
@@ -1125,11 +1258,11 @@ void Draw()
 
 void TickRT()
 {
-    // Must queue snapshot updates here, not only in Draw().  Draw() is only
-    // called when shouldRenderOverlay is true, but allowOverlay (which gates
-    // shouldRenderOverlay) is set by UpdateSnapshot_GameThread.  Without this
-    // call the overlay can never bootstrap: allowOverlay stays false because
-    // the snapshot update is never scheduled.
+    // Must queue snapshot updates here too, not just in Draw(): Draw() runs only
+    // when shouldRenderOverlay is true, but allowOverlay (which gates that
+    // flag) is set inside UpdateSnapshot_GameThread. Without this call the
+    // overlay never bootstraps -- allowOverlay stays false because the
+    // snapshot update is never scheduled.
     QueueSnapshotUpdate_RenderThread();
 }
 }  // namespace Renderer
