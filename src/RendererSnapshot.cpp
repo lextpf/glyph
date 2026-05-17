@@ -155,22 +155,18 @@ static Disposition GetDisposition(RE::Actor* a, RE::Actor* player)
 }
 
 // @author Claude (https://github.com/claude)
-// Check whether an actor is a humanoid NPC (as opposed to a creature/animal).
+// Check whether an actor is a humanoid NPC (vs creature / animal).
 //
-// The authoritative signal is the `ActorTypeNPC` keyword (Skyrim.esm
-// FormID 0x13794). We look it up once lazily and cache it, because the
-// data handler is not guaranteed to be ready at plugin load time but is
-// always ready by the time the renderer is asking about live actors.
+// Authoritative signal: the ActorTypeNPC keyword (Skyrim.esm 0x13794),
+// looked up lazily and cached -- the data handler isn't guaranteed to be
+// ready at plugin load, but always is by the time the renderer is asking
+// about live actors.
 //
-// We probe the keyword in three places, in this order, because mods
-// disagree about where they tag NPC-ness:
-//
-//   1. Actor instance keywords - some scripts inject the tag at runtime.
-//   2. Actor base (TESNPC) keywords - the most common author location.
-//   3. Race keywords - vanilla Bethesda content tags it here.
-//
-// If none of those match, the actor is treated as a creature and
-// HideCreatures will filter it out.
+// Mods disagree on where they tag NPC-ness, so probe three places in order:
+//   1. Actor instance keywords  - some scripts inject the tag at runtime.
+//   2. Actor base (TESNPC)      - the most common author location.
+//   3. Race keywords            - vanilla Bethesda content tags it here.
+// If none match, treat as creature and let HideCreatures filter it out.
 static bool IsHumanoidNPC(RE::Actor* actor)
 {
     if (!actor)
@@ -222,6 +218,55 @@ static bool IsHumanoidNPC(RE::Actor* actor)
     return actor->IsPlayerTeammate() || actor->CanTalkToPlayer();
 }
 
+// Map an actor-vs-player level delta to a bucket using INI thresholds.
+// Strictly ordered: Weak < Strong < Deadly (validated in Settings::ClampAndValidate).
+static LevelDelta ClassifyDelta(
+    int actorLv, int playerLv, int weakAtOrBelow, int strongAtOrAbove, int deadlyAtOrAbove)
+{
+    const int delta = actorLv - playerLv;
+    if (delta >= deadlyAtOrAbove)
+    {
+        return LevelDelta::Deadly;
+    }
+    if (delta >= strongAtOrAbove)
+    {
+        return LevelDelta::Strong;
+    }
+    if (delta <= weakAtOrBelow)
+    {
+        return LevelDelta::Weak;
+    }
+    return LevelDelta::Even;
+}
+
+// Coarse creature classification via `ActorTypeX` keywords.
+// Probe most-specific-first because Dragon/Daedra often also carry the
+// generic ActorTypeCreature tag.
+static CreatureKind ClassifyCreature(RE::Actor* actor)
+{
+    if (!actor)
+    {
+        return CreatureKind::NPC;
+    }
+    if (actor->HasKeywordString("ActorTypeDragon"))
+    {
+        return CreatureKind::Dragon;
+    }
+    if (actor->HasKeywordString("ActorTypeDaedra"))
+    {
+        return CreatureKind::Daedra;
+    }
+    if (actor->HasKeywordString("ActorTypeUndead"))
+    {
+        return CreatureKind::Undead;
+    }
+    if (actor->HasKeywordString("ActorTypeCreature") || actor->HasKeywordString("ActorTypeAnimal"))
+    {
+        return CreatureKind::Beast;
+    }
+    return CreatureKind::NPC;
+}
+
 // Check occlusion for an actor, using game-thread-local cached results.
 static void UpdateOcclusionForActor(ActorDrawData& d,
                                     RE::Actor* a,
@@ -247,17 +292,15 @@ static void UpdateOcclusionForActor(ActorDrawData& d,
 }
 
 // @author Claude (https://github.com/claude)
-// `UpdateSnapshot_GameThread()` runs *only* on the game thread (scheduled
-// via SKSE::GetTaskInterface()) because CommonLibSSE's `RE::*` types -
-// ProcessLists, Actor, TESDataHandler - are not safe to touch from the
-// render thread.
+// Runs *only* on the game thread (scheduled via SKSE::GetTaskInterface()):
+// CommonLibSSE's RE::* types (ProcessLists, Actor, TESDataHandler) aren't
+// render-thread safe.
 //
-// The render thread never reads these types directly. Instead it reads a
-// plain-old-data `std::vector<ActorDrawData>` snapshot under
-// `snapshotLock`. Everything the renderer needs (FormID, name, world
-// position, level, disposition, occlusion result) is precomputed here
-// so the render-thread copy can run without any further game-thread
-// trips.
+// The render thread never touches RE::* directly; it reads a plain-old-data
+// std::vector<ActorDrawData> snapshot under snapshotLock. Everything the
+// renderer needs (FormID, name, world position, level, disposition,
+// occlusion result) is precomputed here so the render-thread copy needs no
+// further game-thread trips.
 void UpdateSnapshot_GameThread()
 {
     // RAII guard to ensure flags are cleared when this task exits.
@@ -314,6 +357,13 @@ void UpdateSnapshot_GameThread()
         static_cast<uint32_t>(std::max(1, Settings::Occlusion().CheckInterval));
     const uint32_t snapshotFrame = ++GetSnapshotState().frame;
 
+    // Snapshot level-delta thresholds once; used for every actor classification.
+    const auto& labelSettings = Settings::Labels();
+    const int playerLevel = static_cast<int>(player->GetLevel());
+    const int weakBelow = labelSettings.WeakAtOrBelow;
+    const int strongAbove = labelSettings.StrongAtOrAbove;
+    const int deadlyAbove = labelSettings.DeadlyAtOrAbove;
+
     std::vector<ActorDrawData> tempBuf;
     tempBuf.reserve(MAX_ACTORS);
     std::unordered_set<uint32_t> seenFormIDs;
@@ -340,6 +390,10 @@ void UpdateSnapshot_GameThread()
         d.worldPos.z += player->GetHeight() + Settings::Display().VerticalOffset;
         d.distToPlayer = .0f;
         d.isPlayer = true;
+        // Player has no meaningful "relation to self" -- pick stable defaults.
+        d.relationship = RelationshipKind::Follower;
+        d.levelDelta = LevelDelta::Even;
+        d.creatureKind = CreatureKind::NPC;
         tempBuf.push_back(std::move(d));
         seenFormIDs.insert(player->GetFormID());
     }
@@ -384,8 +438,23 @@ void UpdateSnapshot_GameThread()
         d.worldPos = a->GetPosition();
         d.worldPos.z += a->GetHeight() + Settings::Display().VerticalOffset;
         d.distToPlayer = std::sqrt(distSq);
-        d.dispo = GetDisposition(a, player);
         d.isPlayer = false;
+
+        // Consolidated disposition + relationship derivation -- share the underlying
+        // RE:: calls so each fires once per actor instead of twice.
+        const bool hostile = a->IsHostileToActor(player);
+        const bool teammate = a->IsPlayerTeammate();
+        const bool canTalk = !hostile && !teammate && a->CanTalkToPlayer();
+        d.dispo = hostile                 ? Disposition::Enemy
+                  : (teammate || canTalk) ? Disposition::AllyOrFriend
+                                          : Disposition::Neutral;
+        d.relationship = hostile    ? RelationshipKind::Hostile
+                         : teammate ? RelationshipKind::Follower
+                         : canTalk  ? RelationshipKind::Ally
+                                    : RelationshipKind::Neutral;
+        d.levelDelta = ClassifyDelta(
+            static_cast<int>(d.level), playerLevel, weakBelow, strongAbove, deadlyAbove);
+        d.creatureKind = ClassifyCreature(a);
 
         candidates.push_back(std::move(candidate));
     }
