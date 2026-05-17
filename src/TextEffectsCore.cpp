@@ -292,15 +292,9 @@ bool TextVertexSetup::Begin(TextVertexSetup& out,
 
 ImVec4 HSVtoRGB(float h, float s, float v, float a)
 {
-    // Convert HSV (Hue, Saturation, Value) to RGB
-    // h = hue [0, 1], wraps around
-    // s = saturation [0, 1], 0 = grayscale, 1 = full color
-    // v = value [0, 1], 0 = black, 1 = bright
-    // a = alpha [0, 1]
+    h = Frac(h);  // wrap hue to [0, 1]
 
-    h = Frac(h);  // Wrap hue to [0, 1]
-
-    // HSV to RGB conversion using standard algorithm
+    // Standard HSV-to-RGB conversion.
     const float c = v * s;  // Chroma
     const float x = c * (1.0f - std::fabs(Frac(h * 6.0f) * 2.0f - 1.0f));
     const float m = v - c;  // Match value
