@@ -81,7 +81,8 @@
       "configuration": "Release",
       "targets": [
         "glyph_test_utils",
-        "glyph_test_settings"
+        "glyph_test_settings",
+        "glyph_test_label_format"
       ]
     },
     {
@@ -100,7 +101,8 @@
       "configuration": "Release",
       "targets": [
         "glyph_test_utils",
-        "glyph_test_settings"
+        "glyph_test_settings",
+        "glyph_test_label_format"
       ],
       "nativeToolOptions": [
         "/m"
