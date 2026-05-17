@@ -14,14 +14,38 @@
 namespace AppearanceTemplate
 {
 /**
+ * @namespace AppearanceTemplate
  * @brief Internal state and helpers for the AppearanceTemplate module.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup AppearanceTemplate
  *
- * ## Thread Safety
+ * Companion to AppearanceTemplate.hpp. The public header defines what
+ * the module does; this header defines the shared mutable state and
+ * the synchronization contract that the .cpp files agree to.
  *
- * - `GetState()`, `IsAppliedState()`, `SetAppliedState()`, `SetTemplateStateInfo()`:
- *   All acquire `GetStateMutex()` internally; safe to call from any thread.
- * - `s_applyInProgress`: Atomic; used as a CAS guard by `ApplyIfConfigured()`.
- * - `ApplyConfig`: Immutable after construction; no synchronization needed.
+ * ## :material-shield-lock: Thread Safety Contract
+ *
+ * | Item                           | Synchronization                        |
+ * |--------------------------------|----------------------------------------|
+ * | GetState()                     | Caller must hold GetStateMutex()       |
+ * | IsAppliedState() (and setters) | Acquires GetStateMutex() internally    |
+ * | s_applyInProgress              | Atomic CAS guard, no mutex needed      |
+ * | ApplyConfig                    | Immutable snapshot, copy-by-value safe |
+ *
+ * ## :material-code-tags: Reading State Safely
+ *
+ * ```cpp
+ * // From any thread, when you need both fields atomically:
+ * std::lock_guard lock(AppearanceTemplate::GetStateMutex());
+ * const auto& st = AppearanceTemplate::GetState();
+ * if (st.applied)
+ * {
+ *     logger::info("template: {}:{:08X}", st.plugin, st.formID);
+ * }
+ * ```
+ *
+ * Use the convenience accessors (`IsAppliedState()` etc.) for single-field
+ * reads -- they take the lock internally.
  */
 
 /**
@@ -80,20 +104,21 @@ void SetTemplateStateInfo(const std::string& plugin, RE::FormID formID);
 extern std::atomic<bool> s_applyInProgress;
 
 /**
- * @brief Immutable snapshot of appearance settings.
+ * @brief Immutable snapshot of `[Appearance]` settings.
  *
  * Captured at the start of ApplyIfConfigured() so the apply operation
- * does not re-read Settings mid-flight.
+ * does not re-read Settings mid-flight (avoids partial reads during
+ * hot reload).
  */
 struct ApplyConfig
 {
-    bool useTemplateAppearance = false;
-    std::string templateFormID;
-    std::string templatePlugin;
-    bool templateIncludeRace = false;
-    bool templateIncludeBody = false;
-    bool templateCopyFaceGen = false;
-    bool templateCopyOutfit = false;
+    bool useTemplateAppearance = false;  ///< `UseTemplateAppearance` flag.
+    std::string templateFormID;        ///< Hex string; resolved to RE::FormID after plugin lookup.
+    std::string templatePlugin;        ///< Plugin filename (e.g. "Inigo.esp").
+    bool templateIncludeRace = false;  ///< Copy template race (required for cross-race templates).
+    bool templateIncludeBody = false;  ///< Copy height in addition to face.
+    bool templateCopyFaceGen = false;  ///< Copy FaceGen NIF/tint files from disk.
+    bool templateCopyOutfit = false;   ///< Equip the template's worn armor on the player.
 };
 
 }  // namespace AppearanceTemplate
