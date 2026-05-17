@@ -4,13 +4,12 @@
 #include <vector>
 
 // Head part arrays and tint layers allocated via RE::calloc() are tracked in
-// OwnedHeadPartArrays() and OwnedTintLayers() respectively. Only pointers
-// present in these sets are freed by this code. Engine-owned pointers (the
-// original arrays) are never freed to avoid corrupting game state.
+// OwnedHeadPartArrays() / OwnedTintLayers(); only tracked pointers are freed.
+// Engine-owned pointers (the original arrays) are never freed.
 //
-// Invariant: Before mutating playerBase->headParts or tintLayers, the NEW
-// allocation is inserted into the tracking set FIRST. Only then is the old
-// pointer checked against the set and conditionally freed.
+// Invariant: before mutating playerBase->headParts or tintLayers, insert the
+// NEW allocation into the tracking set FIRST; only then check the old pointer
+// against the set and conditionally free it.
 
 namespace AppearanceTemplate
 {
@@ -114,13 +113,11 @@ bool CopyHeadParts(RE::TESNPC* templateNPC, RE::TESNPC* playerBase)
             "memory (safety over potential invalid free)");
     }
 
-    // For the attachment-style categories, also go through the engine swap
-    // path so the live NPC state tracks the copied parts immediately.
-    //
-    // Do not live-swap the face part here. The face mesh is rebuilt later via
-    // RegenerateHead()/DoReset3D() and may also be driven by faceNPC when
-    // FaceGen is active. Swapping the face part eagerly can leave custom heads
-    // such as High Poly Head in a mixed state.
+    // Live-swap attachment-style categories so NPC state tracks copied parts
+    // immediately. Do NOT live-swap the face part: it's rebuilt later via
+    // RegenerateHead() / DoReset3D() and may be driven by faceNPC under
+    // FaceGen. Eager swap can leave custom heads (e.g. High Poly Head) in a
+    // mixed state.
     for (uint8_t i = 0; i < templateNPC->numHeadParts; ++i)
     {
         auto* part = templateNPC->headParts[i];
