@@ -339,9 +339,9 @@ struct ComScope
 
 // ============ Procedural Texture Generation ============
 //
-// Generates clean, white-on-transparent particle sprites at runtime.
-// These are 256x256 with mathematically defined alpha for perfect edges.
-// White base enables proper tier color tinting via vertex color multiplication.
+// 256x256 white-on-transparent particle sprites with mathematically defined
+// alpha for clean edges. White base allows tier-color tinting via vertex
+// color multiplication.
 
 static constexpr int PROC_SIZE = 256;
 static constexpr float PROC_PI = 3.14159265f;
