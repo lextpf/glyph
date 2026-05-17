@@ -3,6 +3,7 @@
 #include "OutfitCopy.hpp"
 
 #include <atomic>
+#include <format>
 
 namespace AppearanceTemplate
 {
@@ -54,6 +55,22 @@ void ResetAppliedFlag()
 {
     SetAppliedState(false);
     logger::info("AppearanceTemplate: Applied flag reset");
+}
+
+bool IsApplied()
+{
+    return IsAppliedState();
+}
+
+std::string AppliedTargetDescription()
+{
+    std::lock_guard<std::mutex> lock(GetStateMutex());
+    const auto& state = GetState();
+    if (!state.applied || state.plugin.empty() || state.formID == 0)
+    {
+        return {};
+    }
+    return std::format("{}:0x{:08X}", state.plugin, state.formID);
 }
 
 // Stubs for overlay interface functions
@@ -200,19 +217,17 @@ static void ApplyOutfitFromTemplate(RE::TESNPC* templateNPC, bool copyOutfit)
     if (spawnedActor)
     {
         // @author Codex (https://github.com/codex)
-        // The temporary actor MUST stay enabled for ~5 frames so the engine
-        // runs its default outfit equip pipeline (Bethesda's outfit system
-        // populates the actor's inventory asynchronously after spawn).
-        // Disable()-ing immediately leaves the inventory empty, which makes
-        // GetInventory() during the subsequent OutfitCopy::CopyOutfitBetweenActors
-        // return nothing - exactly the bug this hack is here to dodge.
+        // The temp actor must stay enabled ~5 frames so the engine's default
+        // outfit pipeline (async, runs post-spawn) populates inventory.
+        // Disable()-ing immediately leaves it empty, so the later
+        // OutfitCopy::CopyOutfitBetweenActors finds nothing -- the bug this
+        // workaround dodges.
         //
-        // Hiding the actor in the meantime: we sink it 10000 units below the
-        // floor. Skyrim's draw-distance culling, audio falloff, and the
-        // player's interaction raycast all reject it at that depth, so the
-        // 5-frame window is invisible to the player. We deliberately do NOT
-        // use a no-collision flag here - the engine bypasses outfit equip
-        // for some no-collision states.
+        // Hide the actor by sinking it 10000 units below the floor: draw-
+        // distance culling, audio falloff, and the player's interaction
+        // raycast all reject it at that depth. Do NOT use a no-collision
+        // flag here -- the engine bypasses outfit equip for some
+        // no-collision states.
         auto pos = spawnedActor->GetPosition();
         pos.z -= 10000.0f;
         spawnedActor->SetPosition(pos, false);
@@ -229,9 +244,28 @@ static void ApplyOutfitFromTemplate(RE::TESNPC* templateNPC, bool copyOutfit)
     }
 }
 
-static ApplyResult ApplyIfConfiguredInternal()
+// Snapshot the [Appearance] section into an immutable ApplyConfig.
+// Used by both the auto-apply flow and the console-triggered manual apply.
+static ApplyConfig BuildConfigFromSettings()
 {
-    if (IsAppliedState())
+    ApplyConfig cfg;
+    const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+    const auto& app = Settings::Appearance();
+    cfg.useTemplateAppearance = app.UseTemplateAppearance;
+    cfg.templateFormID = app.TemplateFormID;
+    cfg.templatePlugin = app.TemplatePlugin;
+    cfg.templateIncludeRace = app.TemplateIncludeRace;
+    cfg.templateIncludeBody = app.TemplateIncludeBody;
+    cfg.templateCopyFaceGen = app.TemplateCopyFaceGen;
+    cfg.templateCopyOutfit = app.TemplateCopyOutfit;
+    return cfg;
+}
+
+// Core apply pipeline. forceApply=true bypasses the "already applied" and
+// "feature enabled in INI" gates so manual console-driven applies always run.
+static ApplyResult ApplyTemplateCore(const ApplyConfig& cfg, bool forceApply)
+{
+    if (!forceApply && IsAppliedState())
     {
         logger::debug("AppearanceTemplate: Already applied this session");
         return ApplyResult::Applied;
@@ -248,27 +282,14 @@ static ApplyResult ApplyIfConfiguredInternal()
         ~ApplyScope() { s_applyInProgress.store(false, std::memory_order_release); }
     } applyScope;
 
-    ApplyConfig cfg;
-    {
-        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
-        const auto& app = Settings::Appearance();
-        cfg.useTemplateAppearance = app.UseTemplateAppearance;
-        cfg.templateFormID = app.TemplateFormID;
-        cfg.templatePlugin = app.TemplatePlugin;
-        cfg.templateIncludeRace = app.TemplateIncludeRace;
-        cfg.templateIncludeBody = app.TemplateIncludeBody;
-        cfg.templateCopyFaceGen = app.TemplateCopyFaceGen;
-        cfg.templateCopyOutfit = app.TemplateCopyOutfit;
-    }
-
-    if (!cfg.useTemplateAppearance)
+    if (!forceApply && !cfg.useTemplateAppearance)
     {
         logger::debug("AppearanceTemplate: Feature disabled in settings");
         return ApplyResult::PermanentFailure;
     }
     if (cfg.templateFormID.empty() || cfg.templatePlugin.empty())
     {
-        logger::warn("AppearanceTemplate: Enabled but no template configured");
+        logger::warn("AppearanceTemplate: No template configured (FormID/plugin empty)");
         return ApplyResult::PermanentFailure;
     }
 
@@ -349,7 +370,20 @@ static ApplyResult ApplyIfConfiguredInternal()
 
 bool ApplyIfConfigured()
 {
-    return ApplyIfConfiguredInternal() == ApplyResult::Applied;
+    return ApplyTemplateCore(BuildConfigFromSettings(), /*forceApply=*/false) ==
+           ApplyResult::Applied;
+}
+
+bool ApplyWithTarget(const std::string& formIdStr, const std::string& pluginName)
+{
+    ApplyConfig cfg = BuildConfigFromSettings();
+    cfg.templateFormID = formIdStr;
+    cfg.templatePlugin = pluginName;
+    // Force-apply: ignore the global feature toggle and any previous applied state
+    // so the console user can re-apply with a different target at any time.
+    cfg.useTemplateAppearance = true;
+    SetAppliedState(false);
+    return ApplyTemplateCore(cfg, /*forceApply=*/true) == ApplyResult::Applied;
 }
 
 static std::atomic<bool> s_pendingAppearanceApply{false};
@@ -366,25 +400,22 @@ void SetPendingAppearanceApply()
 }
 
 // @author Claude (https://github.com/claude)
-// The SKSE load-game messages (`kPostLoadGame` / `kNewGame`) fire long
-// before the player is *visually* ready: the cell is still attaching, the
-// player's 3D may not be loaded, the Race / Fader menus may still be
-// active, and any tint / FaceGen swap done during that window flickers or
-// gets clobbered by the game's own initialization. There is no clean SKSE
-// event for "player is fully done loading", so we poll instead.
+// SKSE kPostLoadGame / kNewGame fire long before the player is *visually*
+// ready: cell still attaching, player 3D may be unloaded, Race / Fader menus
+// may be active, and tint / FaceGen swaps in that window flicker or get
+// clobbered by the engine's own init. No clean SKSE "fully loaded" event,
+// so we poll.
 //
-// Two counters cooperate:
+// Two counters:
+//   s_checkCount  - total polls since the apply was requested (diagnostic
+//                   logging cadence only).
+//   s_readyStreak - consecutive polls where the readiness predicate is TRUE;
+//                   reset on any FALSE to debounce transient unloads (e.g.
+//                   a one-frame menu).
 //
-//   s_checkCount  - total polls since the apply was requested (used only
-//                   for diagnostic logging cadence).
-//   s_readyStreak - consecutive polls in which the readiness predicate
-//                   has been TRUE. Reset to 0 on any FALSE reading; this
-//                   debounces transient unloads (e.g. a one-frame menu).
-//
-// The 120-frame stable streak (~2 s at 60 fps) is the empirical minimum
-// where outfit / FaceGen copies stick reliably across fade-in. Lower
-// values caused intermittent FaceGen reverts when the engine re-applied
-// the player's default tint a few frames into the load.
+// 120-frame stable streak (~2s at 60fps) is the empirical minimum where
+// outfit / FaceGen copies stick across fade-in. Lower values let the engine
+// re-apply the player's default tint a few frames in and revert FaceGen.
 void CheckPendingAppearanceTemplate()
 {
     static std::atomic<bool> loggedOnce{false};
@@ -475,7 +506,8 @@ void CheckPendingAppearanceTemplate()
                 []()
                 {
                     constexpr int MAX_RETRYABLE_ATTEMPTS = 6;
-                    ApplyResult result = ApplyIfConfiguredInternal();
+                    ApplyResult result =
+                        ApplyTemplateCore(BuildConfigFromSettings(), /*forceApply=*/false);
                     if (result == ApplyResult::RetryableFailure)
                     {
                         int attempts = s_applyAttempts.fetch_add(1) + 1;
@@ -506,7 +538,7 @@ void CheckPendingAppearanceTemplate()
         else
         {
             constexpr int MAX_RETRYABLE_ATTEMPTS = 6;
-            ApplyResult result = ApplyIfConfiguredInternal();
+            ApplyResult result = ApplyTemplateCore(BuildConfigFromSettings(), /*forceApply=*/false);
             if (result == ApplyResult::RetryableFailure)
             {
                 int attempts = s_applyAttempts.fetch_add(1) + 1;
