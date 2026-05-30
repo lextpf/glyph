@@ -1,10 +1,13 @@
 # Build output
-build/
+build/*
+!build/.gitkeep
 build-*/
 
 # Generated documentation
-docs/
-site/
+docs/*
+!docs/main.html
+site/*
+!site/.gitkeep
 
 # Python
 __pycache__/
