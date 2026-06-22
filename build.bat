@@ -56,7 +56,16 @@ where clang-tidy >nul 2>&1
 if errorlevel 1 (
     echo SKIP: clang-tidy not found in PATH
 ) else (
+    REM Regenerate the sidecar when missing OR when CMakeLists.txt is newer
+    REM (new/removed sources, new dependencies) -- a stale database makes
+    REM clang-tidy parse new files without include paths.
+    set CDB_REGEN=0
     if not exist "build-cdb\compile_commands.json" (
+        set CDB_REGEN=1
+    ) else (
+        for /f %%c in ('xcopy /L /D /Y CMakeLists.txt "build-cdb\compile_commands.json" ^| findstr /b /c:"1 "') do set CDB_REGEN=1
+    )
+    if !CDB_REGEN!==1 (
         echo   Generating compile_commands.json via Ninja sidecar...
         cmake --preset compile-db >nul
         if !ERRORLEVEL! neq 0 (
