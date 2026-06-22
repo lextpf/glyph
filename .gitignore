@@ -15,3 +15,7 @@ __pycache__/
 
 # Application assets
 assets/
+
+# Font Awesome Pro is licensed per-seat and must never enter the public repo
+Font Awesome*
+skse/plugins/glyph/duotone/
