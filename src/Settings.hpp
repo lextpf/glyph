@@ -261,9 +261,9 @@ struct TierDefinition
     std::optional<Color3>
         ornamentRightColor;  ///< Ornament gradient right (default: vivid title/highlight accent)
 
-    EffectParams titleEffect;  ///< Visual effect for title text (player only)
-    EffectParams nameEffect;   ///< Visual effect for name text (player only)
-    EffectParams levelEffect;  ///< Visual effect for level text (all actors)
+    EffectParams titleEffect;  ///< Visual effect for title text (player / special titles)
+    EffectParams nameEffect;   ///< Visual effect for name text (player / special titles)
+    EffectParams levelEffect;  ///< Visual effect for level text (player / special titles)
 
     std::string
         leftOrnaments;  ///< Left side ornament characters (e.g., "AC"), empty = no ornaments
@@ -366,6 +366,14 @@ struct ShadowOutlineSettings
     // Color tinting
     float OutlineColorTint = .0f;  ///< Tier-color tint for outlines 0-0.25
     float ShadowColorTint = .0f;   ///< Tier-color tint for shadows 0-0.25
+
+    // Soft directional drop-shadow (feathered; replaces the hard offset shadow)
+    bool SoftShadowEnabled = false;   ///< Use a soft directional shadow instead of a hard offset
+    float SoftShadowDistance = 4.0f;  ///< Offset distance along the cast angle (pixels)
+    float SoftShadowSoftness = 3.0f;  ///< Feather/blur radius of the shadow disc (pixels)
+    float SoftShadowOpacity = .8f;    ///< Peak shadow opacity multiplier 0-1
+    float SoftShadowAngle = 45.0f;    ///< Shadow cast direction in degrees (0=right, 90=down)
+    int SoftShadowSamples = 12;       ///< Feather sample count 4-24 (higher = smoother)
 };
 ShadowOutlineSettings& ShadowOutline();
 
@@ -418,20 +426,29 @@ OrnamentSettings& Ornament();
  *
  * @see ParticleSettings, TextEffects::DrawParticleAura
  */
+/// @note The ordinal is significant: it indexes the per-type sprite in
+/// `ParticleTextures` (each value maps to one PNG in
+/// `Data/SKSE/Plugins/glyph/particles/`). Keep this order in sync with the
+/// filename table in `ParticleTextures.cpp` and the generator table.
 enum class ParticleStyle
 {
-    Stars,    ///< Twinkling blue star points
-    Sparks,   ///< Fast, yellowish fire-like sparks
-    Wisps,    ///< Slow, ethereal wisps with pale/blue tint
-    Runes,    ///< Small magical rune symbols
-    Orbs,     ///< Soft glowing orbs
-    Crystals  ///< Geometric crystalline shapes
+    Firefly,        ///< Slow wandering glow that flickers in place
+    Rain,           ///< Fast downward streaks, wind-angled
+    Snow,           ///< Slow swaying flakes drifting down
+    Smoke,          ///< Rising, expanding, fading puffs
+    Spark,          ///< Buoyant fire embers rising from the text
+    Wisp,           ///< Serpentine ethereal trails
+    Leaf,           ///< Tumbling leaves falling with sway
+    Aurora,         ///< Wavy horizontal shimmer band
+    CherryBlossom,  ///< Drifting petals falling with a slow spin
+    Dust,           ///< Very slow floating motes
+    Mote            ///< Soft glowing motes that gently drift and pulse
 };
 
 /// Particle aura settings.
 ///
 /// Which particle styles actually render is determined per tier via
-/// `TierDefinition::particleTypes` (e.g. `ParticleTypes = Stars,Wisps`).
+/// `TierDefinition::particleTypes` (e.g. `ParticleTypes = Snow,Firefly`).
 /// `Enabled` is the master toggle; a tier with `ParticleTypes = None` (or
 /// empty) renders no particles regardless of this setting.
 struct ParticleSettings
@@ -439,11 +456,16 @@ struct ParticleSettings
     bool Enabled = true;              ///< Master enable for particle aura
     bool UseParticleTextures = true;  ///< Use texture sprites instead of shapes
     int Count = 8;                    ///< Particles per type
-    float Size = 3.0f;                ///< Particle size in pixels
+    float Size = 3.5f;                ///< Particle size in pixels
     float Speed = 1.0f;               ///< Animation speed multiplier
     float Spread = 20.0f;             ///< How far particles spread from text
     float Alpha = .8f;                ///< Maximum particle opacity
     int BlendMode = 0;                ///< 0=Additive, 1=Screen, 2=Alpha
+    float DepthStrength = .7f;        ///< Scales the 3D depth read (size/alpha/parallax)
+    float ColorWarmth = .5f;          ///< Warm/cool depth temperature mix [0,1]
+    float GlowStrength = .35f;        ///< Additive backlight halo alpha (0 disables glow pass)
+    float GlowSize = 2.2f;            ///< Halo radius as a multiple of the crisp sprite size
+    float ShineThreshold = .84f;      ///< Sine threshold for the rare specular glint
 };
 ParticleSettings& Particle();
 
@@ -461,14 +483,11 @@ DisplaySettings& Display();
 /// Animation speed and color/effect intensity settings.
 struct AnimColorSettings
 {
-    float NameColorMix = .65f;        ///< Base color strength 0-1
     float AlphaSettleTime = .46f;     ///< Alpha settle time in seconds
     float ScaleSettleTime = .46f;     ///< Font scale settle time in seconds
     float PositionSettleTime = .38f;  ///< Position settle time for NPCs in seconds
-    float TierVibrancyBoost = .0f;    ///< Extra color saturation for high tiers 0-1
     float InnerTextAlpha = 1.0f;      ///< Text body alpha multiplier 0-1 (outlines unaffected)
     float OutlineAlpha = 1.0f;        ///< Outline and shadow alpha multiplier 0-1
-    float TextSaturationBoost = .0f;  ///< Extra color saturation for text body 0-2
 };
 AnimColorSettings& AnimColor();
 
@@ -606,6 +625,194 @@ struct LabelSettings
     /// @}
 };
 LabelSettings& Labels();
+
+/**
+ * Status icon badge settings.
+ *
+ * Renders the contextual facts (relationship, level delta, creature kind)
+ * as a compact strip of icon indicators below the name/level row instead of
+ * the text-based info row.  Icons are duotone SVGs (Font Awesome naming)
+ * rasterized at load time from `IconFolder`; each `Icon*` value is a file
+ * name without the `.svg` extension.  Empty names hide that badge.
+ *
+ * Colors are comma-separated RGB floats in [0,1]; the `*Color` members are
+ * derived from the string forms in `ClampAndValidate()`.
+ *
+ * @note The bundled duotone set is Font Awesome Pro (licensed per-seat) and
+ *       is excluded from the public repository.  An empty `IconFolder`
+ *       disables badges entirely.
+ */
+struct IconSettings
+{
+    std::string Folder = "Data/SKSE/Plugins/glyph/duotone";  ///< SVG folder; empty disables
+    bool Enabled = true;      ///< Master toggle (effective only with a folder)
+    float Scale = 1.0f;       ///< Badge size relative to the level font size
+    bool DeadlyPulse = true;  ///< Subtle alpha pulse on the Deadly skull
+
+    /// @name Icon names (SVG file names without extension -- the INI surface)
+    /// @{
+    std::string FollowerIcon = "shield-halved";
+    std::string AllyIcon = "handshake";
+    std::string HostileIcon = "skull-crossbones";
+    std::string WeakIcon = "caret-down";
+    std::string StrongIcon = "caret-up";
+    std::string DeadlyIcon = "skull";
+    std::string BeastIcon = "paw";
+    std::string UndeadIcon = "ghost";
+    std::string DaedraIcon = "fire";
+    std::string DragonIcon = "dragon";
+    /// @}
+
+    /// @name Badge colors (comma-separated RGB strings -- the INI surface)
+    /// @{
+    std::string FollowerColorStr = "0.46, 0.68, 0.84";
+    std::string AllyColorStr = "0.52, 0.74, 0.50";
+    std::string HostileColorStr = "0.86, 0.36, 0.32";
+    std::string WeakColorStr = "0.54, 0.66, 0.80";
+    std::string StrongColorStr = "0.86, 0.62, 0.32";
+    std::string DeadlyColorStr = "0.90, 0.28, 0.24";
+    std::string CreatureColorStr = "0.80, 0.74, 0.62";
+    /// @}
+
+    /// @name Derived values (computed in ClampAndValidate, not INI keys)
+    /// @{
+    Color3 FollowerColor;
+    Color3 AllyColor;
+    Color3 HostileColor;
+    Color3 WeakColor;
+    Color3 StrongColor;
+    Color3 DeadlyColor;
+    Color3 CreatureColor;
+    /// @}
+
+    /// @name Expanded always-on slots (more NPC + player indicators)
+    /// New status slots render alongside the original three.  Neutral/inactive
+    /// states show muted (MutedColor, dimmed via MutedAlpha + desaturated via
+    /// MutedDesat at draw time); active states show lit in their own color.
+    /// Set any `*Icon` empty to hide that state; toggle a whole slot via its
+    /// `*Enabled`.  Icon names require matching SVGs in the IconFolder.
+    /// @{
+    // Always-on neutral states (previously blank) + new NPC categories.
+    std::string NeutralIcon = "circle";  ///< muted relationship
+    std::string HumanoidIcon = "user";   ///< muted creature
+    std::string EvenIcon = "equals";     ///< muted threat
+    std::string GuardIcon = "helmet-battle";
+    std::string MerchantIcon = "coins";
+    std::string CommonerIcon = "house";  ///< muted role
+    std::string EssentialIcon = "certificate";
+    std::string ProtectedIcon = "shield-check";
+    std::string MortalIcon = "heart";  ///< muted protection
+    std::string CombatIcon = "swords";
+    std::string AlertIcon = "eye";
+    std::string IdleIcon = "moon";  ///< muted engagement
+    // Player slot icons.
+    std::string SneakHiddenIcon = "eye-slash";
+    std::string SneakDetectedIcon = "eye";
+    std::string SneakOffIcon = "person-walking";  ///< muted
+    std::string EncumberedIcon = "weight-hanging";
+    std::string NormalWeightIcon = "feather";  ///< muted
+    std::string WantedIcon = "gavel";
+    std::string BountyClearIcon = "scale-balanced";  ///< muted
+
+    // Lit colors for the active states.
+    std::string GuardColorStr = "0.60, 0.68, 0.84";
+    std::string MerchantColorStr = "0.84, 0.74, 0.42";
+    std::string EssentialColorStr = "0.86, 0.78, 0.46";
+    std::string ProtectedColorStr = "0.54, 0.72, 0.86";
+    std::string CombatColorStr = "0.88, 0.42, 0.30";
+    std::string AlertColorStr = "0.86, 0.76, 0.40";
+    std::string SneakHiddenColorStr = "0.50, 0.64, 0.84";
+    std::string SneakDetectedColorStr = "0.86, 0.36, 0.32";
+    std::string EncumberedColorStr = "0.82, 0.64, 0.40";
+    std::string WantedColorStr = "0.84, 0.34, 0.30";
+    // Resting-state colors: each "muted" slot carries its own calm hue so the
+    // always-on strip reads as a colored spectrum rather than uniform grey.
+    std::string NeutralColorStr = "0.56, 0.62, 0.70";       ///< neutral relationship
+    std::string HumanoidColorStr = "0.74, 0.68, 0.58";      ///< humanoid creature
+    std::string CommonerColorStr = "0.60, 0.68, 0.54";      ///< commoner role
+    std::string MortalColorStr = "0.76, 0.58, 0.60";        ///< mortal protection
+    std::string EvenColorStr = "0.60, 0.70, 0.72";          ///< even threat
+    std::string IdleColorStr = "0.56, 0.60, 0.76";          ///< idle engagement
+    std::string SneakOffColorStr = "0.64, 0.68, 0.60";      ///< sneak off (player)
+    std::string NormalWeightColorStr = "0.64, 0.76, 0.70";  ///< normal weight (player)
+    std::string BountyClearColorStr = "0.50, 0.70, 0.68";   ///< bounty clear (player)
+    std::string MutedColorStr = "0.62, 0.64, 0.68";         ///< deprecated shared tint (unused)
+
+    Color3 GuardColor;
+    Color3 MerchantColor;
+    Color3 EssentialColor;
+    Color3 ProtectedColor;
+    Color3 CombatColor;
+    Color3 AlertColor;
+    Color3 SneakHiddenColor;
+    Color3 SneakDetectedColor;
+    Color3 EncumberedColor;
+    Color3 WantedColor;
+    Color3 NeutralColor;
+    Color3 HumanoidColor;
+    Color3 CommonerColor;
+    Color3 MortalColor;
+    Color3 EvenColor;
+    Color3 IdleColor;
+    Color3 SneakOffColor;
+    Color3 NormalWeightColor;
+    Color3 BountyClearColor;
+    Color3 MutedColor;
+
+    // Per-slot enables (a disabled active state drops that actor's badge).
+    bool RelationshipEnabled = true;
+    bool CreatureEnabled = true;
+    bool ThreatEnabled = true;
+    bool RoleEnabled = true;
+    bool ProtectionEnabled = true;
+    bool EngagementEnabled = true;  ///< master for the NPC engagement slot
+    bool CombatStateEnabled = true;
+    bool AlertStateEnabled = true;
+    bool SneakEnabled = true;
+    bool PlayerCombatEnabled = true;
+    bool EncumberedEnabled = true;
+    bool BountyEnabled = true;
+
+    // Resting styling: alpha multiplier and desaturation strength [0,1].
+    // Lower desat keeps each resting slot's hue; alpha keeps it subordinate.
+    float MutedAlpha = 0.45f;
+    float MutedDesat = 0.18f;
+    /// @}
+};
+IconSettings& Icons();
+
+/**
+ * NPC nameplate text colors.
+ *
+ * NPCs render flat, white-leaning text; the tier palettes apply only to the
+ * player (and special titles).  The name color is keyed by the actor's
+ * relationship to the player: hostiles lean warm, teammates lean cool, and
+ * everyone else -- including merely talkable civilians -- stays neutral.
+ *
+ * Colors are comma-separated RGB floats in [0,1]; the `*Color` members are
+ * derived from the string forms in `ClampAndValidate()`.
+ */
+struct NpcColorSettings
+{
+    /// @name Colors (comma-separated RGB strings -- the INI surface)
+    /// @{
+    std::string NeutralColorStr = "1.0, 1.0, 1.0";     ///< Neutral + talkable civilians
+    std::string HostileColorStr = "1.0, 0.72, 0.68";   ///< Slight warm lean for hostiles
+    std::string FollowerColorStr = "0.72, 0.84, 1.0";  ///< Slight cool lean for teammates
+    std::string LevelColorStr = "0.82, 0.84, 0.88";    ///< Dimmed silver level readout
+    std::string TitleColorStr = "0.92, 0.93, 0.95";    ///< Soft white title text
+    /// @}
+
+    /// @name Derived values (computed in ClampAndValidate, not INI keys)
+    /// @{
+    Color3 NeutralColor;
+    Color3 HostileColor;
+    Color3 FollowerColor;
+    Color3 LevelColor;
+    Color3 TitleColor;
+    /// @}
+};
+NpcColorSettings& NpcColors();
 
 /**
  * Focus-target expanded-nameplate settings.

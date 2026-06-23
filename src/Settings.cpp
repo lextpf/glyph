@@ -45,6 +45,7 @@ static std::string ToLowerAscii(std::string_view input);
 static float ParseFloat(const std::string& str, float defaultVal);
 static int ParseInt(const std::string& str, int defaultVal);
 static bool ParseBool(const std::string& str);
+static void ParseColor3(const std::string& str, Color3& out);
 
 std::shared_mutex& Mutex()
 {
@@ -185,6 +186,18 @@ FocusSettings& Focus()
     return s;
 }
 
+IconSettings& Icons()
+{
+    static IconSettings s;
+    return s;
+}
+
+NpcColorSettings& NpcColors()
+{
+    static NpcColorSettings s;
+    return s;
+}
+
 // Default font paths (shared between table and ResetToDefaults)
 static constexpr auto kDefaultNameFontPath =
     "Data/SKSE/Plugins/glyph/fonts/bd1aab18-7649-4946-9f7b-6ddd6a81311d.ttf";
@@ -242,6 +255,14 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OutlineColorTint",       "", &ShadowOutline().OutlineColorTint,      .0f,      ClampFloat{.0f, .25f}},
     {"ShadowColorTint",        "", &ShadowOutline().ShadowColorTint,       .0f,      ClampFloat{.0f, .25f}},
 
+    // Soft Directional Drop-Shadow
+    {"EnableSoftShadow",       "", &ShadowOutline().SoftShadowEnabled,     false,    NoClamping{}},
+    {"SoftShadowDistance",     "", &ShadowOutline().SoftShadowDistance,    4.0f,     ClampFloat{.0f, 16.0f}},
+    {"SoftShadowSoftness",     "", &ShadowOutline().SoftShadowSoftness,    3.0f,     ClampFloat{.0f, 12.0f}},
+    {"SoftShadowOpacity",      "", &ShadowOutline().SoftShadowOpacity,     .8f,      ClampFloat{.0f, 1.0f}},
+    {"SoftShadowAngle",        "", &ShadowOutline().SoftShadowAngle,       45.0f,    ClampFloat{.0f, 360.0f}},
+    {"SoftShadowSamples",      "", &ShadowOutline().SoftShadowSamples,     12,       ClampInt{4, 24}},
+
     // Glow
     {"EnableGlow",             "", &Glow().Enabled,                   false,    NoClamping{}},
     {"GlowRadius",             "", &Glow().Radius,                    4.0f,     MinFloat{.0f}},
@@ -264,7 +285,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"EnableEntranceAnimation","", &Transition().EnableEntrance,      false,    NoClamping{}},
     {"EntranceStyle",          "", &Transition().EntranceStyle,       0,        ClampInt{0, 2}},
     {"EntranceDuration",       "", &Transition().EntranceDuration,    .35f,     ClampFloat{.05f, 3.0f}},
-    {"EntranceOvershoot",      "", &Transition().EntranceOvershoot,   1.05f,    ClampFloat{1.0f, 1.3f}},
+    {"EntranceOvershoot",      "", &Transition().EntranceOvershoot,   1.0f,     ClampFloat{1.0f, 1.0f}},
     {"EnableExitAnimation",    "", &Transition().EnableExit,          false,    NoClamping{}},
     {"ExitDuration",           "", &Transition().ExitDuration,        .20f,     ClampFloat{.05f, 2.0f}},
 
@@ -281,11 +302,16 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"EnableParticleAura",     "", &Particle().Enabled,               true,     NoClamping{}},
     {"UseParticleTextures",    "", &Particle().UseParticleTextures,   true,     NoClamping{}},
     {"ParticleCount",          "", &Particle().Count,                 8,        MinInt{0}},
-    {"ParticleSize",           "", &Particle().Size,                  3.0f,     MinFloat{.0f}},
+    {"ParticleSize",           "", &Particle().Size,                  3.5f,     MinFloat{.0f}},
     {"ParticleSpeed",          "", &Particle().Speed,                 1.0f,     MinFloat{.0f}},
     {"ParticleSpread",         "", &Particle().Spread,                20.0f,    MinFloat{.0f}},
     {"ParticleAlpha",          "", &Particle().Alpha,                 .8f,      ClampFloat{.0f, 1.0f}},
     {"ParticleBlendMode",      "", &Particle().BlendMode,             0,        ClampInt{0, 2}},
+    {"ParticleDepthStrength",  "", &Particle().DepthStrength,         .7f,      ClampFloat{.0f, 1.5f}},
+    {"ParticleColorWarmth",    "", &Particle().ColorWarmth,           .5f,      ClampFloat{.0f, 1.0f}},
+    {"ParticleGlowStrength",   "", &Particle().GlowStrength,          .35f,     ClampFloat{.0f, 1.0f}},
+    {"ParticleGlowSize",       "", &Particle().GlowSize,              2.2f,     ClampFloat{1.0f, 4.0f}},
+    {"ParticleShineThreshold", "", &Particle().ShineThreshold,        .84f,     ClampFloat{.0f, .99f}},
 
     // Display Options
     {"VerticalOffset",         "", &Display().VerticalOffset,         8.0f,     NoClamping{}},
@@ -293,18 +319,12 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"HideCreatures",          "", &Display().HideCreatures,          false,    NoClamping{}},
     {"ReloadKey",              "", &Display().ReloadKey,              0,        NoClamping{}},
 
-    // Animation Speed
-    // Color & Effects
-    {"NameColorMix",           "", &AnimColor().NameColorMix,         .65f,     ClampFloat{.0f, 1.0f}},
-
     // Smoothing
     {"AlphaSettleTime",        "", &AnimColor().AlphaSettleTime,      .46f,     MinFloat{.01f}},
     {"ScaleSettleTime",        "", &AnimColor().ScaleSettleTime,      .46f,     MinFloat{.01f}},
     {"PositionSettleTime",     "", &AnimColor().PositionSettleTime,   .38f,     MinFloat{.01f}},
-    {"TierVibrancyBoost",      "", &AnimColor().TierVibrancyBoost,    .0f,      ClampFloat{.0f, 1.0f}},
     {"InnerTextAlpha",         "", &AnimColor().InnerTextAlpha,        1.0f,     ClampFloat{.0f, 1.0f}},
     {"OutlineAlpha",           "", &AnimColor().OutlineAlpha,          1.0f,     ClampFloat{.0f, 1.0f}},
-    {"TextSaturationBoost",    "", &AnimColor().TextSaturationBoost,   .0f,      ClampFloat{.0f, 2.0f}},
 
     // Visual sub-settings (via Visual() singleton)
     {"EnableDistanceOutlineScale", "", &Visual().EnableDistanceOutlineScale, false, NoClamping{}},
@@ -395,6 +415,99 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"FocusAmbientDimFactor",  "", &Focus().AmbientDimFactor,        .55f,                   ClampFloat{.05f, 1.0f}},
     {"FocusSettleTime",        "", &Focus().SettleTime,              .25f,                   ClampFloat{.0f, 2.0f}},
     {"FocusIgnoreOccluded",    "", &Focus().IgnoreOccluded,          true,                   NoClamping{}},
+
+    // Status icon badges -- duotone SVG folder, behavior, icon names, colors.
+    {"IconFolder",             "", &Icons().Folder,           std::string("Data/SKSE/Plugins/glyph/duotone"), NoClamping{}},
+    {"IconsEnabled",           "", &Icons().Enabled,          true,                             NoClamping{}},
+    {"IconScale",              "", &Icons().Scale,            1.0f,                             ClampFloat{.5f, 2.0f}},
+    {"IconDeadlyPulse",        "", &Icons().DeadlyPulse,      true,                             NoClamping{}},
+    {"IconFollower",           "", &Icons().FollowerIcon,     std::string("shield-halved"),     NoClamping{}},
+    {"IconAlly",               "", &Icons().AllyIcon,         std::string("handshake"),         NoClamping{}},
+    {"IconHostile",            "", &Icons().HostileIcon,      std::string("skull-crossbones"),  NoClamping{}},
+    {"IconWeak",               "", &Icons().WeakIcon,         std::string("caret-down"),        NoClamping{}},
+    {"IconStrong",             "", &Icons().StrongIcon,       std::string("caret-up"),          NoClamping{}},
+    {"IconDeadly",             "", &Icons().DeadlyIcon,       std::string("skull"),             NoClamping{}},
+    {"IconBeast",              "", &Icons().BeastIcon,        std::string("paw"),               NoClamping{}},
+    {"IconUndead",             "", &Icons().UndeadIcon,       std::string("ghost"),             NoClamping{}},
+    {"IconDaedra",             "", &Icons().DaedraIcon,       std::string("fire"),              NoClamping{}},
+    {"IconDragon",             "", &Icons().DragonIcon,       std::string("dragon"),            NoClamping{}},
+    {"IconFollowerColor",      "", &Icons().FollowerColorStr, std::string("0.46, 0.68, 0.84"),  NoClamping{}},
+    {"IconAllyColor",          "", &Icons().AllyColorStr,     std::string("0.52, 0.74, 0.50"),  NoClamping{}},
+    {"IconHostileColor",       "", &Icons().HostileColorStr,  std::string("0.86, 0.36, 0.32"),  NoClamping{}},
+    {"IconWeakColor",          "", &Icons().WeakColorStr,     std::string("0.54, 0.66, 0.80"),  NoClamping{}},
+    {"IconStrongColor",        "", &Icons().StrongColorStr,   std::string("0.86, 0.62, 0.32"),  NoClamping{}},
+    {"IconDeadlyColor",        "", &Icons().DeadlyColorStr,   std::string("0.90, 0.28, 0.24"),  NoClamping{}},
+    {"IconCreatureColor",      "", &Icons().CreatureColorStr, std::string("0.80, 0.74, 0.62"),  NoClamping{}},
+
+    // Expanded always-on badge slots -- new icon names (need matching SVGs).
+    {"IconNeutral",            "", &Icons().NeutralIcon,       std::string("circle"),            NoClamping{}},
+    {"IconHumanoid",           "", &Icons().HumanoidIcon,      std::string("user"),              NoClamping{}},
+    {"IconEven",               "", &Icons().EvenIcon,          std::string("equals"),            NoClamping{}},
+    {"IconGuard",              "", &Icons().GuardIcon,         std::string("helmet-battle"),     NoClamping{}},
+    {"IconMerchant",           "", &Icons().MerchantIcon,      std::string("coins"),             NoClamping{}},
+    {"IconCommoner",           "", &Icons().CommonerIcon,      std::string("house"),             NoClamping{}},
+    {"IconEssential",          "", &Icons().EssentialIcon,     std::string("certificate"),       NoClamping{}},
+    {"IconProtected",          "", &Icons().ProtectedIcon,     std::string("shield-check"),      NoClamping{}},
+    {"IconMortal",             "", &Icons().MortalIcon,        std::string("heart"),             NoClamping{}},
+    {"IconCombat",             "", &Icons().CombatIcon,        std::string("swords"),            NoClamping{}},
+    {"IconAlert",              "", &Icons().AlertIcon,         std::string("eye"),               NoClamping{}},
+    {"IconIdle",               "", &Icons().IdleIcon,          std::string("moon"),              NoClamping{}},
+    {"IconSneakHidden",        "", &Icons().SneakHiddenIcon,   std::string("eye-slash"),         NoClamping{}},
+    {"IconSneakDetected",      "", &Icons().SneakDetectedIcon, std::string("eye"),               NoClamping{}},
+    {"IconSneakOff",           "", &Icons().SneakOffIcon,      std::string("person-walking"),    NoClamping{}},
+    {"IconEncumbered",         "", &Icons().EncumberedIcon,    std::string("weight-hanging"),    NoClamping{}},
+    {"IconNormalWeight",       "", &Icons().NormalWeightIcon,  std::string("feather"),           NoClamping{}},
+    {"IconWanted",             "", &Icons().WantedIcon,        std::string("gavel"),             NoClamping{}},
+    {"IconBountyClear",        "", &Icons().BountyClearIcon,   std::string("scale-balanced"),    NoClamping{}},
+
+    // Expanded slots -- lit (active) colors.
+    {"IconGuardColor",         "", &Icons().GuardColorStr,         std::string("0.60, 0.68, 0.84"),  NoClamping{}},
+    {"IconMerchantColor",      "", &Icons().MerchantColorStr,      std::string("0.84, 0.74, 0.42"),  NoClamping{}},
+    {"IconEssentialColor",     "", &Icons().EssentialColorStr,     std::string("0.86, 0.78, 0.46"),  NoClamping{}},
+    {"IconProtectedColor",     "", &Icons().ProtectedColorStr,     std::string("0.54, 0.72, 0.86"),  NoClamping{}},
+    {"IconCombatColor",        "", &Icons().CombatColorStr,        std::string("0.88, 0.42, 0.30"),  NoClamping{}},
+    {"IconAlertColor",         "", &Icons().AlertColorStr,         std::string("0.86, 0.76, 0.40"),  NoClamping{}},
+    {"IconSneakHiddenColor",   "", &Icons().SneakHiddenColorStr,   std::string("0.50, 0.64, 0.84"),  NoClamping{}},
+    {"IconSneakDetectedColor", "", &Icons().SneakDetectedColorStr, std::string("0.86, 0.36, 0.32"),  NoClamping{}},
+    {"IconEncumberedColor",    "", &Icons().EncumberedColorStr,    std::string("0.82, 0.64, 0.40"),  NoClamping{}},
+    {"IconWantedColor",        "", &Icons().WantedColorStr,        std::string("0.84, 0.34, 0.30"),  NoClamping{}},
+    // Expanded slots -- per-slot resting colors (each "muted" slot's own hue).
+    {"IconNeutralColor",       "", &Icons().NeutralColorStr,      std::string("0.56, 0.62, 0.70"),  NoClamping{}},
+    {"IconHumanoidColor",      "", &Icons().HumanoidColorStr,     std::string("0.74, 0.68, 0.58"),  NoClamping{}},
+    {"IconCommonerColor",      "", &Icons().CommonerColorStr,     std::string("0.60, 0.68, 0.54"),  NoClamping{}},
+    {"IconMortalColor",        "", &Icons().MortalColorStr,       std::string("0.76, 0.58, 0.60"),  NoClamping{}},
+    {"IconEvenColor",          "", &Icons().EvenColorStr,         std::string("0.60, 0.70, 0.72"),  NoClamping{}},
+    {"IconIdleColor",          "", &Icons().IdleColorStr,         std::string("0.56, 0.60, 0.76"),  NoClamping{}},
+    {"IconSneakOffColor",      "", &Icons().SneakOffColorStr,     std::string("0.64, 0.68, 0.60"),  NoClamping{}},
+    {"IconNormalWeightColor",  "", &Icons().NormalWeightColorStr, std::string("0.64, 0.76, 0.70"),  NoClamping{}},
+    {"IconBountyClearColor",   "", &Icons().BountyClearColorStr,  std::string("0.50, 0.70, 0.68"),  NoClamping{}},
+    {"IconMutedColor",         "", &Icons().MutedColorStr,         std::string("0.62, 0.64, 0.68"),  NoClamping{}},
+
+    // Expanded slots -- per-slot enables.
+    {"IconRelationshipEnabled","", &Icons().RelationshipEnabled, true,                            NoClamping{}},
+    {"IconCreatureEnabled",    "", &Icons().CreatureEnabled,     true,                            NoClamping{}},
+    {"IconThreatEnabled",      "", &Icons().ThreatEnabled,       true,                            NoClamping{}},
+    {"IconRoleEnabled",        "", &Icons().RoleEnabled,         true,                            NoClamping{}},
+    {"IconProtectionEnabled",  "", &Icons().ProtectionEnabled,   true,                            NoClamping{}},
+    {"IconEngagementEnabled",  "", &Icons().EngagementEnabled,   true,                            NoClamping{}},
+    {"IconCombatStateEnabled", "", &Icons().CombatStateEnabled,  true,                            NoClamping{}},
+    {"IconAlertStateEnabled",  "", &Icons().AlertStateEnabled,   true,                            NoClamping{}},
+    {"IconSneakEnabled",       "", &Icons().SneakEnabled,        true,                            NoClamping{}},
+    {"IconPlayerCombatEnabled","", &Icons().PlayerCombatEnabled, true,                            NoClamping{}},
+    {"IconEncumberedEnabled",  "", &Icons().EncumberedEnabled,   true,                            NoClamping{}},
+    {"IconBountyEnabled",      "", &Icons().BountyEnabled,       true,                            NoClamping{}},
+
+    // Expanded slots -- muted styling.
+    {"IconMutedAlpha",         "", &Icons().MutedAlpha,          0.45f,            ClampFloat{.0f, 1.0f}},
+    {"IconMutedDesat",         "", &Icons().MutedDesat,          0.18f,            ClampFloat{.0f, 1.0f}},
+
+    // NPC nameplate text colors -- flat white-leaning text (tier palettes are
+    // player/special-title only).  Name color is keyed by relationship.
+    {"NpcNeutralColor",        "", &NpcColors().NeutralColorStr,  std::string("1.0, 1.0, 1.0"),    NoClamping{}},
+    {"NpcHostileColor",        "", &NpcColors().HostileColorStr,  std::string("1.0, 0.86, 0.84"),  NoClamping{}},
+    {"NpcFollowerColor",       "", &NpcColors().FollowerColorStr, std::string("0.86, 0.91, 1.0"),  NoClamping{}},
+    {"NpcLevelColor",          "", &NpcColors().LevelColorStr,    std::string("0.80, 0.82, 0.86"), NoClamping{}},
+    {"NpcTitleColor",          "", &NpcColors().TitleColorStr,    std::string("0.92, 0.93, 0.95"), NoClamping{}},
 });
 
 // clang-format on
@@ -551,10 +664,9 @@ static void ResetToDefaults()
 {
     TitleFormat() = "%t";
     DisplayFormat() = {{"%n", false, false}, {" Lv.%l", true, false}};
-    // Default info row showcases the 3 MVP tokens with droppable segments.
-    // Bullet glyph (U+2022) embedded as UTF-8 bytes to avoid source-encoding issues.
-    InfoFormat() = {
-        {"%r", true, true}, {"  \xe2\x80\xa2  %d", true, true}, {"  \xe2\x80\xa2  %c", true, true}};
+    // Status icon badges supersede the text info row by default.  Users who
+    // set InfoFormat explicitly in the INI keep their text row (INI wins).
+    InfoFormat().clear();
 
     Tiers().clear();
     Tiers().push_back(MakeDefaultTier());
@@ -616,6 +728,50 @@ static void ClampAndValidate()
         special.color.clamp01();
         special.glowColor.clamp01();
     }
+
+    // Derive icon colors from their INI string forms.
+    auto& ic = Icons();
+    const auto deriveColor = [](const std::string& str, Color3& out)
+    {
+        out = Color3::White();
+        ParseColor3(str, out);
+        out.clamp01();
+    };
+    deriveColor(ic.FollowerColorStr, ic.FollowerColor);
+    deriveColor(ic.AllyColorStr, ic.AllyColor);
+    deriveColor(ic.HostileColorStr, ic.HostileColor);
+    deriveColor(ic.WeakColorStr, ic.WeakColor);
+    deriveColor(ic.StrongColorStr, ic.StrongColor);
+    deriveColor(ic.DeadlyColorStr, ic.DeadlyColor);
+    deriveColor(ic.CreatureColorStr, ic.CreatureColor);
+    deriveColor(ic.GuardColorStr, ic.GuardColor);
+    deriveColor(ic.MerchantColorStr, ic.MerchantColor);
+    deriveColor(ic.EssentialColorStr, ic.EssentialColor);
+    deriveColor(ic.ProtectedColorStr, ic.ProtectedColor);
+    deriveColor(ic.CombatColorStr, ic.CombatColor);
+    deriveColor(ic.AlertColorStr, ic.AlertColor);
+    deriveColor(ic.SneakHiddenColorStr, ic.SneakHiddenColor);
+    deriveColor(ic.SneakDetectedColorStr, ic.SneakDetectedColor);
+    deriveColor(ic.EncumberedColorStr, ic.EncumberedColor);
+    deriveColor(ic.WantedColorStr, ic.WantedColor);
+    deriveColor(ic.NeutralColorStr, ic.NeutralColor);
+    deriveColor(ic.HumanoidColorStr, ic.HumanoidColor);
+    deriveColor(ic.CommonerColorStr, ic.CommonerColor);
+    deriveColor(ic.MortalColorStr, ic.MortalColor);
+    deriveColor(ic.EvenColorStr, ic.EvenColor);
+    deriveColor(ic.IdleColorStr, ic.IdleColor);
+    deriveColor(ic.SneakOffColorStr, ic.SneakOffColor);
+    deriveColor(ic.NormalWeightColorStr, ic.NormalWeightColor);
+    deriveColor(ic.BountyClearColorStr, ic.BountyClearColor);
+    deriveColor(ic.MutedColorStr, ic.MutedColor);
+
+    // Derive NPC text colors from their INI string forms.
+    auto& nc = NpcColors();
+    deriveColor(nc.NeutralColorStr, nc.NeutralColor);
+    deriveColor(nc.HostileColorStr, nc.HostileColor);
+    deriveColor(nc.FollowerColorStr, nc.FollowerColor);
+    deriveColor(nc.LevelColorStr, nc.LevelColor);
+    deriveColor(nc.TitleColorStr, nc.TitleColor);
 }
 
 // Helper function: Remove leading/trailing whitespace
