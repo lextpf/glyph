@@ -1,6 +1,6 @@
 #include "Hooks.hpp"
 
-#include "AppearanceTemplate.hpp"
+#include "BadgeTextures.hpp"
 #include "GameState.hpp"
 #include "ParticleTextures.hpp"
 #include "Renderer.hpp"
@@ -37,6 +37,8 @@ struct InitFlags
     std::atomic<std::uint64_t> nextInitRetryAtMs{0};
     std::atomic<bool> mipmapsGenerated{false};
     std::atomic<bool> particleTexturesLoaded{false};
+    std::atomic<bool> badgeTexturesLoaded{false};
+    std::atomic<uint32_t> badgeTexturesGen{0};
     std::atomic<bool> postProcessInitialized{false};
     std::atomic<bool> backendReinitRequested{false};
 };
@@ -172,9 +174,11 @@ static void HandleDeviceChange()
     if (changed)
     {
         ParticleTextures::Shutdown();
+        BadgeTextures::Shutdown();
         TextPostProcess::Shutdown();
         Init().mipmapsGenerated.store(false, std::memory_order_release);
         Init().particleTexturesLoaded.store(false, std::memory_order_release);
+        Init().badgeTexturesLoaded.store(false, std::memory_order_release);
         Init().postProcessInitialized.store(false, std::memory_order_release);
         Init().backendReinitRequested.store(true, std::memory_order_release);
         if (!TryInstallPresentHook(swapChain))
@@ -514,6 +518,74 @@ static void EnsureParticleTexturesLoaded(ID3D11Device* device, bool useParticleT
     }
 }
 
+// Rasterize status badge SVGs if not yet loaded.  Settings hot reload bumps
+// the generation counter, which drops the cache so renamed icons or a new
+// folder take effect without a restart.
+static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
+{
+    if (!device)
+    {
+        return;
+    }
+    const uint32_t gen = Settings::Generation().load(std::memory_order_acquire);
+    if (Init().badgeTexturesLoaded.load(std::memory_order_acquire) &&
+        Init().badgeTexturesGen.load(std::memory_order_acquire) == gen)
+    {
+        return;
+    }
+
+    bool enabled = false;
+    std::string folder;
+    std::vector<std::string> names;
+    {
+        const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+        const auto& ic = Settings::Icons();
+        enabled = ic.Enabled && !ic.Folder.empty();
+        folder = ic.Folder;
+        names = {ic.FollowerIcon,
+                 ic.AllyIcon,
+                 ic.HostileIcon,
+                 ic.WeakIcon,
+                 ic.StrongIcon,
+                 ic.DeadlyIcon,
+                 ic.BeastIcon,
+                 ic.UndeadIcon,
+                 ic.DaedraIcon,
+                 ic.DragonIcon,
+                 // Expanded always-on slots (more NPC + player indicators).
+                 ic.NeutralIcon,
+                 ic.HumanoidIcon,
+                 ic.EvenIcon,
+                 ic.GuardIcon,
+                 ic.MerchantIcon,
+                 ic.CommonerIcon,
+                 ic.EssentialIcon,
+                 ic.ProtectedIcon,
+                 ic.MortalIcon,
+                 ic.CombatIcon,
+                 ic.AlertIcon,
+                 ic.IdleIcon,
+                 ic.SneakHiddenIcon,
+                 ic.SneakDetectedIcon,
+                 ic.SneakOffIcon,
+                 ic.EncumberedIcon,
+                 ic.NormalWeightIcon,
+                 ic.WantedIcon,
+                 ic.BountyClearIcon};
+    }
+
+    if (enabled)
+    {
+        BadgeTextures::Initialize(device, folder, names);
+    }
+    else
+    {
+        BadgeTextures::Shutdown();
+    }
+    Init().badgeTexturesGen.store(gen, std::memory_order_release);
+    Init().badgeTexturesLoaded.store(true, std::memory_order_release);
+}
+
 // Render overlay immediately
 void RenderOverlayNow()
 {
@@ -572,6 +644,9 @@ void RenderOverlayNow()
 
         // Load particle textures on first frame
         EnsureParticleTexturesLoaded(device.Get(), useParticleTextures);
+
+        // Rasterize status badge SVGs (re-runs after settings hot reload)
+        EnsureBadgeTexturesLoaded(device.Get());
 
         // Initialize GPU post-processing on first frame
         if (!Init().postProcessInitialized.load(std::memory_order_acquire) && device && context)
@@ -645,8 +720,6 @@ void RenderOverlayNow()
 // before any Present call can occur.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-    AppearanceTemplate::CheckPendingAppearanceTemplate();
-
     if (!Frame().shouldRenderOverlay.load(std::memory_order_acquire) && GameState::CanDrawOverlay())
     {
         Renderer::TickRT();
@@ -738,7 +811,6 @@ struct PostDisplay
         }
 
         EnsureOverlayInitialized();
-        AppearanceTemplate::CheckPendingAppearanceTemplate();
 
         const bool canDrawOverlay = GameState::CanDrawOverlay();
 
