@@ -10,9 +10,11 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <execution>
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <vector>
 
 #pragma comment(lib, "windowscodecs.lib")
@@ -25,7 +27,10 @@ namespace fs = std::filesystem;
 namespace ParticleTextures
 {
 // Number of particle texture types
-static constexpr int NUM_TYPES = 6;  // Stars, Sparks, Wisps, Runes, Orbs, Crystals
+// One slot per Settings::ParticleStyle weather type (see Settings.hpp). The
+// order must match that enum: Firefly, Rain, Snow, Smoke, Spark, Wisp, Leaf,
+// Aurora, CherryBlossom, Dust, Mote.
+static constexpr int NUM_TYPES = 11;
 
 // Texture info struct
 struct TextureInfo
@@ -80,6 +85,7 @@ static void ReleaseResources_NoLock()
 // Load a PNG file using WIC and create a D3D11 texture.
 // Returns TextureInfo with dimensions.
 static TextureInfo LoadTextureFromFile(ID3D11Device* device,
+                                       ID3D11DeviceContext* context,
                                        const std::string& path,
                                        IWICImagingFactory* wicFactory)
 {
@@ -187,6 +193,59 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
         }
     }
 
+    // High-resolution sources get a full GPU-generated mip chain so minified
+    // sprites stay stable in motion (no shimmer) -- same pattern as the
+    // mipmapped font atlas in Hooks.cpp. Small pixel-art sprites (<= 64px)
+    // keep a single level; they are only ever magnified and use point
+    // sampling anyway.
+    const UINT maxDim = (width > height) ? width : height;
+    if (context && maxDim > 64)
+    {
+        UINT mipLevels = 1;
+        for (UINT d = maxDim; d > 1; d >>= 1)
+        {
+            ++mipLevels;
+        }
+
+        D3D11_TEXTURE2D_DESC mippedDesc = {};
+        mippedDesc.Width = width;
+        mippedDesc.Height = height;
+        mippedDesc.MipLevels = mipLevels;
+        mippedDesc.ArraySize = 1;
+        mippedDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        mippedDesc.SampleDesc.Count = 1;
+        mippedDesc.Usage = D3D11_USAGE_DEFAULT;
+        mippedDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        mippedDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+
+        ComPtr<ID3D11Texture2D> mippedTexture;
+        if (SUCCEEDED(device->CreateTexture2D(&mippedDesc, nullptr, &mippedTexture)))
+        {
+            context->UpdateSubresource(mippedTexture.Get(), 0, nullptr, pixels.data(), stride, 0);
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC mippedSrvDesc = {};
+            mippedSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            mippedSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            mippedSrvDesc.Texture2D.MipLevels = mipLevels;
+
+            if (SUCCEEDED(device->CreateShaderResourceView(
+                    mippedTexture.Get(), &mippedSrvDesc, info.srv.ReleaseAndGetAddressOf())))
+            {
+                context->GenerateMips(info.srv.Get());
+                info.width = static_cast<int>(width);
+                info.height = static_cast<int>(height);
+                SKSE::log::debug("ParticleTextures: Loaded {}x{} texture ({} mips): {}",
+                                 width,
+                                 height,
+                                 mipLevels,
+                                 path);
+                return info;
+            }
+            info.srv.Reset();
+        }
+        // Mipped path failed; fall through to the single-level texture below.
+    }
+
     // Create D3D11 texture
     D3D11_TEXTURE2D_DESC texDesc = {};
     texDesc.Width = width;
@@ -231,80 +290,6 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
     return info;
 }
 
-// Load all PNG files from a folder into the texture array for a particle type.
-static int LoadTexturesFromFolder(ID3D11Device* device,
-                                  int styleIndex,
-                                  const std::string& folderPath,
-                                  IWICImagingFactory* wicFactory)
-{
-    if (styleIndex < 0 || styleIndex >= NUM_TYPES)
-    {
-        return 0;
-    }
-    if (folderPath.empty())
-    {
-        return 0;
-    }
-
-    int loadedCount = 0;
-
-    try
-    {
-        fs::path folder(folderPath);
-        if (!fs::exists(folder) || !fs::is_directory(folder))
-        {
-            SKSE::log::debug("ParticleTextures: Folder not found: {}", folderPath);
-            return 0;
-        }
-
-        std::vector<fs::path> pngFiles;
-        for (const auto& entry : fs::directory_iterator(folder))
-        {
-            if (!entry.is_regular_file())
-            {
-                continue;
-            }
-
-            auto ext = entry.path().extension().string();
-            std::transform(ext.begin(),
-                           ext.end(),
-                           ext.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (ext == ".png")
-            {
-                pngFiles.push_back(entry.path());
-            }
-        }
-
-        std::sort(pngFiles.begin(),
-                  pngFiles.end(),
-                  [](const fs::path& a, const fs::path& b)
-                  { return a.generic_u8string() < b.generic_u8string(); });
-
-        for (const auto& texturePath : pngFiles)
-        {
-            auto info = LoadTextureFromFile(device, texturePath.string(), wicFactory);
-            if (info.srv)
-            {
-                Textures()[styleIndex].push_back(info);
-                loadedCount++;
-            }
-        }
-
-        if (loadedCount > 0)
-        {
-            SKSE::log::info(
-                "ParticleTextures: Loaded {} textures from {}", loadedCount, folderPath);
-        }
-    }
-    catch (const std::exception& e)
-    {
-        SKSE::log::warn("ParticleTextures: Error scanning folder {}: {}", folderPath, e.what());
-    }
-
-    return loadedCount;
-}
-
 // RAII wrapper for COM initialization.
 // Only calls CoUninitialize if this scope actually initialized COM
 // (avoids unbalancing the ref count when a third-party hook already initialized it).
@@ -342,6 +327,14 @@ struct ComScope
 // 256x256 white-on-transparent particle sprites with mathematically defined
 // alpha for clean edges. White base allows tier-color tinting via vertex
 // color multiplication.
+//
+// Quality pipeline applied to every generator:
+//   1. 4x rotated-grid supersampling -- anti-aliases thin line work and
+//      star spikes that a single center sample would shimmer on.
+//   2. Interleaved-gradient-noise dithering at 8-bit quantization --
+//      removes banding rings in the smooth Gaussian glow falloffs.
+//   3. Full mip chain (2x2 box reduction in float) -- stable minification
+//      when particles render small or rotate on screen.
 
 static constexpr int PROC_SIZE = 256;
 static constexpr float PROC_PI = 3.14159265f;
@@ -374,6 +367,16 @@ static float PRingDist(float px, float py, float radius)
 static float PLineAlpha(float dist, float width, float soft)
 {
     return PSmoothstep(width + soft, width - soft, dist);
+}
+
+// Interleaved gradient noise (Jimenez 2014), in [0,1). Used as an unbiased
+// stochastic-rounding offset when quantizing float alpha to 8 bits.
+static float PInterleavedGradientNoise(int x, int y)
+{
+    float f = .06711056f * static_cast<float>(x) + .00583715f * static_cast<float>(y);
+    f -= std::floor(f);
+    float v = 52.9829189f * f;
+    return v - std::floor(v);
 }
 
 using PPixelFn = float (*)(float, float);
@@ -1154,16 +1157,25 @@ struct GenArray
     int count;
 };
 
+// Procedural sets are a safety fallback only -- they render solely for a
+// weather type whose PNG is missing. Each new type reuses the closest-looking
+// legacy generator set rather than shipping 11 bespoke generators.
 static const GenArray kAllGens[NUM_TYPES] = {
-    {kStarGens, 7},     // Stars
-    {kSparkGens, 6},    // Sparks
-    {kWispGens, 8},     // Wisps
-    {kRuneGens, 6},     // Runes
-    {kOrbGens, 5},      // Orbs
-    {kCrystalGens, 4},  // Crystals
+    {kOrbGens, 5},    // Firefly  -> soft glowing orbs
+    {kSparkGens, 6},  // Rain     -> streaky sparks
+    {kStarGens, 7},   // Snow     -> star/flake points
+    {kOrbGens, 5},    // Smoke    -> soft blobs
+    {kSparkGens, 6},  // Spark    -> embers
+    {kWispGens, 8},   // Wisp     -> wisps
+    {kStarGens, 7},   // Leaf     -> small shapes
+    {kWispGens, 8},   // Aurora   -> ribbons
+    {kStarGens, 7},   // CherryBlossom -> small petals/points
+    {kOrbGens, 5},    // Dust     -> tiny soft motes
+    {kOrbGens, 5},    // Mote     -> soft glowing motes
 };
 
 // Create a D3D11 texture from a pixel generator function (white RGBA with computed alpha).
+// Runs the full quality pipeline: supersampling, mip chain, dithered quantization.
 static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn generator)
 {
     TextureInfo info;
@@ -1173,46 +1185,115 @@ static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn genera
     }
 
     const int size = PROC_SIZE;
-    const UINT stride = static_cast<UINT>(size) * 4;
-    std::vector<BYTE> pixels(static_cast<size_t>(size) * size * 4);
 
-    for (int y = 0; y < size; ++y)
+    // Level 0 in float: 4x rotated-grid supersampling per pixel. The circular
+    // guard mask is applied per sample so its edge is anti-aliased together
+    // with the design. Starting the mask at .88 still forces alpha to zero at
+    // the quad boundary (no square clipping under additive blending) without
+    // eating into designs that reach r ~ .7.
+    std::vector<float> levelAlpha(static_cast<size_t>(size) * size);
+    static constexpr float SAMPLE_OFFSETS[4][2] = {
+        {-.375f, .125f}, {.125f, .375f}, {.375f, -.125f}, {-.125f, -.375f}};
+
+    std::vector<int> rows(static_cast<size_t>(size));
+    std::iota(rows.begin(), rows.end(), 0);
+    std::for_each(std::execution::par,
+                  rows.begin(),
+                  rows.end(),
+                  [&levelAlpha, generator](int y)
+                  {
+                      for (int x = 0; x < PROC_SIZE; ++x)
+                      {
+                          float sum = .0f;
+                          for (const auto& offset : SAMPLE_OFFSETS)
+                          {
+                              float nx = 2.0f * (static_cast<float>(x) + offset[0]) /
+                                             static_cast<float>(PROC_SIZE - 1) -
+                                         1.0f;
+                              float ny = 2.0f * (static_cast<float>(y) + offset[1]) /
+                                             static_cast<float>(PROC_SIZE - 1) -
+                                         1.0f;
+                              float a = std::clamp(generator(nx, ny), .0f, 1.0f);
+                              float mr = std::sqrt(nx * nx + ny * ny);
+                              sum += a * PSmoothstep(1.0f, .88f, mr);
+                          }
+                          levelAlpha[static_cast<size_t>(y) * PROC_SIZE + x] = sum * .25f;
+                      }
+                  });
+
+    // Full mip chain via successive 2x2 box reduction in float. PROC_SIZE is
+    // a power of two, so every level halves cleanly down to 1x1.
+    int mipLevels = 1;
+    for (int d = size; d > 1; d >>= 1)
     {
-        float ny = 2.0f * static_cast<float>(y) / static_cast<float>(size - 1) - 1.0f;
-        for (int x = 0; x < size; ++x)
+        ++mipLevels;
+    }
+
+    std::vector<std::vector<BYTE>> mipPixels(static_cast<size_t>(mipLevels));
+    std::vector<D3D11_SUBRESOURCE_DATA> initData(static_cast<size_t>(mipLevels));
+    int dim = size;
+    for (int level = 0; level < mipLevels; ++level)
+    {
+        if (level > 0)
         {
-            float nx = 2.0f * static_cast<float>(x) / static_cast<float>(size - 1) - 1.0f;
-            float alpha = std::clamp(generator(nx, ny), .0f, 1.0f);
-
-            // Universal circular mask: forces alpha to zero at the quad boundary so
-            // particles never clip as visible squares under additive blending.
-            float mr = std::sqrt(nx * nx + ny * ny);
-            alpha *= PSmoothstep(1.0f, .7f, mr);
-
-            size_t idx = (static_cast<size_t>(y) * size + x) * 4;
-            pixels[idx + 0] = 255;
-            pixels[idx + 1] = 255;
-            pixels[idx + 2] = 255;
-            pixels[idx + 3] = static_cast<BYTE>(alpha * 255.0f);
+            const int prevDim = dim;
+            dim = (std::max)(1, dim >> 1);
+            std::vector<float> reduced(static_cast<size_t>(dim) * dim);
+            for (int y = 0; y < dim; ++y)
+            {
+                for (int x = 0; x < dim; ++x)
+                {
+                    const size_t i00 =
+                        static_cast<size_t>(y) * 2 * prevDim + static_cast<size_t>(x) * 2;
+                    const size_t i10 = i00 + prevDim;
+                    reduced[static_cast<size_t>(y) * dim + x] =
+                        (levelAlpha[i00] + levelAlpha[i00 + 1] + levelAlpha[i10] +
+                         levelAlpha[i10 + 1]) *
+                        .25f;
+                }
+            }
+            levelAlpha = std::move(reduced);
         }
+
+        // Quantize with interleaved gradient noise as unbiased stochastic
+        // rounding -- removes banding rings in smooth glow falloffs.
+        auto& pixels = mipPixels[level];
+        pixels.resize(static_cast<size_t>(dim) * dim * 4);
+        for (int y = 0; y < dim; ++y)
+        {
+            for (int x = 0; x < dim; ++x)
+            {
+                float a = levelAlpha[static_cast<size_t>(y) * dim + x];
+                int a8 = static_cast<int>(a * 255.0f + PInterleavedGradientNoise(x, y));
+                BYTE alphaByte = static_cast<BYTE>(std::clamp(a8, 0, 255));
+                // Fully transparent texels carry black RGB (mirrors the
+                // file-loading sanitization) so screen-style blending cannot
+                // lift hidden white into the framebuffer as box artifacts.
+                BYTE rgb = (alphaByte == 0) ? 0 : 255;
+                size_t idx = (static_cast<size_t>(y) * dim + x) * 4;
+                pixels[idx + 0] = rgb;
+                pixels[idx + 1] = rgb;
+                pixels[idx + 2] = rgb;
+                pixels[idx + 3] = alphaByte;
+            }
+        }
+        initData[level].pSysMem = pixels.data();
+        initData[level].SysMemPitch = static_cast<UINT>(dim) * 4;
+        initData[level].SysMemSlicePitch = 0;
     }
 
     D3D11_TEXTURE2D_DESC texDesc = {};
     texDesc.Width = static_cast<UINT>(size);
     texDesc.Height = static_cast<UINT>(size);
-    texDesc.MipLevels = 1;
+    texDesc.MipLevels = static_cast<UINT>(mipLevels);
     texDesc.ArraySize = 1;
     texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texDesc.SampleDesc.Count = 1;
     texDesc.Usage = D3D11_USAGE_DEFAULT;
     texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-    D3D11_SUBRESOURCE_DATA initData = {};
-    initData.pSysMem = pixels.data();
-    initData.SysMemPitch = stride;
-
     ComPtr<ID3D11Texture2D> texture;
-    HRESULT hr = device->CreateTexture2D(&texDesc, &initData, &texture);
+    HRESULT hr = device->CreateTexture2D(&texDesc, initData.data(), &texture);
     if (FAILED(hr))
     {
         return info;
@@ -1221,7 +1302,7 @@ static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn genera
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Texture2D.MipLevels = static_cast<UINT>(mipLevels);
 
     hr = device->CreateShaderResourceView(
         texture.Get(), &srvDesc, info.srv.ReleaseAndGetAddressOf());
@@ -1258,8 +1339,17 @@ static int GenerateProceduralTextures(ID3D11Device* device, int styleIndex)
 
     if (loaded > 0)
     {
-        static const char* kStyleNames[] = {
-            "stars", "sparks", "wisps", "runes", "orbs", "crystals"};
+        static const char* kStyleNames[] = {"firefly",
+                                            "rain",
+                                            "snow",
+                                            "smoke",
+                                            "spark",
+                                            "wisp",
+                                            "leaf",
+                                            "aurora",
+                                            "cherryblossom",
+                                            "dust",
+                                            "mote"};
         const char* name =
             (styleIndex >= 0 && styleIndex < NUM_TYPES) ? kStyleNames[styleIndex] : "?";
         SKSE::log::info("ParticleTextures: [{}] generated {} procedural textures", name, loaded);
@@ -1378,33 +1468,45 @@ bool Initialize(ID3D11Device* device)
             {
                 const std::string basePath = "Data/SKSE/Plugins/glyph/particles/";
 
-                struct FolderMapping
+                // One hand-made PNG sprite per weather type, loaded directly
+                // from the particles root. The style index must match
+                // Settings::ParticleStyle (and kAllGens / kStyleNames above).
+                struct FileMapping
                 {
                     int style;
-                    const char* folder;
+                    const char* file;
                 };
 
-                FolderMapping mappings[] = {
-                    {0, "stars"},
-                    {1, "sparks"},
-                    {2, "wisps"},
-                    {3, "runes"},
-                    {4, "orbs"},
-                    {5, "crystals"},
+                static const FileMapping mappings[NUM_TYPES] = {
+                    {0, "firefly.png"},
+                    {1, "rain.png"},
+                    {2, "snow.png"},
+                    {3, "smoke.png"},
+                    {4, "spark.png"},
+                    {5, "wisp.png"},
+                    {6, "leaf.png"},
+                    {7, "aurora.png"},
+                    {8, "cherryblossom.png"},
+                    {9, "dust.png"},
+                    {10, "mote.png"},
                 };
 
                 for (const auto& m : mappings)
                 {
-                    std::string folderPath = basePath + m.folder;
-                    int count =
-                        LoadTexturesFromFolder(device, m.style, folderPath, wicFactory.Get());
-                    if (count > 0)
+                    const std::string path = basePath + m.file;
+                    auto info =
+                        LoadTextureFromFile(device, s_Context.Get(), path, wicFactory.Get());
+                    if (info.srv)
                     {
-                        SKSE::log::info("ParticleTextures: [{}] loaded {} user textures from {}",
-                                        m.folder,
-                                        count,
-                                        folderPath);
-                        totalLoaded += count;
+                        Textures()[m.style].push_back(std::move(info));
+                        SKSE::log::info("ParticleTextures: [{}] loaded sprite {}", m.style, path);
+                        ++totalLoaded;
+                    }
+                    else
+                    {
+                        SKSE::log::warn(
+                            "ParticleTextures: missing sprite {} (will use procedural fallback)",
+                            path);
                     }
                 }
             }
@@ -1548,7 +1650,10 @@ void DrawSpriteWithIndex(ImDrawList* list,
         return;
     }
 
-    // Use linear filtering for HD textures, point filtering for tiny sprites.
+    // Point-sample by default so the low-res pixel-art sprites stay razor-crisp
+    // at any magnification -- the premium look layers soft glow AROUND the hard
+    // pixel edge, it never blurs it.  Linear filtering only for genuinely HD
+    // source textures (>64px), where nearest-neighbor would alias on minify.
     ID3D11SamplerState* samplerToUse =
         (texMaxDim > 64.0f && s_LinearSampler) ? s_LinearSampler.Get() : s_PointSampler.Get();
 
