@@ -113,10 +113,15 @@ void PruneCacheToSnapshot(const std::vector<ActorDrawData>& snap)
 
         if (!inSnapshot)
         {
-            // Check if grace period has expired
-            uint32_t framesSinceLastSeen = GetState().frame - it->second.lastSeenFrame;
-            if (framesSinceLastSeen > CACHE_GRACE_FRAMES)
+            // Check if grace period has expired. Keep an entry alive while it is
+            // actively exiting (0 < exitPhase < 1), up to a hard ceiling so a
+            // mid-exit entry can't leak if the exit animation is toggled off.
+            const uint32_t framesSinceLastSeen = GetState().frame - it->second.lastSeenFrame;
+            const bool midExit = it->second.exitPhase > .0f && it->second.exitPhase < 1.0f;
+            if (framesSinceLastSeen > CACHE_GRACE_FRAMES &&
+                (!midExit || framesSinceLastSeen > CACHE_GRACE_FRAMES * 3))
             {
+                GetState().lastDrawData.erase(it->first);
                 it = GetState().cache.erase(it);
                 continue;
             }
@@ -386,6 +391,11 @@ static void DrawLabel(const ActorDrawData& d,
 
     entry.lastSeenFrame = GetState().frame;
 
+    // Capture live draw data and cancel any pending exit: a present actor is
+    // never mid-exit. The exit pass replays this snapshot after the actor leaves.
+    GetState().lastDrawData[d.formID] = d;
+    entry.exitPhase = .0f;
+
     // Compute distance-based visual factors
     DistanceFactors df = ComputeDistanceFactors(d, snap);
 
@@ -414,34 +424,26 @@ static void DrawLabel(const ActorDrawData& d,
             entry.entranceDone = true;
         }
         const float t = entry.entrancePhase;
-        // Quintic smoothstep for smooth acceleration/deceleration
-        const float ease = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+        // Cinematic ease-out: a front-loaded reveal that settles with weight and
+        // never overshoots.  Every style fades in and rises gently into place;
+        // only the scale treatment differs between styles.
+        const float ease = TextEffects::EaseOutCubic(t);
 
         entranceAlphaMul = ease;
 
-        if (snap.entranceStyle == 0)  // PopIn
+        // Gentle upward settle, applied to all styles: the label covers most of
+        // the travel immediately, then eases the final pixels for a deliberate
+        // "locking in" feel (applied via the Y-offset block below).
+        entranceYOffset = RenderConstants::ENTRANCE_RISE_PX * (1.0f - TextEffects::EaseOutExpo(t));
+
+        if (snap.entranceStyle == 1)  // SlideDown: rise + fade only, no scale
         {
-            // Scale from 0.5 to overshoot, then settle to 1.0
-            const float overshoot = snap.entranceOvershoot;
-            if (t < .7f)
-            {
-                float sub = t / .7f;
-                entranceScaleMul = .5f + sub * (overshoot - .5f);
-            }
-            else
-            {
-                float sub = (t - .7f) / .3f;
-                entranceScaleMul = overshoot + sub * (1.0f - overshoot);
-            }
+            entranceScaleMul = 1.0f;
         }
-        else if (snap.entranceStyle == 1)  // SlideDown
+        else  // PopIn (0) / Expand (2): gentle scale settle, no overshoot
         {
-            entranceYOffset = -20.0f * (1.0f - ease);
-        }
-        // Style 2 (Expand) uses the same scale path as PopIn but without overshoot
-        else
-        {
-            entranceScaleMul = .3f + ease * .7f;
+            const float scaleStart = snap.entranceStyle == 2 ? .88f : .90f;
+            entranceScaleMul = scaleStart + ease * (1.0f - scaleStart);
         }
     }
 
@@ -508,7 +510,7 @@ static void DrawLabel(const ActorDrawData& d,
 
     LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap);
 
-    // Apply entrance Y offset (SlideDown style)
+    // Apply entrance rise Y offset (all styles settle gently into place)
     if (entranceYOffset != .0f)
     {
         layout.startPos.y += entranceYOffset;
@@ -611,9 +613,82 @@ static void DrawLabel(const ActorDrawData& d,
     DrawParticles(drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap);
     DrawOrnaments(
         drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap.fastOutlines, snap);
-    DrawTitleText(drawList, d, style, layout, df.lodTitleFactor, splitter, snap.fastOutlines, snap);
-    DrawMainLineSegments(drawList, d, style, layout, splitter, snap.fastOutlines, snap);
-    DrawInfoLineSegments(drawList, d, style, layout, splitter, snap.fastOutlines, snap);
+    DrawTitleText(drawList, style, layout, df.lodTitleFactor, splitter, snap.fastOutlines, snap);
+    DrawMainLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawInfoLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawBadges(drawList, style, layout, splitter, snap.fastOutlines, snap);
+}
+
+// Render a nameplate that has just left the snapshot, fading and sinking out of
+// view over snap.exitDuration. Replays the last cached draw data at the last
+// smoothed screen position (entry.smooth) -- no reprojection or new smoothing.
+static void DrawExitingLabel(ActorCache& entry,
+                             const ActorDrawData& d,
+                             ImDrawList* drawList,
+                             ImDrawListSplitter* splitter,
+                             const RenderSettingsSnapshot& snap)
+{
+    const float dt = ImGui::GetIO().DeltaTime;
+    entry.exitPhase += dt / std::max(snap.exitDuration, .05f);
+    if (entry.exitPhase >= 1.0f)
+    {
+        entry.exitPhase = 1.0f;
+    }
+
+    // Ease-in: the label lingers, then accelerates away.
+    const float e = TextEffects::EaseInCubic(entry.exitPhase);
+    const float exitAlphaMul = 1.0f - e;
+    const float exitScaleMul = 1.0f - .06f * e;
+    const float exitYOffset = RenderConstants::EXIT_SINK_PX * e;
+
+    const float alpha = entry.alphaSmooth * entry.occlusionSmooth * exitAlphaMul;
+    if (alpha < .01f)
+    {
+        return;
+    }
+    const float textSizeScale = entry.textSizeScale * exitScaleMul;
+
+    ImFont* nameFont = GetFontAt(RenderConstants::FONT_INDEX_NAME);
+    ImFont* levelFont = GetFontAt(RenderConstants::FONT_INDEX_LEVEL);
+    ImFont* titleFont = GetFontAt(RenderConstants::FONT_INDEX_TITLE);
+    if (!nameFont || !levelFont || !titleFont)
+    {
+        return;
+    }
+
+    const float time = (float)ImGui::GetTime();
+    LabelStyle style = ComputeLabelStyle(d, entry.cachedNameLower, alpha, time, snap);
+    style.nameOutlineWidth = style.CalcOutlineWidth(nameFont->FontSize * textSizeScale, snap);
+    style.levelOutlineWidth = style.CalcOutlineWidth(levelFont->FontSize * textSizeScale, snap);
+    style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale, snap);
+    style.outlineWidth = style.nameOutlineWidth;
+
+    // Preserve the last focus state so an ambient label keeps its dimmed title.
+    const bool focusApplies = snap.focus.Enabled && !d.isPlayer;
+    const float auxAlphaMul = focusApplies ? entry.focusSmooth : 1.0f;
+    style.titleAlpha *= auxAlphaMul;
+    style.infoAlphaMul = auxAlphaMul;
+
+    // Reuse distance-derived LOD factors from the cached distance.
+    DistanceFactors df = ComputeDistanceFactors(d, snap);
+
+    LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap);
+    layout.startPos.y += exitYOffset;
+    layout.nameplateCenter.y += exitYOffset;
+    layout.nameplateTop += exitYOffset;
+    layout.nameplateBottom += exitYOffset;
+    layout.mainLineCenterY += exitYOffset;
+
+    // No motion trail on exit (the label is not moving); everything else renders
+    // as a fading, sinking copy of the last live frame.
+    DrawBackgroundGlow(drawList, style, layout, df.lodTitleFactor, splitter, snap);
+    DrawParticles(drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap);
+    DrawOrnaments(
+        drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap.fastOutlines, snap);
+    DrawTitleText(drawList, style, layout, df.lodTitleFactor, splitter, snap.fastOutlines, snap);
+    DrawMainLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawInfoLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawBadges(drawList, style, layout, splitter, snap.fastOutlines, snap);
 }
 
 // ============================================================================
@@ -1008,6 +1083,12 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.directionalLightBias = so.DirectionalLightBias;
     snap.outlineColorTint = so.OutlineColorTint;
     snap.shadowColorTint = so.ShadowColorTint;
+    snap.softShadowEnabled = so.SoftShadowEnabled;
+    snap.softShadowDistance = so.SoftShadowDistance;
+    snap.softShadowSoftness = so.SoftShadowSoftness;
+    snap.softShadowOpacity = so.SoftShadowOpacity;
+    snap.softShadowAngle = so.SoftShadowAngle;
+    snap.softShadowSamples = so.SoftShadowSamples;
 
     const auto& gl = Settings::Glow();
     snap.enableGlow = gl.Enabled;
@@ -1052,17 +1133,26 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.particleSpread = part.Spread;
     snap.particleAlpha = part.Alpha;
     snap.particleBlendMode = part.BlendMode;
+    snap.particleDepthStrength = part.DepthStrength;
+    snap.particleColorWarmth = part.ColorWarmth;
+    snap.particleGlowStrength = part.GlowStrength;
+    snap.particleGlowSize = part.GlowSize;
+    snap.particleShineThreshold = part.ShineThreshold;
 
     const auto& ac = Settings::AnimColor();
-    snap.nameColorMix = ac.NameColorMix;
-    snap.tierVibrancyBoost = ac.TierVibrancyBoost;
     snap.innerTextAlpha = ac.InnerTextAlpha;
     snap.outlineAlpha = ac.OutlineAlpha;
-    snap.textSaturationBoost = ac.TextSaturationBoost;
     snap.alphaSettleTime = ac.AlphaSettleTime;
     snap.scaleSettleTime = ac.ScaleSettleTime;
     snap.positionSettleTime = ac.PositionSettleTime;
     snap.occlusionSettleTime = Settings::Occlusion().SettleTime;
+
+    const auto& nc = Settings::NpcColors();
+    snap.npcColors.neutral = nc.NeutralColor;
+    snap.npcColors.hostile = nc.HostileColor;
+    snap.npcColors.follower = nc.FollowerColor;
+    snap.npcColors.level = nc.LevelColor;
+    snap.npcColors.title = nc.TitleColor;
 
     const auto& disp = Settings::Display();
     snap.enableDebugOverlay = disp.EnableDebugOverlay;
@@ -1097,6 +1187,83 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.labels.deltaWeakBelow = lb.WeakAtOrBelow;
     snap.labels.deltaStrongAbove = lb.StrongAtOrAbove;
     snap.labels.deltaDeadlyAbove = lb.DeadlyAtOrAbove;
+
+    // Status icon badges -- colors pre-derived in ClampAndValidate.
+    const auto& ic = Settings::Icons();
+    snap.icons.enabled = ic.Enabled && !ic.Folder.empty();
+    snap.icons.scale = ic.Scale;
+    snap.icons.deadlyPulse = ic.DeadlyPulse;
+    snap.icons.icoFollower = ic.FollowerIcon;
+    snap.icons.icoAlly = ic.AllyIcon;
+    snap.icons.icoHostile = ic.HostileIcon;
+    snap.icons.icoWeak = ic.WeakIcon;
+    snap.icons.icoStrong = ic.StrongIcon;
+    snap.icons.icoDeadly = ic.DeadlyIcon;
+    snap.icons.icoBeast = ic.BeastIcon;
+    snap.icons.icoUndead = ic.UndeadIcon;
+    snap.icons.icoDaedra = ic.DaedraIcon;
+    snap.icons.icoDragon = ic.DragonIcon;
+    snap.icons.colFollower = ic.FollowerColor;
+    snap.icons.colAlly = ic.AllyColor;
+    snap.icons.colHostile = ic.HostileColor;
+    snap.icons.colWeak = ic.WeakColor;
+    snap.icons.colStrong = ic.StrongColor;
+    snap.icons.colDeadly = ic.DeadlyColor;
+    snap.icons.colCreature = ic.CreatureColor;
+    // Expanded always-on slots (more NPC + player indicators).
+    snap.icons.icoNeutral = ic.NeutralIcon;
+    snap.icons.icoHumanoid = ic.HumanoidIcon;
+    snap.icons.icoEven = ic.EvenIcon;
+    snap.icons.icoGuard = ic.GuardIcon;
+    snap.icons.icoMerchant = ic.MerchantIcon;
+    snap.icons.icoCommoner = ic.CommonerIcon;
+    snap.icons.icoEssential = ic.EssentialIcon;
+    snap.icons.icoProtected = ic.ProtectedIcon;
+    snap.icons.icoMortal = ic.MortalIcon;
+    snap.icons.icoCombat = ic.CombatIcon;
+    snap.icons.icoAlert = ic.AlertIcon;
+    snap.icons.icoIdle = ic.IdleIcon;
+    snap.icons.icoSneakHidden = ic.SneakHiddenIcon;
+    snap.icons.icoSneakDetected = ic.SneakDetectedIcon;
+    snap.icons.icoSneakOff = ic.SneakOffIcon;
+    snap.icons.icoEncumbered = ic.EncumberedIcon;
+    snap.icons.icoNormalWeight = ic.NormalWeightIcon;
+    snap.icons.icoWanted = ic.WantedIcon;
+    snap.icons.icoBountyClear = ic.BountyClearIcon;
+    snap.icons.colGuard = ic.GuardColor;
+    snap.icons.colMerchant = ic.MerchantColor;
+    snap.icons.colEssential = ic.EssentialColor;
+    snap.icons.colProtected = ic.ProtectedColor;
+    snap.icons.colCombat = ic.CombatColor;
+    snap.icons.colAlert = ic.AlertColor;
+    snap.icons.colSneakHidden = ic.SneakHiddenColor;
+    snap.icons.colSneakDetected = ic.SneakDetectedColor;
+    snap.icons.colEncumbered = ic.EncumberedColor;
+    snap.icons.colWanted = ic.WantedColor;
+    snap.icons.colNeutral = ic.NeutralColor;
+    snap.icons.colHumanoid = ic.HumanoidColor;
+    snap.icons.colCommoner = ic.CommonerColor;
+    snap.icons.colMortal = ic.MortalColor;
+    snap.icons.colEven = ic.EvenColor;
+    snap.icons.colIdle = ic.IdleColor;
+    snap.icons.colSneakOff = ic.SneakOffColor;
+    snap.icons.colNormalWeight = ic.NormalWeightColor;
+    snap.icons.colBountyClear = ic.BountyClearColor;
+    snap.icons.colMuted = ic.MutedColor;
+    snap.icons.relationshipEnabled = ic.RelationshipEnabled;
+    snap.icons.creatureEnabled = ic.CreatureEnabled;
+    snap.icons.threatEnabled = ic.ThreatEnabled;
+    snap.icons.roleEnabled = ic.RoleEnabled;
+    snap.icons.protectionEnabled = ic.ProtectionEnabled;
+    snap.icons.engagementEnabled = ic.EngagementEnabled;
+    snap.icons.combatStateEnabled = ic.CombatStateEnabled;
+    snap.icons.alertStateEnabled = ic.AlertStateEnabled;
+    snap.icons.sneakEnabled = ic.SneakEnabled;
+    snap.icons.playerCombatEnabled = ic.PlayerCombatEnabled;
+    snap.icons.encumberedEnabled = ic.EncumberedEnabled;
+    snap.icons.bountyEnabled = ic.BountyEnabled;
+    snap.icons.mutedAlpha = ic.MutedAlpha;
+    snap.icons.mutedDesat = ic.MutedDesat;
     snap.focus = Settings::Focus();
 
     return snap;
@@ -1231,6 +1398,33 @@ void Draw()
     for (auto& d : localSnap)
     {
         DrawLabel(d, drawList, &splitter, snap, focusedFormID);
+    }
+
+    // Exit pass: actors that just left the snapshot fade + sink out of view over
+    // snap.exitDuration before their cache entry is pruned. Ghosts replay their
+    // last live draw data and never participate in focus/overlap (live-only).
+    if (snap.enableExit)
+    {
+        std::unordered_set<uint32_t> visible;
+        visible.reserve(localSnap.size());
+        for (const auto& d : localSnap)
+        {
+            visible.insert(d.formID);
+        }
+        for (auto& [formID, entry] : GetState().cache)
+        {
+            if (visible.count(formID) != 0 || !entry.initialized || !entry.entranceDone ||
+                entry.exitPhase >= 1.0f)
+            {
+                continue;
+            }
+            auto ld = GetState().lastDrawData.find(formID);
+            if (ld == GetState().lastDrawData.end())
+            {
+                continue;
+            }
+            DrawExitingLabel(entry, ld->second, drawList, &splitter, snap);
+        }
     }
 
     if (gpuGlow)
