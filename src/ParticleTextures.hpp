@@ -10,23 +10,28 @@
  * @author Alex (https://github.com/lextpf)
  * @ingroup ParticleTextures
  *
- * Loads PNG textures from subfolders and creates D3D11 shader resource views
- * for use with ImGui textured quads. Each particle type can have multiple
- * textures loaded from its folder, with consistent per-particle selection
- * to avoid flickering.
+ * Loads one hand-made PNG sprite per weather type and creates D3D11 shader
+ * resource views for use with ImGui textured quads. The per-particle texture
+ * selection is deterministic to avoid flickering.
  *
- * ## :material-folder-image: Folder Structure
+ * ## :material-folder-image: Sprite Files
  *
- * Textures are loaded from `Data/SKSE/Plugins/glyph/particles/<type>/`:
+ * One PNG per type is loaded from `Data/SKSE/Plugins/glyph/particles/`. The
+ * style index matches `Settings::ParticleStyle`:
  *
- * | Subfolder    | Style Index | Description             |
- * |--------------|:-----------:|-------------------------|
- * | `stars/`     | 0           | Star sparkle sprites    |
- * | `sparks/`    | 1           | Spark effect sprites    |
- * | `wisps/`     | 2           | Wisp glow sprites       |
- * | `runes/`     | 3           | Magical rune symbols    |
- * | `orbs/`      | 4           | Soft glowing orbs       |
- * | `crystals/`  | 5           | Crystalline shape sprites |
+ * | File                | Style Index | Type           |
+ * |---------------------|:-----------:|----------------|
+ * | `firefly.png`       | 0           | Firefly        |
+ * | `rain.png`          | 1           | Rain           |
+ * | `snow.png`          | 2           | Snow           |
+ * | `smoke.png`         | 3           | Smoke          |
+ * | `spark.png`         | 4           | Spark          |
+ * | `wisp.png`          | 5           | Wisp           |
+ * | `leaf.png`          | 6           | Leaf           |
+ * | `aurora.png`        | 7           | Aurora         |
+ * | `cherryblossom.png` | 8           | Cherry blossom |
+ * | `dust.png`          | 9           | Dust           |
+ * | `mote.png`          | 10          | Mote           |
  *
  * ## :material-image-filter-hdr: Texture Pipeline
  *
@@ -54,6 +59,16 @@
  * prime multipliers for good distribution:
  *
  * $$\text{texture} = \text{hash}(\text{particleIndex},\; \text{style}) \bmod \text{textureCount}$$
+ *
+ * ## :material-auto-fix: Quality Pipeline
+ *
+ * Styles without user textures fall back to procedurally generated
+ * 256x256 white-on-transparent sprites. Every generated sprite runs
+ * through a quality pipeline: 4x rotated-grid supersampling (anti-aliased
+ * line work), interleaved-gradient-noise dithering at 8-bit quantization
+ * (no banding in soft glows), and a full CPU-built mip chain (no shimmer
+ * under minification). User-provided textures larger than 64px receive a
+ * GPU-generated mip chain at load time for the same reason.
  */
 namespace ParticleTextures
 {
