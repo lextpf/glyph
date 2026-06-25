@@ -1,5 +1,7 @@
 #include "RendererInternal.hpp"
 
+#include "BadgeTextures.hpp"
+
 namespace Renderer
 {
 // Calculate tight vertical bounds of text glyphs
@@ -283,198 +285,12 @@ static int MatchTier(uint16_t level, const RenderSettingsSnapshot& snap)
     return std::clamp(matchedTier, 0, static_cast<int>(snap.tiers.size()) - 1);
 }
 
-// Compute all color values and pack them into the LabelStyle.
-static void ComputeTierColors(LabelStyle& style,
-                              const Settings::TierDefinition& tier,
-                              uint16_t level,
-                              float alpha,
-                              const RenderSettingsSnapshot& snap)
+// Solid-fill effect used for NPC text (tier effects are player/special-title only).
+static constexpr Settings::EffectParams kNoneEffect{.type = Settings::EffectType::None};
+
+// Pack the resolved float colors into draw-ready ImU32 values.
+static void PackStyleColors(LabelStyle& style, float alpha, const RenderSettingsSnapshot& snap)
 {
-    // Level position within tier [0, 1]
-    float levelT = .0f;
-    if (tier.maxLevel > tier.minLevel)
-    {
-        levelT = (level <= tier.minLevel) ? .0f
-                 : (level >= tier.maxLevel)
-                     ? 1.0f
-                     : (float)(level - tier.minLevel) / (float)(tier.maxLevel - tier.minLevel);
-    }
-    levelT = std::clamp(levelT, .0f, 1.0f);
-
-    const bool under100 = (level < 100);
-    const float tierIntensity = under100 ? .5f : 1.0f;
-
-    // Base tier colors are intentionally softened at low levels, then later
-    // re-saturated by the user-controlled vibrancy knobs.
-    auto Pastelize = [&](const Settings::Color3& c) -> ImVec4
-    {
-        float t = snap.nameColorMix + (1.0f - snap.nameColorMix) * levelT;
-        if (under100)
-        {
-            // Early earthy tiers carry much darker secondary hues than the
-            // prestige bands. Keep them lifted so the name fill stays readable.
-            t = std::clamp(t - .18f, .0f, 1.0f);
-        }
-        return ImVec4(
-            1.0f + (c.r - 1.0f) * t, 1.0f + (c.g - 1.0f) * t, 1.0f + (c.b - 1.0f) * t, 1.0f);
-    };
-
-    style.Lc = Pastelize(tier.leftColor);
-    style.Rc = Pastelize(tier.rightColor);
-
-    const float effectAlphaMul =
-        RenderConstants::EFFECT_ALPHA_MIN +
-        (RenderConstants::EFFECT_ALPHA_MAX - RenderConstants::EFFECT_ALPHA_MIN) * levelT;
-    style.effectAlpha = alpha * tierIntensity * effectAlphaMul;
-
-    auto MixToWhite = [](ImVec4 c, float amount)
-    {
-        amount = std::clamp(amount, .0f, 1.0f);
-        return ImVec4(1.0f + (c.x - 1.0f) * amount,
-                      1.0f + (c.y - 1.0f) * amount,
-                      1.0f + (c.z - 1.0f) * amount,
-                      c.w);
-    };
-    auto MixColors = [](const ImVec4& a, const ImVec4& b, float t)
-    {
-        t = std::clamp(t, .0f, 1.0f);
-        return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.0f);
-    };
-
-    const float baseColorAmount = under100 ? (.35f + .65f * tierIntensity) : 1.0f;
-    const ImVec4 highlightColor(
-        tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, 1.0f);
-    const ImVec4 vividNameL(tier.leftColor.r, tier.leftColor.g, tier.leftColor.b, 1.0f);
-    const ImVec4 vividNameR(tier.rightColor.r, tier.rightColor.g, tier.rightColor.b, 1.0f);
-    ImVec4 vividLevelL = vividNameL;
-    ImVec4 vividLevelR = vividNameR;
-    ImVec4 vividTitleL = vividNameL;
-    ImVec4 vividTitleR = vividNameR;
-
-    // Name colors stay anchored to the tier's main gradient.
-    style.LcName = style.Lc;
-    style.RcName = style.Rc;
-
-    // Level colors: use per-tier override if set, else derive a softer supporting accent
-    // from the name colors plus a touch of the tier highlight.
-    if (tier.levelLeftColor)
-    {
-        vividLevelL =
-            ImVec4(tier.levelLeftColor->r, tier.levelLeftColor->g, tier.levelLeftColor->b, 1.0f);
-        style.LcLevel = Pastelize(*tier.levelLeftColor);
-    }
-    else
-    {
-        vividLevelL = MixColors(vividNameL, highlightColor, .18f + .10f * levelT);
-        style.LcLevel = MixToWhite(vividLevelL, baseColorAmount * .90f);
-    }
-    if (tier.levelRightColor)
-    {
-        vividLevelR =
-            ImVec4(tier.levelRightColor->r, tier.levelRightColor->g, tier.levelRightColor->b, 1.0f);
-        style.RcLevel = Pastelize(*tier.levelRightColor);
-    }
-    else
-    {
-        vividLevelR = MixColors(vividNameR, highlightColor, .18f + .10f * levelT);
-        style.RcLevel = MixToWhite(vividLevelR, baseColorAmount * .90f);
-    }
-
-    // Title colors: use per-tier override if set, else derive a companion accent from
-    // the same tier palette rather than cloning the name band.
-    if (tier.titleLeftColor)
-    {
-        vividTitleL =
-            ImVec4(tier.titleLeftColor->r, tier.titleLeftColor->g, tier.titleLeftColor->b, 1.0f);
-        style.LcTitle = Pastelize(*tier.titleLeftColor);
-    }
-    else
-    {
-        vividTitleL = MixColors(MixColors(vividNameL, vividNameR, .18f), highlightColor, .34f);
-        style.LcTitle = MixToWhite(vividTitleL, baseColorAmount * .82f);
-    }
-    if (tier.titleRightColor)
-    {
-        vividTitleR =
-            ImVec4(tier.titleRightColor->r, tier.titleRightColor->g, tier.titleRightColor->b, 1.0f);
-        style.RcTitle = Pastelize(*tier.titleRightColor);
-    }
-    else
-    {
-        vividTitleR = MixColors(MixColors(vividNameR, vividNameL, .18f), highlightColor, .42f);
-        style.RcTitle = MixToWhite(vividTitleR, baseColorAmount * .82f);
-    }
-
-    style.specialGlowColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-
-    if (style.specialTitle)
-    {
-        const auto* st = style.specialTitle;
-        ImVec4 specialCol(st->color.r, st->color.g, st->color.b, 1.0f);
-        style.specialGlowColor = ImVec4(st->glowColor.r, st->glowColor.g, st->glowColor.b, 1.0f);
-
-        style.Lc = specialCol;
-        style.Rc = specialCol;
-        style.LcLevel = specialCol;
-        style.RcLevel = specialCol;
-        style.LcName = specialCol;
-        style.RcName = specialCol;
-        style.LcTitle = specialCol;
-        style.RcTitle = specialCol;
-    }
-
-    // Higher tiers can claw some saturation back from the softened base palette.
-    if (snap.tierVibrancyBoost > .0f && snap.tiers.size() > 1 && !style.specialTitle)
-    {
-        float tierProgress =
-            static_cast<float>(style.tierIdx) / static_cast<float>(snap.tiers.size() - 1);
-        float boost = snap.tierVibrancyBoost * tierProgress;
-        auto Vivify = [&](ImVec4& washed, const ImVec4& vivid)
-        {
-            washed.x += (vivid.x - washed.x) * boost;
-            washed.y += (vivid.y - washed.y) * boost;
-            washed.z += (vivid.z - washed.z) * boost;
-        };
-        // Preserve element-specific palette roles instead of collapsing every
-        // tier back toward the main name band at higher vibrancy settings.
-        Vivify(style.LcName, vividNameL);
-        Vivify(style.RcName, vividNameR);
-        Vivify(style.LcLevel, vividLevelL);
-        Vivify(style.RcLevel, vividLevelR);
-        Vivify(style.LcTitle, vividTitleL);
-        Vivify(style.RcTitle, vividTitleR);
-    }
-
-    // Global saturation boost: pull text colors away from gray without changing alpha.
-    if (snap.textSaturationBoost > .0f)
-    {
-        const float s = 1.0f + snap.textSaturationBoost;
-        auto BoostSat = [s](ImVec4& c) { BoostSaturation(c, s); };
-        BoostSat(style.LcName);
-        BoostSat(style.RcName);
-        BoostSat(style.LcLevel);
-        BoostSat(style.RcLevel);
-        BoostSat(style.LcTitle);
-        BoostSat(style.RcTitle);
-    }
-
-    if (style.specialTitle)
-    {
-        style.supportName = ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, 1.0f);
-        style.supportLevel = style.supportName;
-        style.supportTitle = style.supportName;
-    }
-    else
-    {
-        style.supportName =
-            DeriveSupportTint(style.LcName, style.RcName, tier.highlightColor, .14f, 1.08f);
-        style.supportLevel =
-            DeriveSupportTint(style.LcLevel, style.RcLevel, tier.highlightColor, .18f, 1.12f);
-        style.supportTitle =
-            DeriveSupportTint(style.LcTitle, style.RcTitle, tier.highlightColor, .24f, 1.16f);
-    }
-
-    // Pack colors to ImU32
     style.colL = ImGui::ColorConvertFloat4ToU32(
         ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, alpha));
     style.colR = ImGui::ColorConvertFloat4ToU32(
@@ -491,11 +307,135 @@ static void ComputeTierColors(LabelStyle& style,
         ImVec4(style.LcLevel.x, style.LcLevel.y, style.LcLevel.z, style.levelAlpha));
     style.colRLevel = ImGui::ColorConvertFloat4ToU32(
         ImVec4(style.RcLevel.x, style.RcLevel.y, style.RcLevel.z, style.levelAlpha));
-    style.highlight = ImGui::ColorConvertFloat4ToU32(ImVec4(
-        tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.effectAlpha));
 
     // Outline width data (actual widths computed after font sizes are known)
     style.baseOutlineWidth = snap.outlineWidthMin + snap.outlineWidthMax;
+}
+
+// Resolve tier-palette colors for the player (and special titles).  INI
+// colors display as authored; derivation happens only for optional per-tier
+// entries the INI omits.
+static void ResolveTierStyleColors(LabelStyle& style,
+                                   const Settings::TierDefinition& tier,
+                                   uint16_t level,
+                                   float alpha,
+                                   const RenderSettingsSnapshot& snap)
+{
+    // Level position within tier [0, 1]
+    float levelT = .0f;
+    if (tier.maxLevel > tier.minLevel)
+    {
+        levelT = (level <= tier.minLevel) ? .0f
+                 : (level >= tier.maxLevel)
+                     ? 1.0f
+                     : (float)(level - tier.minLevel) / (float)(tier.maxLevel - tier.minLevel);
+    }
+    levelT = std::clamp(levelT, .0f, 1.0f);
+
+    const bool under100 = (level < 100);
+    const float tierIntensity = under100 ? .5f : 1.0f;
+
+    const float effectAlphaMul =
+        RenderConstants::EFFECT_ALPHA_MIN +
+        (RenderConstants::EFFECT_ALPHA_MAX - RenderConstants::EFFECT_ALPHA_MIN) * levelT;
+    style.effectAlpha = alpha * tierIntensity * effectAlphaMul;
+
+    auto ToVec = [](const Settings::Color3& c) { return ImVec4(c.r, c.g, c.b, 1.0f); };
+    auto LerpToWhite = [](const ImVec4& c, float t)
+    {
+        return ImVec4(c.x + (1.0f - c.x) * t, c.y + (1.0f - c.y) * t, c.z + (1.0f - c.z) * t, 1.0f);
+    };
+
+    // Name colors: the tier's main gradient, as authored.
+    style.LcName = ToVec(tier.leftColor);
+    style.RcName = ToVec(tier.rightColor);
+
+    // Level / title colors: per-tier INI overrides always win; otherwise
+    // derive a softer companion by blending the name band toward white.
+    style.LcLevel =
+        tier.levelLeftColor ? ToVec(*tier.levelLeftColor) : LerpToWhite(style.LcName, .40f);
+    style.RcLevel =
+        tier.levelRightColor ? ToVec(*tier.levelRightColor) : LerpToWhite(style.RcName, .40f);
+    style.LcTitle =
+        tier.titleLeftColor ? ToVec(*tier.titleLeftColor) : LerpToWhite(style.LcName, .25f);
+    style.RcTitle =
+        tier.titleRightColor ? ToVec(*tier.titleRightColor) : LerpToWhite(style.RcName, .25f);
+
+    style.specialGlowColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+    if (style.specialTitle)
+    {
+        const auto* st = style.specialTitle;
+        const ImVec4 specialCol = ToVec(st->color);
+        style.specialGlowColor = ToVec(st->glowColor);
+
+        style.LcName = specialCol;
+        style.RcName = specialCol;
+        style.LcLevel = specialCol;
+        style.RcLevel = specialCol;
+        style.LcTitle = specialCol;
+        style.RcTitle = specialCol;
+
+        style.supportName = specialCol;
+        style.supportLevel = specialCol;
+        style.supportTitle = specialCol;
+    }
+    else
+    {
+        style.supportName =
+            DeriveSupportTint(style.LcName, style.RcName, tier.highlightColor, .14f, 1.08f);
+        style.supportLevel =
+            DeriveSupportTint(style.LcLevel, style.RcLevel, tier.highlightColor, .18f, 1.12f);
+        style.supportTitle =
+            DeriveSupportTint(style.LcTitle, style.RcTitle, tier.highlightColor, .24f, 1.16f);
+    }
+
+    style.highlight = ImGui::ColorConvertFloat4ToU32(ImVec4(
+        tier.highlightColor.r, tier.highlightColor.g, tier.highlightColor.b, style.effectAlpha));
+
+    style.nameEffect = &tier.nameEffect;
+    style.levelEffect = &tier.levelEffect;
+    style.titleEffect = &tier.titleEffect;
+    style.usesTierVisuals = true;
+}
+
+// Resolve flat white-leaning colors for NPC nameplates.  The name color is
+// keyed by the actor's relationship to the player; level / title use fixed
+// neutral accents.  Support layers tint from the role's own flat color, so
+// glow / outline / shadow read neutral rather than tier-colored.  Text
+// effects are disabled (solid fill).
+static void ResolveNpcStyleColors(LabelStyle& style,
+                                  RelationshipKind relationship,
+                                  float alpha,
+                                  const RenderSettingsSnapshot& snap)
+{
+    auto ToVec = [](const Settings::Color3& c) { return ImVec4(c.r, c.g, c.b, 1.0f); };
+
+    const Settings::Color3& nameColor =
+        relationship == RelationshipKind::Hostile    ? snap.npcColors.hostile
+        : relationship == RelationshipKind::Follower ? snap.npcColors.follower
+                                                     : snap.npcColors.neutral;
+
+    style.LcName = ToVec(nameColor);
+    style.RcName = style.LcName;
+    style.LcLevel = ToVec(snap.npcColors.level);
+    style.RcLevel = style.LcLevel;
+    style.LcTitle = ToVec(snap.npcColors.title);
+    style.RcTitle = style.LcTitle;
+
+    style.supportName = style.LcName;
+    style.supportLevel = style.LcLevel;
+    style.supportTitle = style.LcTitle;
+    style.specialGlowColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+    style.effectAlpha = alpha;
+    style.highlight = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(style.LcName.x, style.LcName.y, style.LcName.z, alpha));
+
+    style.nameEffect = &kNoneEffect;
+    style.levelEffect = &kNoneEffect;
+    style.titleEffect = &kNoneEffect;
+    style.usesTierVisuals = false;
 }
 
 // Compute animation phase and strength parameters.
@@ -560,20 +500,6 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
     LabelStyle style{};
     style.alpha = alpha;
 
-    // Disposition color
-    if (d.dispo == Disposition::Enemy)
-    {
-        style.dispoCol = ImVec4(.9f, .2f, .2f, alpha);
-    }
-    else if (d.dispo == Disposition::AllyOrFriend)
-    {
-        style.dispoCol = ImVec4(.2f, .6f, 1.0f, alpha);
-    }
-    else
-    {
-        style.dispoCol = ImVec4(.9f, .9f, .9f, alpha);
-    }
-
     const uint16_t lv = (uint16_t)std::min<int>(d.level, 9999);
 
     const Settings::TierDefinition* tierPtr = nullptr;
@@ -619,7 +545,18 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
     }
 
     style.distToPlayer = d.distToPlayer;
-    ComputeTierColors(style, *tierPtr, lv, alpha, snap);
+
+    // Player and special titles use the tier palette + effects; NPCs resolve
+    // to flat white-leaning colors keyed by relationship.
+    if (d.isPlayer || style.specialTitle != nullptr)
+    {
+        ResolveTierStyleColors(style, *tierPtr, lv, alpha, snap);
+    }
+    else
+    {
+        ResolveNpcStyleColors(style, d.relationship, alpha, snap);
+    }
+    PackStyleColors(style, alpha, snap);
     ComputeAnimationParams(style, lv, d.formID, time, snap);
 
     return style;
@@ -893,6 +830,294 @@ static void ComputePositionAndBounds(LabelLayout& layout,
     layout.mainLineCenterY = layout.startPos.y + layout.mainLineY + (mainTop + mainBottom) * .5f;
 }
 
+// ============================================================================
+// Status icon badges
+// ============================================================================
+
+/// One composed indicator slot.  `icon` points into the per-frame settings
+/// snapshot (stable for the frame); an empty icon means the slot is skipped.
+/// Muted slots render dimmed + desaturated at draw time.
+struct BadgeSlot
+{
+    std::string_view icon;
+    Settings::Color3 color{};
+    bool muted = false;
+    bool pulse = false;
+};
+
+/// Ordered fixed-capacity set of slots for one actor.  Capacity covers the
+/// widest set (six NPC slots); the player set uses four.  Bump
+/// MAX_BADGE_SLOTS if NPC slots grow, or excess slots silently drop.
+inline constexpr int MAX_BADGE_SLOTS = 6;
+struct BadgeComposition
+{
+    BadgeSlot slots[MAX_BADGE_SLOTS];
+    int count = 0;
+    void push(std::string_view icon, Settings::Color3 color, bool muted, bool pulse = false)
+    {
+        if (count < MAX_BADGE_SLOTS && !icon.empty())
+        {
+            slots[count++] = {icon, color, muted, pulse};
+        }
+    }
+};
+
+// Map actor facts to an ordered set of badge slots.  Always-on model: every
+// enabled slot renders, with neutral/inactive facts shown in their own resting
+// color (dimmed + slightly desaturated at draw time) and notable facts shown
+// lit.  NPCs get six slots (relationship, creature, role, protection, threat,
+// engagement); the player gets four (sneak, engagement, encumbered, bounty).
+// Mirrored in tests/test_utils.cpp -- keep the logic in sync.
+static BadgeComposition ComposeBadges(const ActorDrawData& d,
+                                      const RenderSettingsSnapshot::IconTokens& cfg)
+{
+    BadgeComposition out{};
+    if (!cfg.enabled)
+    {
+        return out;
+    }
+
+    // Push a slot honoring its enable flag.  Every slot carries its own color;
+    // the `muted` flag drives only the calmer draw treatment (dim + no shadow +
+    // slight desaturation), not the hue.
+    const auto add = [&](bool enabled,
+                         std::string_view icon,
+                         Settings::Color3 color,
+                         bool muted,
+                         bool pulse = false)
+    {
+        if (enabled)
+        {
+            out.push(icon, color, muted, pulse);
+        }
+    };
+
+    if (!d.isPlayer)
+    {
+        switch (d.relationship)
+        {
+            case RelationshipKind::Hostile:
+                add(cfg.relationshipEnabled, cfg.icoHostile, cfg.colHostile, false);
+                break;
+            case RelationshipKind::Ally:
+                add(cfg.relationshipEnabled, cfg.icoAlly, cfg.colAlly, false);
+                break;
+            case RelationshipKind::Follower:
+                add(cfg.relationshipEnabled, cfg.icoFollower, cfg.colFollower, false);
+                break;
+            case RelationshipKind::Neutral:
+                add(cfg.relationshipEnabled, cfg.icoNeutral, cfg.colNeutral, true);
+                break;
+        }
+
+        switch (d.creatureKind)
+        {
+            case CreatureKind::Dragon:
+                add(cfg.creatureEnabled, cfg.icoDragon, cfg.colCreature, false);
+                break;
+            case CreatureKind::Daedra:
+                add(cfg.creatureEnabled, cfg.icoDaedra, cfg.colCreature, false);
+                break;
+            case CreatureKind::Undead:
+                add(cfg.creatureEnabled, cfg.icoUndead, cfg.colCreature, false);
+                break;
+            case CreatureKind::Beast:
+                add(cfg.creatureEnabled, cfg.icoBeast, cfg.colCreature, false);
+                break;
+            case CreatureKind::NPC:
+                add(cfg.creatureEnabled, cfg.icoHumanoid, cfg.colHumanoid, true);
+                break;
+        }
+
+        switch (d.role)
+        {
+            case RoleKind::Guard:
+                add(cfg.roleEnabled, cfg.icoGuard, cfg.colGuard, false);
+                break;
+            case RoleKind::Merchant:
+                add(cfg.roleEnabled, cfg.icoMerchant, cfg.colMerchant, false);
+                break;
+            case RoleKind::Commoner:
+                add(cfg.roleEnabled, cfg.icoCommoner, cfg.colCommoner, true);
+                break;
+        }
+
+        switch (d.protection)
+        {
+            case ProtectionKind::Essential:
+                add(cfg.protectionEnabled, cfg.icoEssential, cfg.colEssential, false);
+                break;
+            case ProtectionKind::Protected:
+                add(cfg.protectionEnabled, cfg.icoProtected, cfg.colProtected, false);
+                break;
+            case ProtectionKind::Mortal:
+                add(cfg.protectionEnabled, cfg.icoMortal, cfg.colMortal, true);
+                break;
+        }
+
+        switch (d.levelDelta)
+        {
+            case LevelDelta::Deadly:
+                add(cfg.threatEnabled, cfg.icoDeadly, cfg.colDeadly, false, cfg.deadlyPulse);
+                break;
+            case LevelDelta::Strong:
+                add(cfg.threatEnabled, cfg.icoStrong, cfg.colStrong, false);
+                break;
+            case LevelDelta::Weak:
+                add(cfg.threatEnabled, cfg.icoWeak, cfg.colWeak, false);
+                break;
+            case LevelDelta::Even:
+                add(cfg.threatEnabled, cfg.icoEven, cfg.colEven, true);
+                break;
+        }
+
+        switch (d.engagement)
+        {
+            case EngagementKind::Combat:
+                add(cfg.engagementEnabled && cfg.combatStateEnabled,
+                    cfg.icoCombat,
+                    cfg.colCombat,
+                    false);
+                break;
+            case EngagementKind::Alert:
+                add(cfg.engagementEnabled && cfg.alertStateEnabled,
+                    cfg.icoAlert,
+                    cfg.colAlert,
+                    false);
+                break;
+            case EngagementKind::Idle:
+                add(cfg.engagementEnabled, cfg.icoIdle, cfg.colIdle, true);
+                break;
+        }
+
+        return out;
+    }
+
+    // Player slot set: sneak, engagement, encumbered, bounty.
+    switch (d.sneak)
+    {
+        case SneakKind::Detected:
+            add(cfg.sneakEnabled, cfg.icoSneakDetected, cfg.colSneakDetected, false);
+            break;
+        case SneakKind::Hidden:
+            add(cfg.sneakEnabled, cfg.icoSneakHidden, cfg.colSneakHidden, false);
+            break;
+        case SneakKind::Off:
+            add(cfg.sneakEnabled, cfg.icoSneakOff, cfg.colSneakOff, true);
+            break;
+    }
+
+    add(cfg.playerCombatEnabled,
+        d.playerInCombat ? cfg.icoCombat : cfg.icoIdle,
+        d.playerInCombat ? cfg.colCombat : cfg.colIdle,
+        !d.playerInCombat);
+
+    add(cfg.encumberedEnabled,
+        d.encumbered ? cfg.icoEncumbered : cfg.icoNormalWeight,
+        d.encumbered ? cfg.colEncumbered : cfg.colNormalWeight,
+        !d.encumbered);
+
+    add(cfg.bountyEnabled,
+        d.wanted ? cfg.icoWanted : cfg.icoBountyClear,
+        d.wanted ? cfg.colWanted : cfg.colBountyClear,
+        !d.wanted);
+
+    return out;
+}
+
+// Resolve status badge indicators into a compact strip centered above the
+// title row.  Slot order is relationship, creature, role, protection, threat,
+// engagement for NPCs; sneak, engagement, encumbered, bounty for the player.
+// Must run after ComputePositionAndBounds (needs the plate's top edge).  The
+// strip extends the nameplate bounds used for overlap prevention but never
+// moves the text itself.
+static void BuildBadges(LabelLayout& layout,
+                        const ActorDrawData& d,
+                        float textSizeScale,
+                        const RenderSettingsSnapshot& snap)
+{
+    // One-shot diagnostic: log the badge pipeline state the first time an
+    // actor reaches badge layout, so silent in-game failures are traceable.
+    static std::atomic<bool> s_diagLogged{false};
+    if (!s_diagLogged.exchange(true, std::memory_order_relaxed))
+    {
+        SKSE::log::info("Badges: first layout -- iconsEnabled={}, texturesReady={}",
+                        snap.icons.enabled,
+                        BadgeTextures::IsInitialized());
+    }
+
+    layout.badges.clear();
+    if (!snap.icons.enabled || layout.segments.empty() || !BadgeTextures::IsInitialized())
+    {
+        return;
+    }
+
+    const BadgeComposition set = ComposeBadges(d, snap.icons);
+
+    const float iconSize =
+        layout.levelFontSize * RenderConstants::BADGE_ICON_FACTOR * snap.icons.scale;
+
+    // Resolve icon textures.  Empty names and icons that failed to load
+    // (missing SVG, bad parse) drop that indicator.
+    for (int i = 0; i < set.count; ++i)
+    {
+        const BadgeSlot& s = set.slots[i];
+        if (s.icon.empty())
+        {
+            continue;
+        }
+        BadgeDrawItem item{};
+        item.tex = BadgeTextures::Get(std::string(s.icon));
+        if (item.tex == 0)
+        {
+            continue;
+        }
+        item.color = s.color;
+        item.pulse = s.pulse;
+        item.muted = s.muted;
+        item.size = ImVec2(iconSize, iconSize);
+        layout.badges.push_back(item);
+    }
+    if (layout.badges.empty())
+    {
+        return;
+    }
+
+    const float spacing = RenderConstants::BADGE_SPACING * textSizeScale;
+    float stripWidth = spacing * static_cast<float>(layout.badges.size() - 1);
+    for (const auto& b : layout.badges)
+    {
+        stripWidth += b.size.x;
+    }
+
+    // The indicator strip floats one gap above the plate's current top edge
+    // (the title row; the main row when the title is empty).
+    const float rowGap = RenderConstants::BADGE_ROW_GAP * textSizeScale;
+    const float rowTop = layout.nameplateTop - rowGap - iconSize;
+    const float rowCenterY = rowTop + iconSize * .5f;
+
+    float x = layout.startPos.x - stripWidth * .5f;
+    for (auto& b : layout.badges)
+    {
+        b.pos.x = x;
+        b.pos.y = rowCenterY - b.size.y * .5f;
+        x += b.size.x + spacing;
+    }
+
+    // Fold the strip into the bounds used for overlap prevention and screen
+    // clamping.
+    layout.nameplateTop = std::min(layout.nameplateTop, rowTop);
+    layout.nameplateHeight = layout.nameplateBottom - layout.nameplateTop;
+    layout.nameplateCenter =
+        ImVec2(layout.startPos.x, (layout.nameplateTop + layout.nameplateBottom) * .5f);
+    for (const auto& b : layout.badges)
+    {
+        layout.nameplateLeft = std::min(layout.nameplateLeft, b.pos.x);
+        layout.nameplateRight = std::max(layout.nameplateRight, b.pos.x + b.size.x);
+    }
+    layout.nameplateWidth = layout.nameplateRight - layout.nameplateLeft;
+}
+
 // Measure text and compute all positions for a label.
 LabelLayout ComputeLabelLayout(const ActorDrawData& d,
                                ActorCache& entry,
@@ -935,6 +1160,7 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
         layout, d, style, textSizeScale, typewriterCharsToShow, totalCharsProcessed, snap);
     ComputePositionAndBounds(
         layout, style, d, entry, typewriterCharsToShow, totalCharsProcessed, snap);
+    BuildBadges(layout, d, textSizeScale, snap);
 
     return layout;
 }
