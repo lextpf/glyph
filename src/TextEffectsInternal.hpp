@@ -69,6 +69,73 @@ inline float Frac(float x)
     return x - std::floor(x);
 }
 
+/// Integer-grid value-noise hash in [0,1). Shared by the text energy effects
+/// and the particle drift so both draw from the same quality noise field.
+inline float NoiseHash(float x, float y)
+{
+    size_t hash = static_cast<size_t>(static_cast<int>(x));
+    hash ^= hash >> 16;
+    hash *= 0x85ebca6b;
+    hash ^= hash >> 13;
+    hash *= 0xc2b2ae35;
+    hash ^= hash >> 16;
+    // Mix Y through its own scramble before combining to avoid
+    // (1,100)/(100,1) collisions from a simple XOR-multiply.
+    size_t yHash = static_cast<size_t>(static_cast<int>(y));
+    yHash ^= yHash >> 16;
+    yHash *= 0x9e3779b97f4a7c15ULL;
+    yHash ^= yHash >> 13;
+    hash ^= yHash;
+    hash *= 0xc2b2ae35;
+    hash ^= hash >> 16;
+    return static_cast<float>(hash & 0xFFFFFF) / 16777216.0f;  // [0, 1)
+}
+
+/// 2D value noise with quintic interpolation, range [0,1).
+inline float ValueNoise(float x, float y)
+{
+    float ix = std::floor(x);
+    float iy = std::floor(y);
+    float fx = x - ix;
+    float fy = y - iy;
+
+    // Quintic interpolation curve for smoother results
+    fx = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
+    fy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
+
+    float a = NoiseHash(ix, iy);
+    float b = NoiseHash(ix + 1.0f, iy);
+    float c = NoiseHash(ix, iy + 1.0f);
+    float d = NoiseHash(ix + 1.0f, iy + 1.0f);
+
+    float ab = a + (b - a) * fx;
+    float cd = c + (d - c) * fx;
+    return ab + (cd - ab) * fy;
+}
+
+/// Fractal Brownian Motion built from ValueNoise, range [0,1).
+/// Shared by Enchant/Frost text shading and the M1 falling-particle drift.
+inline float FBMNoise(float x, float y, int octaves, float persistence = .5f)
+{
+    // Cap octaves to prevent excessive computation and float overflow in frequency
+    octaves = std::min(octaves, 8);
+
+    float total = .0f;
+    float amplitude = 1.0f;
+    float frequency = 1.0f;
+    float maxValue = .0f;
+
+    for (int i = 0; i < octaves; i++)
+    {
+        total += ValueNoise(x * frequency, y * frequency) * amplitude;
+        maxValue += amplitude;
+        amplitude *= persistence;
+        frequency *= 2.0f;
+    }
+
+    return total / maxValue;
+}
+
 /// Convert HSV color to RGBA.
 /// @param h  Hue in [0,1], wraps around.
 /// @param s  Saturation [0,1].
