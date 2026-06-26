@@ -64,6 +64,62 @@ constexpr float SmoothStep(float t)
 }
 
 /**
+ * Cubic ease-out: fast start, gentle deceleration to the target.
+ *
+ * $$\text{easeOutCubic}(t) = 1 - (1 - t)^3$$
+ *
+ * Front-loads motion so a value arrives at its target with weight rather than a
+ * symmetric (smoothstep) or linear feel.  Used for the weighty entrance reveal.
+ *
+ * @param t Normalized input value (clamped to [0, 1]).
+ *
+ * @return Eased value in [0, 1].
+ */
+constexpr float EaseOutCubic(float t)
+{
+    t = Saturate(t);
+    const float u = 1.0f - t;
+    return 1.0f - u * u * u;
+}
+
+/**
+ * Cubic ease-in: gentle start, accelerating away from the origin.
+ *
+ * $$\text{easeInCubic}(t) = t^3$$
+ *
+ * Mirror of EaseOutCubic; used for the exit, which begins slowly then
+ * accelerates as the label leaves.
+ *
+ * @param t Normalized input value (clamped to [0, 1]).
+ *
+ * @return Eased value in [0, 1].
+ *
+ * @see EaseOutCubic
+ */
+constexpr float EaseInCubic(float t)
+{
+    t = Saturate(t);
+    return t * t * t;
+}
+
+/**
+ * Exponential ease-out: very fast start, long flattening tail.
+ *
+ * $$\text{easeOutExpo}(t) = 1 - 2^{-10t}$$
+ *
+ * Sharper than EaseOutCubic.  Used to settle a positional offset into place:
+ * the label covers most of the travel immediately, then eases the final pixels
+ * slowly for a deliberate "locking in" feel.  Not constexpr (uses std::pow).
+ *
+ * @param t Normalized input value (clamped to [0, 1]).
+ *
+ * @return Eased value in [0, 1].
+ *
+ * @see EaseOutCubic
+ */
+float EaseOutExpo(float t);
+
+/**
  * Linearly interpolate between two packed colors.
  *
  * Interpolates each RGBA channel independently using linear interpolation:
@@ -815,6 +871,43 @@ void AddTextGlow(ImDrawList* list,
                  float intensity,
                  int samples);
 
+/**
+ * Draw a soft, directional drop-shadow behind text (no background plate).
+ *
+ * Distributes `samples` offset copies of the text within a disc of radius
+ * `softness`, centered at `pos + dir * distance`, each contributing a fraction
+ * of the target opacity so the accumulation darkens toward the center and
+ * feathers at the edges. This lifts glyphs off a busy scene with depth a single
+ * hard offset cannot, while staying entirely within the text layer.
+ *
+ * @param list ImGui draw list to render to.
+ * @param font Font to use for rendering.
+ * @param size Font size in pixels.
+ * @param pos Top-left position of the (un-offset) text.
+ * @param text Null-terminated UTF-8 string to render.
+ * @param shadowColor Shadow tint; RGB is used as-is, alpha is the per-frame fade.
+ * @param dirX Shadow cast direction X (cos of the angle; +x = right).
+ * @param dirY Shadow cast direction Y (sin of the angle; +y = down).
+ * @param distance Offset distance along the direction in pixels.
+ * @param softness Feather/blur radius of the disc in pixels.
+ * @param opacity Master opacity multiplier [0, 1] applied to the shadow alpha.
+ * @param samples Number of feather samples (4-24); higher is smoother.
+ *
+ * @pre Should be called **before** drawing the outline and main text.
+ */
+void AddTextSoftShadow(ImDrawList* list,
+                       ImFont* font,
+                       float size,
+                       const ImVec2& pos,
+                       const char* text,
+                       ImU32 shadowColor,
+                       float dirX,
+                       float dirY,
+                       float distance,
+                       float softness,
+                       float opacity,
+                       int samples);
+
 /// Parameters for DrawParticleAura.
 struct ParticleAuraParams
 {
@@ -834,13 +927,32 @@ struct ParticleAuraParams
     bool useParticleTextures = true;  ///< Use texture sprites instead of procedural shapes
     int blendMode = 0;                ///< 0=Additive, 1=Screen, 2=Alpha
     ImU32 colorSecondary = 0;         ///< Optional second gradient color (0 = use primary only)
+    float depthStrength = .7f;        ///< Scales the 3D depth read (size/alpha/parallax)
+    float colorWarmth = .5f;          ///< Scales warm/cool depth temperature mix + apex pulse
+    float glowStrength = .35f;        ///< Additive backlight halo alpha multiplier (0 disables)
+    float glowSize = 2.2f;            ///< Halo radius as a multiple of the crisp sprite size
+    float shineThreshold = .84f;      ///< Sine threshold for the rare specular glint
 };
 
 /**
  * Draw floating particle aura around a text region.
  *
- * Creates an aura of animated particles around the nameplate.
- * Multiple visual styles are available (see ParticleAuraParams).
+ * Creates an aura of animated particles around the nameplate. Each style
+ * has a dedicated distribution and motion model:
+ *
+ * | Style    | Distribution                  | Motion                                        |
+ * |----------|-------------------------------|-----------------------------------------------|
+ * | Stars    | Area-uniform starfield        | Differential rotation, mixed directions       |
+ * | Sparks   | Launch ring at the text edge  | Ease-out launch, buoyant rise, cooling fade   |
+ * | Wisps    | Area-uniform band             | Incommensurate Lissajous weave, drifting bob  |
+ * | Runes    | Two evenly spaced rings       | Counter-rotating ceremonial orbit, rocking    |
+ * | Orbs     | Area-uniform band             | Slow orbit plus pseudo-Brownian wander        |
+ * | Crystals | Area-uniform band             | Suspended levitation, pendulum sway           |
+ *
+ * Per-particle variation (speed, direction, pseudo-depth, size) comes from
+ * independent deterministic hash streams, so motion is organic yet stable
+ * across frames. When several styles render together each one occupies its
+ * own radial band; a style rendering alone may fill the whole region.
  *
  * @param params Particle aura parameters.
  *
