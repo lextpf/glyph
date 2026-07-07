@@ -9,19 +9,16 @@ docs/*
 site/*
 !site/.gitkeep
 
+# graphify knowledge-graph output
+graphify-out/
+
 # Python
 __pycache__/
 *.pyc
 
-# Application assets
-assets/
-
 # Font Awesome Pro is licensed per-seat and must never enter the public repo
 Font Awesome*
-skse/plugins/glyph/duotone/
 
-# Particle sprite textures are not redistributed; runtime falls back to procedural sprites
-skse/plugins/glyph/particles/
-
-# Photoshop design source exports
-*.psd
+# Runtime assets (badges, duotone, fonts, particles) are never checked in --
+# they ship with the deploy package, not the repo.
+assets/
