@@ -1,6 +1,7 @@
 #include "RendererInternal.hpp"
 
 #include "GameState.hpp"
+#include "HudCompat.hpp"
 #include "Occlusion.hpp"
 
 #include <SKSE/SKSE.h>
@@ -285,6 +286,222 @@ static bool PlayerHasBounty()
     return false;
 }
 
+// ============================================================================
+// Deeds, Not Words -- honorific resolution (game-thread only)
+// ============================================================================
+
+/// Runtime cache for honorific matching: resolved faction pointers (parallel
+/// to Settings::Honorifics(), rebuilt when the settings generation changes)
+/// plus a per-actor match cache refreshed on an interval -- faction ranks
+/// change rarely (quest completions), not per frame.
+struct HonorificRuntime
+{
+    uint32_t settingsGen = 0;               ///< Settings generation of `factions`
+    std::vector<RE::TESFaction*> factions;  ///< Parallel to Settings::Honorifics()
+
+    struct CacheEntry
+    {
+        uint32_t lastCheckFrame = 0;  ///< Snapshot frame of the last match
+        int index = -1;               ///< Matched honorific index (-1 = none)
+    };
+    std::unordered_map<uint32_t, CacheEntry> perActor;  ///< keyed by formID
+};
+
+static HonorificRuntime& GetHonorificRuntime()
+{
+    static HonorificRuntime instance;
+    return instance;
+}
+
+// Parse "0xFORMID" or "0xFORMID@Plugin.esp" (plugin defaults to Skyrim.esm)
+// and resolve the faction against the load order.
+static RE::TESFaction* ResolveFactionSpec(const std::string& spec)
+{
+    if (spec.empty())
+    {
+        return nullptr;
+    }
+
+    std::string idPart = spec;
+    std::string plugin = "Skyrim.esm";
+    if (const size_t at = spec.find('@'); at != std::string::npos)
+    {
+        idPart = spec.substr(0, at);
+        plugin = spec.substr(at + 1);
+    }
+
+    const uint32_t rawID = static_cast<uint32_t>(std::strtoul(idPart.c_str(), nullptr, 16));
+    if (rawID == 0)
+    {
+        return nullptr;
+    }
+
+    auto* dataHandler = RE::TESDataHandler::GetSingleton();
+    if (!dataHandler)
+    {
+        return nullptr;
+    }
+    return dataHandler->LookupForm<RE::TESFaction>(rawID, plugin);
+}
+
+// Rebuild the resolved-faction table when settings change (load, F7 reload).
+static void RefreshHonorificRuntime()
+{
+    auto& rt = GetHonorificRuntime();
+    const uint32_t gen = Settings::Generation().load(std::memory_order_acquire);
+    if (rt.settingsGen == gen)
+    {
+        return;
+    }
+    rt.settingsGen = gen;
+    rt.perActor.clear();
+    rt.factions.clear();
+
+    const auto& defs = Settings::Honorifics();
+    rt.factions.reserve(defs.size());
+    for (const auto& defn : defs)
+    {
+        RE::TESFaction* faction = ResolveFactionSpec(defn.factionSpec);
+        if (!faction && !defn.factionSpec.empty())
+        {
+            logger::warn("Honorific: faction '{}' did not resolve (title '{}')",
+                         defn.factionSpec,
+                         defn.title);
+        }
+        rt.factions.push_back(faction);
+    }
+}
+
+/// Frames between per-actor honorific refreshes (deeds change rarely).
+static constexpr uint32_t HONORIFIC_REFRESH_FRAMES = 90;
+
+// Resolve the highest-priority honorific an actor has earned, or empty.
+// One faction walk per refresh; matches are cached per formID.
+static std::string ResolveHonorific(RE::Actor* actor, bool isPlayer, uint32_t snapshotFrame)
+{
+    const auto& defs = Settings::Honorifics();
+    if (defs.empty() || !actor)
+    {
+        return {};
+    }
+
+    auto& rt = GetHonorificRuntime();
+    auto& entry = rt.perActor[actor->GetFormID()];
+    const uint32_t framesSince = snapshotFrame - entry.lastCheckFrame;
+    if (entry.lastCheckFrame == 0 || framesSince >= HONORIFIC_REFRESH_FRAMES)
+    {
+        entry.lastCheckFrame = snapshotFrame;
+        entry.index = -1;
+        int bestPriority = (std::numeric_limits<int>::min)();
+        actor->VisitFactions(
+            [&](RE::TESFaction* faction, std::int8_t rank)
+            {
+                if (!faction || rank < 0)
+                {
+                    return false;
+                }
+                for (size_t i = 0; i < defs.size(); ++i)
+                {
+                    if (rt.factions[i] != faction)
+                    {
+                        continue;
+                    }
+                    const auto& defn = defs[i];
+                    if (defn.title.empty() || rank < defn.minRank ||
+                        (defn.playerOnly && !isPlayer) || (defn.npcOnly && isPlayer))
+                    {
+                        continue;
+                    }
+                    if (entry.index < 0 || defn.priority > bestPriority)
+                    {
+                        entry.index = static_cast<int>(i);
+                        bestPriority = defn.priority;
+                    }
+                }
+                return false;  // keep visiting
+            });
+    }
+
+    return entry.index >= 0 ? defs[static_cast<size_t>(entry.index)].title : std::string{};
+}
+
+// ============================================================================
+// Registers -- scene context evaluation (game-thread only)
+// ============================================================================
+
+// Compute the current scene-context predicate mask.  All predicates read
+// game state, so this runs on the game thread once per snapshot.
+static uint32_t ComputeContextMask(RE::Actor* player, int visiblePlateCount)
+{
+    uint32_t mask = 0;
+
+    if (auto* cell = player->GetParentCell(); cell && cell->IsInteriorCell())
+    {
+        mask |= Settings::Context::Interior;
+    }
+
+    if (auto* calendar = RE::Calendar::GetSingleton())
+    {
+        const float hour = calendar->GetHour();
+        if (hour < 6.0f || hour >= 20.0f)
+        {
+            mask |= Settings::Context::Night;
+        }
+    }
+
+    if (auto* location = player->GetCurrentLocation())
+    {
+        if (location->HasKeywordString("LocTypeCity") || location->HasKeywordString("LocTypeTown"))
+        {
+            mask |= Settings::Context::City;
+        }
+    }
+
+    if (player->IsSneaking())
+    {
+        mask |= Settings::Context::Sneaking;
+    }
+
+    if (auto* topicManager = RE::MenuTopicManager::GetSingleton();
+        topicManager && topicManager->speaker.get())
+    {
+        mask |= Settings::Context::Dialogue;
+    }
+
+    if (visiblePlateCount >= Settings::RegisterConfig().CrowdedThreshold)
+    {
+        mask |= Settings::Context::Crowded;
+    }
+
+    return mask;
+}
+
+// Pick the highest-priority register matching the context mask, or -1.
+// An empty When (both masks zero) matches every scene -- a base register.
+// Unconfigured entries (index-gap backfill) never match; without this, a
+// phantom [Register0] would shadow the user's real register on priority
+// ties, since lower indices win them.
+static int PickRegister(uint32_t ctxMask)
+{
+    const auto& regs = Settings::Registers();
+    int best = -1;
+    int bestPriority = (std::numeric_limits<int>::min)();
+    for (size_t i = 0; i < regs.size(); ++i)
+    {
+        const auto& r = regs[i];
+        if (!r.configured || (ctxMask & r.whenMask) != r.whenMask || (ctxMask & r.whenNotMask) != 0)
+        {
+            continue;
+        }
+        if (best < 0 || r.priority > bestPriority)
+        {
+            best = static_cast<int>(i);
+            bestPriority = r.priority;
+        }
+    }
+    return best;
+}
+
 // Check occlusion for an actor, using game-thread-local cached results.
 static void UpdateOcclusionForActor(ActorDrawData& d,
                                     RE::Actor* a,
@@ -309,16 +526,41 @@ static void UpdateOcclusionForActor(ActorDrawData& d,
     entry.cachedOccluded = d.isOccluded;
 }
 
+// World Z for the plate anchor. Reads the rendered head node so the plate
+// tracks RaceMenu height/body morphs, HDT high-heels, and equipped-heel offsets
+// (all of which move the skeleton, not the collision bound GetHeight() sees).
+// Falls back to the bound-derived height when the 3D or node is unavailable or
+// implausible (e.g. the player's first-person skeleton).
+static float ComputeAnchorZ(RE::Actor* a)
+{
+    const float feetZ = a->GetPosition().z;
+    if (auto* root = a->Get3D())
+    {
+        if (auto* head = root->GetObjectByName("NPC Head [Head]"))
+        {
+            const float headZ = head->world.translate.z;
+            if (headZ > feetZ)  // plausibility guard
+            {
+                constexpr float kHeadHeadroom = 12.0f;  // node sits at head base; clear the crown
+                return headZ + kHeadHeadroom + Settings::Display().VerticalOffset;
+            }
+        }
+    }
+    return feetZ + a->GetHeight() + Settings::Display().VerticalOffset;
+}
+
 // @author Claude (https://github.com/claude)
 // Runs *only* on the game thread (scheduled via SKSE::GetTaskInterface()):
 // CommonLibSSE's RE::* types (ProcessLists, Actor, TESDataHandler) aren't
 // render-thread safe.
 //
-// The render thread never touches RE::* directly; it reads a plain-old-data
-// std::vector<ActorDrawData> snapshot under snapshotLock. Everything the
-// renderer needs (FormID, name, world position, level, relationship,
-// occlusion result) is precomputed here so the render-thread copy needs no
-// further game-thread trips.
+// The render thread consumes a plain-old-data std::vector<ActorDrawData>
+// snapshot under snapshotLock and otherwise stays off RE::*. The one exception
+// is a lock-free read of the world camera in WorldToScreen() (RE::NiCamera) for
+// world->screen projection, where a torn read is a benign one-frame glitch.
+// Everything else the renderer needs (FormID, name, world position, level,
+// relationship, occlusion result) is precomputed here so the render-thread copy
+// needs no further game-thread trips.
 void UpdateSnapshot_GameThread()
 {
     // RAII guard to ensure flags are cleared when this task exits.
@@ -367,6 +609,7 @@ void UpdateSnapshot_GameThread()
     }
 
     const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
+    RefreshHonorificRuntime();
     constexpr int MAX_ACTORS = RenderConstants::MAX_ACTORS;
     constexpr int MAX_SCAN = RenderConstants::MAX_SCAN;
     const float kMaxDistSq =
@@ -386,15 +629,25 @@ void UpdateSnapshot_GameThread()
     tempBuf.reserve(MAX_ACTORS);
     std::unordered_set<uint32_t> seenFormIDs;
     seenFormIDs.reserve(MAX_ACTORS);
-    struct ScanCandidate
+    // Lightweight scan candidate: the cheap distance pass collects only what it
+    // needs to rank actors by proximity. The expensive per-actor derivation
+    // (name, relationship, badges, honorific, occlusion) is deferred to the
+    // nearest MAX_ACTORS below, so it never runs for actors that won't get a plate.
+    struct NearActor
     {
         RE::Actor* actor{nullptr};
-        ActorDrawData data{};
+        float distSq{.0f};
+        bool dead{false};
     };
-    std::vector<ScanCandidate> candidates;
-    candidates.reserve(MAX_SCAN);
+    std::vector<NearActor> nearActors;
+    nearActors.reserve(MAX_SCAN);
 
     const auto playerPos = player->GetPosition();
+
+    // One Voice Per Actor: which actors do other HUD mods already cover?
+    const bool yieldToTrueHUD = Settings::Compat().YieldToTrueHUD && HudCompat::HasTrueHUD();
+    const bool yieldToMoreHUD = Settings::Compat().YieldLevelToMoreHUD && HudCompat::HasMoreHUD();
+    const uint32_t crosshairID = yieldToMoreHUD ? HudCompat::CrosshairTargetFormID() : 0;
 
     // Include the player character first
     if (!Settings::Display().HidePlayer)
@@ -402,10 +655,23 @@ void UpdateSnapshot_GameThread()
         ActorDrawData d;
         d.formID = player->GetFormID();
         d.level = player->GetLevel();
-        const char* rawName = player->GetDisplayFullName();
-        d.name = rawName ? Capitalize(rawName) : "Player";
+        // Prefer the actor-base (TESNPC) full name for the player: a RaceMenu
+        // rename writes the base name immediately, while GetDisplayFullName()
+        // can keep serving a stale ExtraTextDisplayData string from the player
+        // reference until a save/reload rebuilds it -- the plate never picked
+        // up in-session renames.
+        const char* rawName = nullptr;
+        if (auto* base = player->GetActorBase())
+        {
+            rawName = base->GetFullName();
+        }
+        if (!rawName || !*rawName)
+        {
+            rawName = player->GetDisplayFullName();
+        }
+        d.name = (rawName && *rawName) ? Capitalize(rawName) : "Player";
         d.worldPos = playerPos;
-        d.worldPos.z += player->GetHeight() + Settings::Display().VerticalOffset;
+        d.worldPos.z = ComputeAnchorZ(player);
         d.distToPlayer = .0f;
         d.isPlayer = true;
         // Player has no meaningful "relation to self" -- pick stable defaults.
@@ -440,25 +706,42 @@ void UpdateSnapshot_GameThread()
         d.playerInCombat = player->IsInCombat();
         d.encumbered = player->IsOverEncumbered();
         d.wanted = PlayerHasBounty();
+        d.honorific = ResolveHonorific(player, true, snapshotFrame);
 
         tempBuf.push_back(std::move(d));
         seenFormIDs.insert(player->GetFormID());
     }
 
     int added = static_cast<int>(tempBuf.size());
-    int scanned = 0;
 
+    // Cheap pass: distance-filter EVERY high-process actor. Only proximity
+    // ranking data is gathered here -- no name/relationship/badge/occlusion
+    // work -- so iterating the whole list is negligible. The old loop capped
+    // iteration at MAX_SCAN by LIST POSITION and folded the expensive
+    // derivation inline, which meant that in a crowded area (a long
+    // highActorHandles list, e.g. after passing many NPCs) a near actor sitting
+    // past the cutoff was never examined and got no plate. highActorHandles is
+    // bounded by the engine's high-process budget; MAX_SCAN survives only as a
+    // runaway guard that never trips in normal play.
+    int scanned = 0;
     for (auto& h : pl->highActorHandles)
     {
-        if (scanned >= MAX_SCAN)
+        if (++scanned > MAX_SCAN)
         {
             break;
         }
-        ++scanned;
-
         auto aSP = h.get();
         auto* a = aSP.get();
-        if (!a || a == player || a->IsDead())
+        if (!a || a == player)
+        {
+            continue;
+        }
+
+        // Dead actors stay in the snapshot as bare Last Rites signals: the
+        // render thread plays a one-shot valediction for corpses it saw
+        // alive (replaying their last live facts) and ignores the rest.
+        const bool dead = a->IsDead();
+        if (dead && !Settings::DeathRite().Enabled)
         {
             continue;
         }
@@ -475,17 +758,44 @@ void UpdateSnapshot_GameThread()
             continue;
         }
 
-        ScanCandidate candidate;
-        candidate.actor = a;
-        ActorDrawData& d = candidate.data;
+        nearActors.push_back(NearActor{a, distSq, dead});
+    }
+
+    // Keep the nearest (MAX_ACTORS - added) in-range actors. partial_sort ranks
+    // only the closest handful instead of ordering the whole in-range set.
+    const int remainingSlots = std::max(0, MAX_ACTORS - added);
+    const size_t keep = std::min(static_cast<size_t>(remainingSlots), nearActors.size());
+    std::partial_sort(nearActors.begin(),
+                      nearActors.begin() + static_cast<std::ptrdiff_t>(keep),
+                      nearActors.end(),
+                      [](const NearActor& lhs, const NearActor& rhs)
+                      { return lhs.distSq < rhs.distSq; });
+
+    // Expensive pass: full per-actor derivation only for the plates we will show.
+    for (size_t i = 0; i < keep; ++i)
+    {
+        RE::Actor* a = nearActors[i].actor;
+        const bool dead = nearActors[i].dead;
+
+        ActorDrawData d;
         d.formID = a->GetFormID();
         d.level = a->GetLevel();
         const char* rawName = a->GetDisplayFullName();
         d.name = rawName ? Capitalize(rawName) : "";
         d.worldPos = a->GetPosition();
-        d.worldPos.z += a->GetHeight() + Settings::Display().VerticalOffset;
-        d.distToPlayer = std::sqrt(distSq);
+        d.worldPos.z = ComputeAnchorZ(a);
+        d.distToPlayer = std::sqrt(nearActors[i].distSq);
         d.isPlayer = false;
+        d.isDead = dead;
+        if (dead)
+        {
+            // The rite renders from the last live draw data, so contextual
+            // facts (relationship, badges, occlusion) are not re-derived for
+            // corpses -- a hostile's name must not flip neutral mid-farewell.
+            seenFormIDs.insert(d.formID);
+            tempBuf.push_back(std::move(d));
+            continue;
+        }
 
         // Relationship derivation -- drives the %r token, badges, and NPC text color.
         const bool hostile = a->IsHostileToActor(player);
@@ -504,27 +814,17 @@ void UpdateSnapshot_GameThread()
         d.role = ClassifyRole(a);
         d.engagement = ClassifyEngagement(a, player);
 
-        candidates.push_back(std::move(candidate));
-    }
+        d.honorific = ResolveHonorific(a, false, snapshotFrame);
 
-    std::sort(candidates.begin(),
-              candidates.end(),
-              [](const ScanCandidate& lhs, const ScanCandidate& rhs)
-              { return lhs.data.distToPlayer < rhs.data.distToPlayer; });
+        // One Voice Per Actor: yield to HUD mods already covering this actor.
+        d.yieldPlate = yieldToTrueHUD && HudCompat::TrueHUDShowsBarFor(a);
+        d.yieldLevel = yieldToMoreHUD && d.formID == crosshairID;
 
-    const int remainingSlots = std::max(0, MAX_ACTORS - added);
-    if (static_cast<int>(candidates.size()) > remainingSlots)
-    {
-        candidates.resize(static_cast<size_t>(remainingSlots));
-    }
-
-    for (auto& candidate : candidates)
-    {
-        auto& d = candidate.data;
         if (Settings::Occlusion().Enabled)
         {
-            UpdateOcclusionForActor(d, candidate.actor, player, snapshotFrame, checkInterval);
+            UpdateOcclusionForActor(d, a, player, snapshotFrame, checkInterval);
         }
+
         seenFormIDs.insert(d.formID);
         tempBuf.push_back(std::move(d));
     }
@@ -541,9 +841,32 @@ void UpdateSnapshot_GameThread()
         }
     }
 
+    auto& honorificCache = GetHonorificRuntime().perActor;
+    for (auto it = honorificCache.begin(); it != honorificCache.end();)
+    {
+        if (seenFormIDs.find(it->first) == seenFormIDs.end())
+        {
+            it = honorificCache.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    // Registers: evaluate scene predicates against the plate count just
+    // gathered and publish the active profile for the render thread to ease
+    // toward.
+    int activeRegister = -1;
+    if (Settings::RegisterConfig().Enabled && !Settings::Registers().empty())
+    {
+        activeRegister = PickRegister(ComputeContextMask(player, static_cast<int>(tempBuf.size())));
+    }
+    GetState().activeRegister.store(activeRegister, std::memory_order_release);
+
     {
         std::lock_guard<std::mutex> lock(GetState().snapshotLock);
-        GetState().snapshot = tempBuf;
+        GetState().snapshot = std::move(tempBuf);
     }
 }
 
