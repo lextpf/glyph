@@ -179,4 +179,11 @@ void SetEnabled(bool enabled);
  * gating that may still suppress drawing for other reasons.
  */
 bool IsEnabled();
+
+/**
+ * Force a one-shot refresh of the player's cached identity (name/typewriter).
+ * Called from the RaceMenu-close event sink so a rename is picked up promptly.
+ * Thread-safe (sets an atomic consumed on the render thread).
+ */
+void RequestIdentityRefresh();
 }  // namespace Renderer
