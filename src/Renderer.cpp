@@ -3,9 +3,12 @@
 #include "RendererInternal.hpp"
 
 #include "AppearanceTemplate.hpp"
+#include "BadgeTextures.hpp"
+#include "DepthClip.hpp"
 #include "GameState.hpp"
 #include "Occlusion.hpp"
 #include "ParticleTextures.hpp"
+#include "SceneMeter.hpp"
 #include "TextPostProcess.hpp"
 
 #include <SKSE/SKSE.h>
@@ -65,6 +68,11 @@ void SetEnabled(bool enabled)
 bool IsEnabled()
 {
     return GetState().manualEnabled.load(std::memory_order_acquire);
+}
+
+void RequestIdentityRefresh()
+{
+    GetState().pendingIdentityRefresh.store(true, std::memory_order_release);
 }
 
 // ============================================================================
@@ -139,14 +147,14 @@ float ExpApproachAlpha(float dt, float settleTime, float epsilon)
     return std::clamp(1.0f - std::pow(epsilon, dt / settleTime), .0f, 1.0f);
 }
 
-static void ResetTrailHistory(ActorCache& entry, const ImVec2* seedPos = nullptr)
+static void ResetTrailHistory(ActorCache& entry, const RE::NiPoint3* seedWorldPos = nullptr)
 {
-    const ImVec2 initPos = seedPos ? *seedPos : ImVec2(.0f, .0f);
+    const RE::NiPoint3 initPos = seedWorldPos ? *seedWorldPos : RE::NiPoint3{};
     for (int i = 0; i < ActorCache::TRAIL_HISTORY_SIZE; ++i)
     {
         entry.trailHistory[i] = initPos;
     }
-    entry.trailIndex = seedPos ? 1 : 0;
+    entry.trailIndex = seedWorldPos ? 1 : 0;
     entry.trailFilled = false;
 }
 
@@ -161,9 +169,14 @@ static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d,
     DistanceFactors df{};
     const float dist = d.distToPlayer;
 
+    // Registers can pull the fade envelope in (or push it out) per scene.
+    const float regFade = GetState().regFadeMul;
+    const float fadeStart = snap.fadeStartDistance * regFade;
+    const float fadeEnd = snap.fadeEndDistance * regFade;
+
     // Alpha fade using squared smoothstep
-    const float fadeRange = std::max(1.0f, snap.fadeEndDistance - snap.fadeStartDistance);
-    float fadeT = TextEffects::SmoothStep((dist - snap.fadeStartDistance) / fadeRange);
+    const float fadeRange = std::max(1.0f, fadeEnd - fadeStart);
+    float fadeT = TextEffects::SmoothStep((dist - fadeStart) / fadeRange);
     df.alphaTarget = 1.0f - fadeT;
     df.alphaTarget = df.alphaTarget * df.alphaTarget;
 
@@ -253,6 +266,161 @@ bool WorldToScreen(const RE::NiPoint3& worldPos,
     return true;
 }
 
+// ============================================================================
+// The Quiet Frame (camera-motion quieting)
+// ============================================================================
+
+// Map camera angular speed (deg/s) onto a [0,1] quiet target: untouched below
+// `lo`, fully quiet above `hi`, smoothstepped between.  Pure function --
+// mirrored in tests/test_utils.cpp; keep the logic in sync.
+static float QuietTarget(float degPerSec, float lo, float hi)
+{
+    if (hi <= lo)
+    {
+        return degPerSec >= hi ? 1.0f : .0f;
+    }
+    return TextEffects::SmoothStep(TextEffects::Saturate((degPerSec - lo) / (hi - lo)));
+}
+
+// During fast camera pans the overlay exhales: the title and the status-badge
+// strip above the name fold away, while the name, level, and particles stay
+// full so the core readout never blinks (applied in DrawLabel via quietSub).
+// The envelope is asymmetric -- fast attack toward quiet, slow weighty release.
+//
+// quietName / QuietNameFloor / QuietNameReleaseTime are retained (so the name
+// could opt back into thinning) but are currently unused -- the name no longer
+// responds to the Quiet Frame.
+static void UpdateQuietFrame(const RenderSettingsSnapshot& snap, float dt)
+{
+    auto& st = GetState();
+    if (!snap.quiet.Enabled)
+    {
+        st.quietName = .0f;
+        st.quietSub = .0f;
+        st.prevCamValid = false;
+        return;
+    }
+
+    float target = .0f;
+    RE::NiPoint3 camPos{};
+    RE::NiPoint3 camFwd{};
+    if (Occlusion::GetCameraInfo(camPos, camFwd) && dt > 1e-5f)
+    {
+        if (st.prevCamValid)
+        {
+            constexpr float kRadToDeg = 180.0f / 3.14159265358979323846f;
+            const float dot =
+                std::clamp(camFwd.x * st.prevCamForward.x + camFwd.y * st.prevCamForward.y +
+                               camFwd.z * st.prevCamForward.z,
+                           -1.0f,
+                           1.0f);
+            const float degPerSec = std::acos(dot) * kRadToDeg / dt;
+            target = QuietTarget(degPerSec, snap.quiet.PanThresholdLo, snap.quiet.PanThresholdHi);
+        }
+        st.prevCamForward = camFwd;
+        st.prevCamValid = true;
+    }
+    else
+    {
+        st.prevCamValid = false;
+    }
+
+    const float nameSettle =
+        target > st.quietName ? snap.quiet.AttackTime : snap.quiet.NameReleaseTime;
+    const float subSettle =
+        target > st.quietSub ? snap.quiet.AttackTime : snap.quiet.SubReleaseTime;
+    st.quietName += (target - st.quietName) * ExpApproachAlpha(dt, nameSettle);
+    st.quietSub += (target - st.quietSub) * ExpApproachAlpha(dt, subSettle);
+}
+
+// ============================================================================
+// Cut by the World (per-pixel depth occlusion)
+// ============================================================================
+
+// Determine the depth-buffer convention from the game's own projection:
+// project two probe points at different view depths and compare their
+// viewport z.  +1 = standard (farther is larger), -1 = reversed, 0 =
+// indeterminate (skip clipping this frame).  WorldToScreen uses the same
+// matrices the rasterizer wrote depth with, so this is exact by
+// construction -- no readback or calibration pass needed.
+static float ComputeDepthPolarity()
+{
+    RE::NiPoint3 camPos{};
+    RE::NiPoint3 camFwd{};
+    if (!Occlusion::GetCameraInfo(camPos, camFwd))
+    {
+        return .0f;
+    }
+
+    const RE::NiPoint3 nearPt{
+        camPos.x + camFwd.x * 50.0f, camPos.y + camFwd.y * 50.0f, camPos.z + camFwd.z * 50.0f};
+    const RE::NiPoint3 farPt{
+        camPos.x + camFwd.x * 500.0f, camPos.y + camFwd.y * 500.0f, camPos.z + camFwd.z * 500.0f};
+    RE::NiPoint3 sNear{};
+    RE::NiPoint3 sFar{};
+    if (!WorldToScreen(nearPt, sNear) || !WorldToScreen(farPt, sFar))
+    {
+        return .0f;
+    }
+    const float delta = sFar.z - sNear.z;
+    if (std::abs(delta) < 1e-7f)
+    {
+        return .0f;
+    }
+    return delta > .0f ? 1.0f : -1.0f;
+}
+
+// Bracket the current plate's draws (all splitter channels) with the
+// depth-clip shader.  Channel streams are contiguous per label, so one
+// Apply per channel re-establishes the shader + this plate's constants for
+// exactly this plate's content in that channel.
+static void BracketPlateDepthClip(ImDrawList* drawList,
+                                  ImDrawListSplitter* splitter,
+                                  void* params,
+                                  const RenderSettingsSnapshot& snap)
+{
+    const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
+    const int channelCount = gpuGlow ? 3 : 2;
+    for (int c = 0; c < channelCount; ++c)
+    {
+        splitter->SetCurrentChannel(drawList, c);
+        drawList->AddCallback(DepthClip::ApplyCallback, params);
+    }
+}
+
+// ============================================================================
+// Registers (context-conditional profiles)
+// ============================================================================
+
+// Ease the effective register knobs toward the active register's values (or
+// the 1/1/1/0 base state when none matches).  The game thread publishes the
+// active index each snapshot; easing here makes scene transitions swell and
+// recede like a score instead of snapping between modes.
+static void UpdateRegisters(const RenderSettingsSnapshot& snap, float dt)
+{
+    auto& st = GetState();
+    float alphaT = 1.0f;
+    float fadeT = 1.0f;
+    float subT = 1.0f;
+    float hideT = .0f;
+
+    const int idx = st.activeRegister.load(std::memory_order_acquire);
+    if (snap.registersEnabled && idx >= 0 && idx < static_cast<int>(snap.registers.size()))
+    {
+        const auto& reg = snap.registers[static_cast<size_t>(idx)];
+        alphaT = reg.alphaMul;
+        fadeT = reg.fadeMul;
+        subT = reg.subLineMul;
+        hideT = reg.hideNeutral ? 1.0f : .0f;
+    }
+
+    const float k = ExpApproachAlpha(dt, std::max(.05f, snap.registerTransitionTime));
+    st.regAlphaMul += (alphaT - st.regAlphaMul) * k;
+    st.regFadeMul += (fadeT - st.regFadeMul) * k;
+    st.regSubLineMul += (subT - st.regSubLineMul) * k;
+    st.regHideNeutral += (hideT - st.regHideNeutral) * k;
+}
+
 // Update cache entry smoothing and return whether the label is visible.
 static bool UpdateCacheSmoothing(ActorCache& entry,
                                  const ActorDrawData& d,
@@ -280,7 +448,7 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
         entry.occlusionSmooth = occlusionTarget;
         entry.typewriterTime = .0f;
         entry.typewriterComplete = false;
-        ResetTrailHistory(entry, &initPos);
+        ResetTrailHistory(entry, &d.worldPos);
     }
     else
     {
@@ -312,9 +480,12 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
 
         if (moveDist > snap.visual.LargeMovementThreshold)
         {
+            // Snap the head so it never lags a hard screen jump.  The trail is
+            // NOT wiped here: it is world-space now, so a camera-induced screen
+            // jump leaves the stored world points untouched (they reproject onto
+            // the head).  Genuine world teleports are handled in the trail block.
             entry.smooth.x += (smoothedPos.x - entry.smooth.x) * snap.visual.LargeMovementBlend;
             entry.smooth.y += (smoothedPos.y - entry.smooth.y) * snap.visual.LargeMovementBlend;
-            ResetTrailHistory(entry, &entry.smooth);
         }
         else
         {
@@ -384,12 +555,14 @@ static void DrawLabel(const ActorDrawData& d,
             {
                 entry.entrancePhase = .0f;
                 entry.entranceDone = false;
+                entry.entranceDelay = -1.0f;
             }
-            ResetTrailHistory(entry);
+            ResetTrailHistory(entry, &d.worldPos);
         }
     }
 
     entry.lastSeenFrame = GetState().frame;
+    entry.sawAlive = true;  // Last Rites plays only for actors seen alive
 
     // Capture live draw data and cancel any pending exit: a present actor is
     // never mid-exit. The exit pass replays this snapshot after the actor leaves.
@@ -417,6 +590,23 @@ static void DrawLabel(const ActorDrawData& d,
     float entranceYOffset = .0f;
     if (snap.enableEntrance && !entry.entranceDone)
     {
+        // Roll Call: each entrance starting this frame claims the next
+        // stagger slot.  The snapshot is distance-sorted, so slots fall
+        // near-to-far and a waking scene rolls in as a quiet cascade; a
+        // lone actor entering range claims slot 0 and starts immediately.
+        if (entry.entranceDelay < .0f)
+        {
+            entry.entranceDelay = std::min(
+                static_cast<float>(GetState().entrancesStartedThisFrame) * snap.entranceStaggerStep,
+                snap.entranceStaggerMax);
+            ++GetState().entrancesStartedThisFrame;
+        }
+        if (entry.entranceDelay > .0f)
+        {
+            entry.entranceDelay = std::max(.0f, entry.entranceDelay - dt);
+            entry.typewriterTime = .0f;  // reveal starts with the entrance, not the wait
+            return;
+        }
         entry.entrancePhase += dt / std::max(snap.entranceDuration, .05f);
         if (entry.entrancePhase >= 1.0f)
         {
@@ -468,8 +658,28 @@ static void DrawLabel(const ActorDrawData& d,
                                    : snap.focus.AmbientDimFactor +
                                          (1.0f - snap.focus.AmbientDimFactor) * entry.focusSmooth;
 
-    // Cull off-screen labels
-    const float alpha = entry.alphaSmooth * entry.occlusionSmooth * entranceAlphaMul * mainAlphaMul;
+    // Registers: overlay-wide alpha, plus the option to retire neutral and
+    // ally plates entirely in matching scenes (crowded cities).  Followers,
+    // hostiles, and the player always keep their plates.
+    float registerMul = GetState().regAlphaMul;
+    if (!d.isPlayer &&
+        (d.relationship == RelationshipKind::Neutral || d.relationship == RelationshipKind::Ally))
+    {
+        registerMul *= 1.0f - GetState().regHideNeutral;
+    }
+
+    // One Voice Per Actor: while another HUD mod floats a widget over this
+    // actor, the plate bows out to the configured yield alpha and returns
+    // with the same synchronized fade when the widget goes away.
+    entry.yieldSmooth += ((d.yieldPlate ? 1.0f : .0f) - entry.yieldSmooth) *
+                         ExpApproachAlpha(dt, snap.compatYieldSettleTime);
+    const float yieldMul = 1.0f - (1.0f - snap.compatTrueHUDYieldAlpha) * entry.yieldSmooth;
+
+    // Cull off-screen labels.  Quiet Frame is intentionally absent here: the
+    // name, level, and particles all derive from this alpha and must stay full
+    // through a camera pan.  Only the title and badge strip fold (below).
+    const float alpha = entry.alphaSmooth * entry.occlusionSmooth * entranceAlphaMul *
+                        mainAlphaMul * registerMul * yieldMul;
     const float textSizeScale = entry.textSizeScale * entranceScaleMul;
 
     auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -483,6 +693,14 @@ static void DrawLabel(const ActorDrawData& d,
         screenPos.y > viewSize.height + 100.0f)
     {
         return;
+    }
+
+    // Cut by the World: everything this plate draws is depth-tested per
+    // pixel at the plate's own viewport depth, so world geometry slices the
+    // type instead of the whole plate popping on LOS changes.
+    if (GetState().depthClipFrame)
+    {
+        BracketPlateDepthClip(drawList, splitter, DepthClip::MakePlateParams(screenPos.z), snap);
     }
 
     // Compute style, layout, and dispatch to sub-renderers
@@ -501,12 +719,54 @@ static void DrawLabel(const ActorDrawData& d,
     style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale, snap);
     style.outlineWidth = style.nameOutlineWidth;
 
+    // Candlelight Metering: let this plate's ink sit in the scene's light.
+    // The sample is smoothed per actor so exposure changes settle with the
+    // same weight as every other transition in the system.
+    if (snap.candleEnabled && SceneMeter::IsInitialized())
+    {
+        float lum = .0f;
+        float rgb[3] = {};
+        if (SceneMeter::Sample(entry.smooth.x / static_cast<float>(viewSize.width),
+                               entry.smooth.y / static_cast<float>(viewSize.height),
+                               lum,
+                               rgb))
+        {
+            if (entry.bgLum < .0f)
+            {
+                entry.bgLum = lum;
+                entry.bgR = rgb[0];
+                entry.bgG = rgb[1];
+                entry.bgB = rgb[2];
+            }
+            else
+            {
+                const float k = ExpApproachAlpha(dt, snap.candleSettleTime);
+                entry.bgLum += (lum - entry.bgLum) * k;
+                entry.bgR += (rgb[0] - entry.bgR) * k;
+                entry.bgG += (rgb[1] - entry.bgG) * k;
+                entry.bgB += (rgb[2] - entry.bgB) * k;
+            }
+            const float bgRGB[3] = {entry.bgR, entry.bgG, entry.bgB};
+            ApplyCandlelight(style, entry.bgLum, bgRGB, snap);
+        }
+    }
+
     // Fade title and info rows to zero on ambient (non-focused) actors so
     // only the main line remains.  Crossfades on focus transitions via the
     // same focusSmooth that drives the main-alpha dim.
+    //
+    // The Quiet Frame's camera-pan fold (paneFold) folds ONLY the title and the
+    // status-badge strip above the name -- the name, level, and particles stay
+    // full so the core readout never blinks during a pan.  regSubLineMul (the
+    // register scene-dimming knob) is a separate feature and still composes on
+    // every sub-line.
+    const float paneFold = 1.0f - GetState().quietSub;  // 1 = settled, 0 = folded on a pan
+    const float regSub = GetState().regSubLineMul;
     const float auxAlphaMul = focusAppliesToActor ? entry.focusSmooth : 1.0f;
-    style.titleAlpha *= auxAlphaMul;
-    style.infoAlphaMul = auxAlphaMul;
+    style.titleAlpha *= auxAlphaMul * regSub * paneFold;
+    style.infoAlphaMul = auxAlphaMul * regSub;
+    style.levelAlpha *= regSub;
+    style.badgeAlphaMul = regSub * paneFold;
 
     LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap);
 
@@ -520,51 +780,84 @@ static void DrawLabel(const ActorDrawData& d,
         layout.mainLineCenterY += entranceYOffset;
     }
 
-    // Motion trail: push current position and draw ghost copies
+    // Motion trail: store the actor's WORLD position each frame and draw ghost
+    // copies reprojected through the CURRENT camera.  Because a pure camera pan
+    // reprojects every stored world point with the same transform, the ghosts
+    // collapse onto the head and leave no smear -- only genuine actor movement
+    // spreads them into a trail.
     if (snap.visual.EnableMotionTrail && style.tierIdx >= snap.visual.TrailMinTier &&
         entry.entranceDone)
     {
-        // Track a stable base anchor in history. Layout-only offsets such as
-        // overlap prevention are applied at draw time so the ghost trail does
-        // not inherit per-frame resolver wobble.
-        const ImVec2 trailBasePos = entry.smooth;
-        const ImVec2 trailTransientOffset(layout.startPos.x - trailBasePos.x,
-                                          layout.startPos.y - trailBasePos.y);
+        // Reseed across a world-space teleport (scripted move, same-pass fast
+        // travel) so the trail never stretches across the jump.  A camera pan
+        // never trips this -- the stored positions are world space, not screen.
+        const int lastIdx = (entry.trailIndex - 1 + ActorCache::TRAIL_HISTORY_SIZE) %
+                            ActorCache::TRAIL_HISTORY_SIZE;
+        if (entry.trailFilled || entry.trailIndex > 0)
+        {
+            const RE::NiPoint3& prevWorld = entry.trailHistory[lastIdx];
+            const float wdx = d.worldPos.x - prevWorld.x;
+            const float wdy = d.worldPos.y - prevWorld.y;
+            const float wdz = d.worldPos.z - prevWorld.z;
+            // Far beyond any locomotion speed even at low frame rates; only a
+            // teleport clears this bar.
+            constexpr float kTeleportDist = 256.0f;
+            if (wdx * wdx + wdy * wdy + wdz * wdz > kTeleportDist * kTeleportDist)
+            {
+                ResetTrailHistory(entry, &d.worldPos);
+            }
+        }
 
-        entry.trailHistory[entry.trailIndex] = trailBasePos;
+        entry.trailHistory[entry.trailIndex] = d.worldPos;
         entry.trailIndex = (entry.trailIndex + 1) % ActorCache::TRAIL_HISTORY_SIZE;
         if (entry.trailIndex == 0)
         {
             entry.trailFilled = true;
         }
 
-        int count = entry.trailFilled ? ActorCache::TRAIL_HISTORY_SIZE : entry.trailIndex;
-        int trailLen = std::min(count, snap.visual.TrailLength);
+        const int count = entry.trailFilled ? ActorCache::TRAIL_HISTORY_SIZE : entry.trailIndex;
+        const int trailLen = std::min(count, snap.visual.TrailLength);
 
-        if (trailLen > 0)
+        // Reproject the head (this frame's world pos).  The drawn plate sits at
+        // layout.startPos, which differs from the raw projection only by layout
+        // offsets (overlap relaxation, entrance rise); carry that same offset
+        // onto every ghost so head and trail stay coincident.
+        RE::NiPoint3 headScreen{};
+        if (trailLen > 1 && WorldToScreen(d.worldPos, headScreen))
         {
-            // Check if label has moved enough
-            int newest = (entry.trailIndex - 1 + ActorCache::TRAIL_HISTORY_SIZE) %
-                         ActorCache::TRAIL_HISTORY_SIZE;
-            int oldest = (entry.trailIndex - trailLen + ActorCache::TRAIL_HISTORY_SIZE) %
-                         ActorCache::TRAIL_HISTORY_SIZE;
-            float dx = entry.trailHistory[newest].x - entry.trailHistory[oldest].x;
-            float dy = entry.trailHistory[newest].y - entry.trailHistory[oldest].y;
-            float dist = std::sqrt(dx * dx + dy * dy);
+            const ImVec2 trailTransientOffset(layout.startPos.x - headScreen.x,
+                                              layout.startPos.y - headScreen.y);
 
-            if (dist > snap.visual.TrailMinDistance)
+            // Camera-compensated distance gate: measure the reprojected screen
+            // span between the oldest sample and the head.  Still in pixels, so
+            // TrailMinDistance keeps its meaning; a static actor projects to
+            // ~one point (span 0) and no trail renders even under a hard pan.
+            const int oldest = (entry.trailIndex - trailLen + ActorCache::TRAIL_HISTORY_SIZE) %
+                               ActorCache::TRAIL_HISTORY_SIZE;
+            RE::NiPoint3 oldestScreen{};
+            const bool spanOk = WorldToScreen(entry.trailHistory[oldest], oldestScreen);
+            const float dx = spanOk ? headScreen.x - oldestScreen.x : .0f;
+            const float dy = spanOk ? headScreen.y - oldestScreen.y : .0f;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+
+            if (spanOk && dist > snap.visual.TrailMinDistance)
             {
                 const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
                 const int chBack = gpuGlow ? 1 : 0;
                 splitter->SetCurrentChannel(drawList, chBack);
 
-                // Draw ghosts from oldest to newest (newest = most visible)
+                // Draw ghosts from oldest to newest (skip i=0 -- the head draws it).
                 for (int i = trailLen - 1; i >= 1; --i)
                 {
-                    int idx = (entry.trailIndex - 1 - i + ActorCache::TRAIL_HISTORY_SIZE) %
-                              ActorCache::TRAIL_HISTORY_SIZE;
-                    ImVec2 ghostPos(entry.trailHistory[idx].x + trailTransientOffset.x,
-                                    entry.trailHistory[idx].y + trailTransientOffset.y);
+                    const int idx = (entry.trailIndex - 1 - i + ActorCache::TRAIL_HISTORY_SIZE) %
+                                    ActorCache::TRAIL_HISTORY_SIZE;
+                    RE::NiPoint3 ghostScreen{};
+                    if (!WorldToScreen(entry.trailHistory[idx], ghostScreen))
+                    {
+                        continue;  // behind the camera after a hard pan
+                    }
+                    const ImVec2 ghostPos(ghostScreen.x + trailTransientOffset.x,
+                                          ghostScreen.y + trailTransientOffset.y);
 
                     float t = (float)i / (float)trailLen;
                     float ghostAlpha =
@@ -610,9 +903,175 @@ static void DrawLabel(const ActorDrawData& d,
     }
 
     DrawBackgroundGlow(drawList, style, layout, df.lodTitleFactor, splitter, snap);
-    DrawParticles(drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap);
-    DrawOrnaments(
+    DrawParticlesAndOrnaments(
         drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap.fastOutlines, snap);
+    DrawTitleText(drawList, style, layout, df.lodTitleFactor, splitter, snap.fastOutlines, snap);
+    DrawMainLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawInfoLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawBadges(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawTierEmblem(drawList, style, layout, time, splitter, snap);
+}
+
+// ============================================================================
+// Last Rites (death valediction)
+// ============================================================================
+
+// Rite phase math (pure -- mirrored in tests/test_utils.cpp; keep in sync).
+// t in [0,1]:  hold [0,0.22)  drain [0.22,0.55)  farewell [0.55,1].  During
+// the hold the plate is untouched; the drain pulls the ink toward its rite
+// color; the farewell fades (and, per creature, crumbles or drifts) it out.
+struct DeathRitePhases
+{
+    float drainT;     ///< Ink drain progress [0,1]
+    float dissolveT;  ///< Farewell progress [0,1]
+};
+static DeathRitePhases ComputeDeathRitePhases(float t)
+{
+    constexpr float kHoldEnd = .22f;
+    constexpr float kDrainEnd = .55f;
+    DeathRitePhases p{};
+    p.drainT = TextEffects::Saturate((t - kHoldEnd) / (kDrainEnd - kHoldEnd));
+    p.dissolveT = TextEffects::Saturate((t - kDrainEnd) / (1.0f - kDrainEnd));
+    return p;
+}
+
+// Total revealed characters across a computed layout (main row -> info row ->
+// title, matching the typewriter's accounting order).
+static int CountLayoutChars(const LabelLayout& layout)
+{
+    size_t total = Utf8CharCount(layout.titleStr.c_str());
+    for (const auto& seg : layout.segments)
+    {
+        total += Utf8CharCount(seg.text.c_str());
+    }
+    for (const auto& seg : layout.infoSegments)
+    {
+        total += Utf8CharCount(seg.text.c_str());
+    }
+    return static_cast<int>(total);
+}
+
+// Render the one-shot valediction for an actor that died in view.  The plate
+// holds perfectly still (no reprojection -- worldPos of a ragdolling corpse
+// must not drag the name around), the ink drains, and the farewell is keyed
+// to what the actor was: a mortal's name gutters out and sinks like a snuffed
+// candle, a draugr's crumbles letter by letter, a dragon's sears bright and
+// goes dark as the soul leaves it.  Replays the last live draw data so the
+// styling (relationship color, badges) never flips post-mortem.
+static void DrawDyingLabel(ActorCache& entry,
+                           const ActorDrawData& d,
+                           ImDrawList* drawList,
+                           ImDrawListSplitter* splitter,
+                           const RenderSettingsSnapshot& snap)
+{
+    const float dt = ImGui::GetIO().DeltaTime;
+    entry.deathPhase =
+        std::min(1.0f, entry.deathPhase + dt / std::max(snap.deathRiteDuration, .05f));
+    if (entry.deathPhase >= 1.0f)
+    {
+        entry.deathDone = true;
+        entry.exitPhase = 1.0f;  // the rite is the exit -- never replay one
+        return;
+    }
+    const DeathRitePhases ph = ComputeDeathRitePhases(entry.deathPhase);
+
+    const bool sear = d.creatureKind == CreatureKind::Dragon;
+    const bool crumble = d.creatureKind == CreatureKind::Undead;
+
+    const float fade = sear ? std::pow(ph.dissolveT, 1.35f) : ph.dissolveT;
+    // Quiet Frame does not touch the name/level during a rite either -- the
+    // rite's own drain (below) governs how the sub-lines bow out.
+    const float alpha =
+        entry.alphaSmooth * entry.occlusionSmooth * GetState().regAlphaMul * (1.0f - fade);
+    if (alpha < .01f)
+    {
+        return;
+    }
+    const float textSizeScale = entry.textSizeScale;
+
+    ImFont* nameFont = GetFontAt(RenderConstants::FONT_INDEX_NAME);
+    ImFont* levelFont = GetFontAt(RenderConstants::FONT_INDEX_LEVEL);
+    ImFont* titleFont = GetFontAt(RenderConstants::FONT_INDEX_TITLE);
+    if (!nameFont || !levelFont || !titleFont)
+    {
+        return;
+    }
+
+    const float time = (float)ImGui::GetTime();
+    LabelStyle style = ComputeLabelStyle(d, entry.cachedNameLower, alpha, time, snap);
+    style.nameOutlineWidth = style.CalcOutlineWidth(nameFont->FontSize * textSizeScale, snap);
+    style.levelOutlineWidth = style.CalcOutlineWidth(levelFont->FontSize * textSizeScale, snap);
+    style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale, snap);
+    style.outlineWidth = style.nameOutlineWidth;
+
+    // Ink treatment.
+    if (sear)
+    {
+        constexpr ImVec4 kSearBright{1.0f, .92f, .78f, 1.0f};
+        constexpr ImVec4 kSearDark{.05f, .04f, .04f, 1.0f};
+        const float searIn = TextEffects::Saturate(ph.drainT * 2.0f);
+        const float searOut =
+            TextEffects::Saturate((ph.drainT - .5f) * 2.0f) * .85f + ph.dissolveT * .15f;
+        ApplyDeathRiteTint(style, kSearBright, searIn * .85f, snap);
+        ApplyDeathRiteTint(style, kSearDark, searOut, snap);
+    }
+    else
+    {
+        constexpr ImVec4 kAsh{.62f, .60f, .57f, 1.0f};
+        ApplyDeathRiteTint(style, kAsh, ph.drainT, snap);
+    }
+
+    // Sub-lines bow out with the drain; the farewell belongs to name + title.
+    const float subMul =
+        (1.0f - ph.drainT) * (1.0f - GetState().quietSub) * GetState().regSubLineMul;
+    style.infoAlphaMul = subMul;
+    style.badgeAlphaMul = subMul;
+    style.levelAlpha *= 1.0f - ph.drainT * .5f;
+
+    // Creature-keyed farewell: reverse-typewriter crumble for the undead.
+    int forcedChars = -1;
+    if (crumble && ph.dissolveT > .0f)
+    {
+        LabelLayout probe = ComputeLabelLayout(
+            d, entry, style, textSizeScale, snap, (std::numeric_limits<int>::max)());
+        const int total = CountLayoutChars(probe);
+        forcedChars =
+            static_cast<int>(std::ceil(static_cast<float>(total) * (1.0f - ph.dissolveT)));
+    }
+
+    LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap, forcedChars);
+
+    // Vertical drift: mortals sink like a snuffed candle, a dragon's name
+    // rises with the departing soul, a crumbling draugr stays put.
+    float yOffset = .0f;
+    if (sear)
+    {
+        yOffset = -10.0f * TextEffects::EaseInCubic(ph.dissolveT);
+    }
+    else if (!crumble)
+    {
+        yOffset = 6.0f * TextEffects::EaseInCubic(ph.dissolveT);
+    }
+    layout.startPos.y += yOffset;
+    layout.nameplateCenter.y += yOffset;
+    layout.nameplateTop += yOffset;
+    layout.nameplateBottom += yOffset;
+    layout.mainLineCenterY += yOffset;
+
+    DistanceFactors df = ComputeDistanceFactors(d, snap);
+
+    // Cut by the World: the frozen plate still respects world geometry.
+    if (GetState().depthClipFrame)
+    {
+        RE::NiPoint3 ritePos{};
+        void* params = WorldToScreen(d.worldPos, ritePos) ? DepthClip::MakePlateParams(ritePos.z)
+                                                          : DepthClip::MakeNeutralParams();
+        BracketPlateDepthClip(drawList, splitter, params, snap);
+    }
+
+    // No particles/ornaments/trail during a rite -- the farewell is pure
+    // typography, held ruthlessly sparse on purpose.
+    DrawBackgroundGlow(drawList, style, layout, df.lodTitleFactor, splitter, snap);
     DrawTitleText(drawList, style, layout, df.lodTitleFactor, splitter, snap.fastOutlines, snap);
     DrawMainLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
     DrawInfoLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
@@ -641,7 +1100,8 @@ static void DrawExitingLabel(ActorCache& entry,
     const float exitScaleMul = 1.0f - .06f * e;
     const float exitYOffset = RenderConstants::EXIT_SINK_PX * e;
 
-    const float alpha = entry.alphaSmooth * entry.occlusionSmooth * exitAlphaMul;
+    const float alpha =
+        entry.alphaSmooth * entry.occlusionSmooth * exitAlphaMul * GetState().regAlphaMul;
     if (alpha < .01f)
     {
         return;
@@ -664,10 +1124,16 @@ static void DrawExitingLabel(ActorCache& entry,
     style.outlineWidth = style.nameOutlineWidth;
 
     // Preserve the last focus state so an ambient label keeps its dimmed title.
+    // Exiting ghosts honor the Quiet Frame like live plates: only the title and
+    // badge strip fold on a pan; name, level, and particles stay full.
+    const float paneFold = 1.0f - GetState().quietSub;
+    const float regSub = GetState().regSubLineMul;
     const bool focusApplies = snap.focus.Enabled && !d.isPlayer;
     const float auxAlphaMul = focusApplies ? entry.focusSmooth : 1.0f;
-    style.titleAlpha *= auxAlphaMul;
-    style.infoAlphaMul = auxAlphaMul;
+    style.titleAlpha *= auxAlphaMul * regSub * paneFold;
+    style.infoAlphaMul = auxAlphaMul * regSub;
+    style.levelAlpha *= regSub;
+    style.badgeAlphaMul = regSub * paneFold;
 
     // Reuse distance-derived LOD factors from the cached distance.
     DistanceFactors df = ComputeDistanceFactors(d, snap);
@@ -679,16 +1145,27 @@ static void DrawExitingLabel(ActorCache& entry,
     layout.nameplateBottom += exitYOffset;
     layout.mainLineCenterY += exitYOffset;
 
+    // Cut by the World: ghosts reproject their last world position; if that
+    // fails (behind camera) they render unclipped rather than inheriting the
+    // previous plate's depth.
+    if (GetState().depthClipFrame)
+    {
+        RE::NiPoint3 ghostPos{};
+        void* params = WorldToScreen(d.worldPos, ghostPos) ? DepthClip::MakePlateParams(ghostPos.z)
+                                                           : DepthClip::MakeNeutralParams();
+        BracketPlateDepthClip(drawList, splitter, params, snap);
+    }
+
     // No motion trail on exit (the label is not moving); everything else renders
     // as a fading, sinking copy of the last live frame.
     DrawBackgroundGlow(drawList, style, layout, df.lodTitleFactor, splitter, snap);
-    DrawParticles(drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap);
-    DrawOrnaments(
+    DrawParticlesAndOrnaments(
         drawList, d, style, layout, df.lodEffectsFactor, time, splitter, snap.fastOutlines, snap);
     DrawTitleText(drawList, style, layout, df.lodTitleFactor, splitter, snap.fastOutlines, snap);
     DrawMainLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
     DrawInfoLineSegments(drawList, style, layout, splitter, snap.fastOutlines, snap);
     DrawBadges(drawList, style, layout, splitter, snap.fastOutlines, snap);
+    DrawTierEmblem(drawList, style, layout, time, splitter, snap);
 }
 
 // ============================================================================
@@ -922,9 +1399,9 @@ uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
 
     for (const auto& d : snap)
     {
-        if (d.isPlayer)
+        if (d.isPlayer || d.isDead)
         {
-            continue;  // Player is never the focus target.
+            continue;  // Neither the player nor the dead can hold focus.
         }
         if (snapSettings.focus.IgnoreOccluded && d.isOccluded)
         {
@@ -985,6 +1462,10 @@ static void ResolveOverlaps(const std::vector<ActorDrawData>& localSnap,
     for (int i = 0; i < static_cast<int>(localSnap.size()); ++i)
     {
         const auto& d = localSnap[i];
+        if (d.isDead)
+        {
+            continue;  // A dying plate is frozen -- it neither pushes nor moves.
+        }
         auto cIt = GetState().cache.find(d.formID);
         if (cIt == GetState().cache.end() || !cIt->second.initialized)
         {
@@ -1112,9 +1593,10 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.enableEntrance = tr.EnableEntrance;
     snap.entranceStyle = tr.EntranceStyle;
     snap.entranceDuration = tr.EntranceDuration;
-    snap.entranceOvershoot = tr.EntranceOvershoot;
     snap.enableExit = tr.EnableExit;
     snap.exitDuration = tr.ExitDuration;
+    snap.entranceStaggerStep = tr.EntranceStaggerStep;
+    snap.entranceStaggerMax = tr.EntranceStaggerMax;
 
     const auto& orn = Settings::Ornament();
     snap.enableOrnaments = orn.Enabled;
@@ -1123,6 +1605,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.ornamentFontPath = orn.FontPath;
     snap.ornamentFontSize = orn.FontSize;
     snap.ornamentAnchorToMainLine = orn.AnchorToMainLine;
+    snap.ornamentOffsetY = orn.OffsetY;
 
     const auto& part = Settings::Particle();
     snap.enableParticleAura = part.Enabled;
@@ -1192,6 +1675,7 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     const auto& ic = Settings::Icons();
     snap.icons.enabled = ic.Enabled && !ic.Folder.empty();
     snap.icons.scale = ic.Scale;
+    snap.icons.opacity = ic.Opacity;
     snap.icons.deadlyPulse = ic.DeadlyPulse;
     snap.icons.icoFollower = ic.FollowerIcon;
     snap.icons.icoAlly = ic.AllyIcon;
@@ -1230,6 +1714,9 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.icons.icoNormalWeight = ic.NormalWeightIcon;
     snap.icons.icoWanted = ic.WantedIcon;
     snap.icons.icoBountyClear = ic.BountyClearIcon;
+    snap.icons.icoTierLow = ic.TierLowIcon;
+    snap.icons.icoTierMid = ic.TierMidIcon;
+    snap.icons.icoTierHigh = ic.TierHighIcon;
     snap.icons.colGuard = ic.GuardColor;
     snap.icons.colMerchant = ic.MerchantColor;
     snap.icons.colEssential = ic.EssentialColor;
@@ -1240,6 +1727,13 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.icons.colSneakDetected = ic.SneakDetectedColor;
     snap.icons.colEncumbered = ic.EncumberedColor;
     snap.icons.colWanted = ic.WantedColor;
+    snap.icons.colTierLow = ic.TierLowColor;
+    snap.icons.colTierMid = ic.TierMidColor;
+    snap.icons.colTierHigh = ic.TierHighColor;
+    snap.icons.tierBadgeImages = ic.TierBadgeImages;
+    snap.icons.tierBadgeGamma = ic.TierBadgeGamma;
+    snap.icons.tierBadgeScale = ic.TierBadgeScale;
+    snap.icons.tierImageCount = BadgeTextures::TierImageCount();
     snap.icons.colNeutral = ic.NeutralColor;
     snap.icons.colHumanoid = ic.HumanoidColor;
     snap.icons.colCommoner = ic.CommonerColor;
@@ -1262,9 +1756,34 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.icons.playerCombatEnabled = ic.PlayerCombatEnabled;
     snap.icons.encumberedEnabled = ic.EncumberedEnabled;
     snap.icons.bountyEnabled = ic.BountyEnabled;
+    snap.icons.tierEnabled = ic.TierEnabled;
     snap.icons.mutedAlpha = ic.MutedAlpha;
     snap.icons.mutedDesat = ic.MutedDesat;
     snap.focus = Settings::Focus();
+    snap.quiet = Settings::Quiet();
+
+    const auto& dr = Settings::DeathRite();
+    snap.deathRiteEnabled = dr.Enabled;
+    snap.deathRiteDuration = dr.Duration;
+
+    const auto& rc = Settings::RegisterConfig();
+    snap.registersEnabled = rc.Enabled;
+    snap.registerTransitionTime = rc.TransitionTime;
+    snap.registers = Settings::Registers();
+
+    const auto& compat = Settings::Compat();
+    snap.compatTrueHUDYieldAlpha = compat.TrueHUDYieldAlpha;
+    snap.compatYieldSettleTime = compat.YieldSettleTime;
+
+    const auto& candle = Settings::Candlelight();
+    snap.candleEnabled = candle.Enabled;
+    snap.candleStrength = candle.Strength;
+    snap.candleWarmth = candle.Warmth;
+    snap.candleSettleTime = candle.SettleTime;
+
+    const auto& dc = Settings::DepthClipConfig();
+    snap.depthClipEnabled = dc.Enabled;
+    snap.depthClipFeather = dc.Feather;
 
     return snap;
 }
@@ -1309,9 +1828,21 @@ void Draw()
         GetState().cachedSnap.PopulateSortedSpecialTitles();
         GetState().lastSnapGeneration = currentGen;
     }
+
+    // A RaceMenu rename fires this: drop the player's cache entry so the live
+    // name (re-read every snapshot) re-reveals via the typewriter. Safe here --
+    // the cache is render-thread-only.
+    if (GetState().pendingIdentityRefresh.exchange(false, std::memory_order_acq_rel))
+    {
+        GetState().cache.erase(0x14);  // player FormID
+        GetState().pauseSnapshotUpdates.store(false, std::memory_order_release);
+    }
     const RenderSettingsSnapshot& snap = GetState().cachedSnap;
 
-    if (!GameState::CanDrawOverlay())
+    // Gate on the game-thread-published atomic rather than calling
+    // GameState::CanDrawOverlay() here: Draw() runs on the render thread, where a
+    // direct player->GetParentCell() read can race with cell teardown.
+    if (!GetState().allowOverlay.load(std::memory_order_acquire))
     {
         GetState().wasInInvalidState = true;
         return;
@@ -1321,6 +1852,9 @@ void Draw()
     {
         GetState().wasInInvalidState = false;
         GetState().postLoadCooldown = 300;
+        // Roll Call: replay entrances on the first frame drawn after the
+        // overlay wakes so the scene re-introduces itself as a cascade.
+        GetState().wakeReplayPending = true;
     }
 
     if (GetState().postLoadCooldown > 0)
@@ -1361,9 +1895,79 @@ void Draw()
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
+    // Candlelight Metering: sample the composed scene before any overlay
+    // draws land on it -- the meter must never read glyph's own text back.
+    // (Pure copies; alters no pipeline state, so no ResetRenderState.)
+    if (snap.candleEnabled && SceneMeter::IsInitialized())
+    {
+        drawList->AddCallback(SceneMeter::CaptureCallback, nullptr);
+    }
+
     if (snap.enableDebugOverlay)
     {
         UpdateDebugStats(localSnap);
+    }
+
+    // Quiet Frame: advance the camera-motion quiet factors once per frame.
+    UpdateQuietFrame(snap, ImGui::GetIO().DeltaTime);
+
+    // Registers: ease the effective scene-profile knobs.
+    UpdateRegisters(snap, ImGui::GetIO().DeltaTime);
+
+    // Candlelight Metering: pull last frame's scene sample into the CPU grid.
+    if (snap.candleEnabled && SceneMeter::IsInitialized())
+    {
+        SceneMeter::CollectResults();
+    }
+
+    // Cut by the World: arm per-pixel depth clipping for this frame when the
+    // game's depth buffer is reachable and the projection's depth convention
+    // is determinate.  Failure means this frame renders exactly as before.
+    GetState().depthClipFrame = false;
+    if (snap.depthClipEnabled && DepthClip::IsInitialized())
+    {
+        const float polarity = ComputeDepthPolarity();
+        GetState().depthClipFrame =
+            polarity != .0f && DepthClip::BeginFrame(snap.depthClipFeather, polarity);
+    }
+
+    // Roll Call wake pass: the overlay just resumed after suppression
+    // (combat end, menu close, cell load).  Re-arm every visible plate's
+    // entrance and typewriter; the entrance block below then hands out
+    // stagger slots in snapshot order, which is already near-to-far.
+    GetState().entrancesStartedThisFrame = 0;
+    if (GetState().wakeReplayPending)
+    {
+        GetState().wakeReplayPending = false;
+        for (const auto& d : localSnap)
+        {
+            auto cIt = GetState().cache.find(d.formID);
+            if (cIt == GetState().cache.end())
+            {
+                continue;
+            }
+            auto& entry = cIt->second;
+            // Deaths that happened while the overlay was suppressed (player
+            // combat) are not replayed as stale rites after the fact.
+            if (d.isDead)
+            {
+                entry.deathPhase = 1.0f;
+                entry.deathDone = true;
+                entry.exitPhase = 1.0f;
+                continue;
+            }
+            if (snap.enableEntrance && entry.entranceDone)
+            {
+                entry.entranceDone = false;
+                entry.entrancePhase = .0f;
+                entry.entranceDelay = -1.0f;
+            }
+            if (entry.typewriterComplete)
+            {
+                entry.typewriterTime = .0f;
+                entry.typewriterComplete = false;
+            }
+        }
     }
 
     OverlapOffsets().clear();
@@ -1397,6 +2001,26 @@ void Draw()
 
     for (auto& d : localSnap)
     {
+        if (d.isDead)
+        {
+            // Last Rites: one-shot valediction for actors this overlay saw
+            // alive.  Corpses first seen dead (or already mourned) never
+            // render -- the overlay is a record of the living.
+            auto cIt = GetState().cache.find(d.formID);
+            if (!snap.deathRiteEnabled || cIt == GetState().cache.end() || !cIt->second.sawAlive ||
+                cIt->second.deathDone)
+            {
+                continue;
+            }
+            auto ld = GetState().lastDrawData.find(d.formID);
+            if (ld == GetState().lastDrawData.end())
+            {
+                cIt->second.deathDone = true;
+                continue;
+            }
+            DrawDyingLabel(cIt->second, ld->second, drawList, &splitter, snap);
+            continue;
+        }
         DrawLabel(d, drawList, &splitter, snap, focusedFormID);
     }
 
@@ -1414,7 +2038,7 @@ void Draw()
         for (auto& [formID, entry] : GetState().cache)
         {
             if (visible.count(formID) != 0 || !entry.initialized || !entry.entranceDone ||
-                entry.exitPhase >= 1.0f)
+                entry.exitPhase >= 1.0f || entry.deathPhase > .0f)
             {
                 continue;
             }
@@ -1425,6 +2049,15 @@ void Draw()
             }
             DrawExitingLabel(entry, ld->second, drawList, &splitter, snap);
         }
+    }
+
+    // Cut by the World: the front channel executes last, so its trailing
+    // reset returns the ImGui backend to its own shader before anything
+    // outside the overlay (debug HUD, other windows) renders.
+    if (GetState().depthClipFrame)
+    {
+        splitter.SetCurrentChannel(drawList, gpuGlow ? 2 : 1);
+        drawList->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     }
 
     if (gpuGlow)
