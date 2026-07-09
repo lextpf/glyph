@@ -333,7 +333,10 @@ static void ResolveTierStyleColors(LabelStyle& style,
     levelT = std::clamp(levelT, .0f, 1.0f);
 
     const bool under100 = (level < 100);
-    const float tierIntensity = under100 ? .5f : 1.0f;
+    // Early levels stay quieter, but only slightly -- every discount here
+    // multiplies with the strength band and per-effect caps, and .7 stacked
+    // into effects that read as absent rather than restrained.
+    const float tierIntensity = under100 ? .85f : 1.0f;
 
     const float effectAlphaMul =
         RenderConstants::EFFECT_ALPHA_MIN +
@@ -448,7 +451,8 @@ static void ComputeAnimationParams(LabelStyle& style,
     auto frac = [](float x) { return x - std::floor(x); };
 
     const bool under100 = (level < 100);
-    const float tierIntensity = under100 ? .5f : 1.0f;
+    // Matches the effect-alpha tierIntensity above: quieter early, not mute.
+    const float tierIntensity = under100 ? .85f : 1.0f;
 
     // Level position within tier [0, 1] (recalculated for strength)
     float levelT = .0f;
@@ -478,7 +482,7 @@ static void ComputeAnimationParams(LabelStyle& style,
     }
     if (under100)
     {
-        tierAnimSpeed *= .75f;
+        tierAnimSpeed *= .85f;
     }
 
     const float phaseSeed = (formID & 1023) / 1023.0f;
@@ -581,7 +585,8 @@ static void BuildLineSegments(std::vector<RenderSeg>& outSegs,
                               float levelFontSize,
                               float segmentPadding,
                               int typewriterCharsToShow,
-                              int& totalCharsProcessed)
+                              int& totalCharsProcessed,
+                              bool dropLevelSegments = false)
 {
     outSegs.clear();
     outLineWidth = .0f;
@@ -589,6 +594,13 @@ static void BuildLineSegments(std::vector<RenderSeg>& outSegs,
 
     for (const auto& fmt : fmtList)
     {
+        // One Voice Per Actor: when another HUD already shows this target's
+        // level (moreHUD crosshair readout), the whole %l segment bows out.
+        if (dropLevelSegments && fmt.format.find("%l") != std::string::npos)
+        {
+            continue;
+        }
+
         RenderSeg seg;
         seg.text = FormatString(fmt.format, ctx);
 
@@ -674,7 +686,8 @@ static void BuildSegments(LabelLayout& layout,
                       layout.levelFontSize,
                       layout.segmentPadding,
                       typewriterCharsToShow,
-                      totalCharsProcessed);
+                      totalCharsProcessed,
+                      d.yieldLevel);
 
     BuildLineSegments(layout.infoSegments,
                       layout.infoLineWidth,
@@ -701,9 +714,11 @@ static void ComputePositionAndBounds(LabelLayout& layout,
 {
     const float outlineWidth = style.outlineWidth;
 
-    // Title
-    const char* titleToUse =
-        style.specialTitle ? style.specialTitle->displayTitle.c_str() : style.tier->title.c_str();
+    // Title precedence: special titles (name-keyword styling) stay strongest;
+    // then a faction-earned honorific (Deeds, Not Words); then the tier title.
+    const char* titleToUse = style.specialTitle     ? style.specialTitle->displayTitle.c_str()
+                             : !d.honorific.empty() ? d.honorific.c_str()
+                                                    : style.tier->title.c_str();
     ActorLabelContext titleCtx = BuildLabelContext(d, snap);
     titleCtx.title = titleToUse;
     layout.titleStr = FormatString(snap.titleFormat, titleCtx);
@@ -737,7 +752,7 @@ static void ComputePositionAndBounds(LabelLayout& layout,
 
     // Tight vertical bounds
     float titleTop = .0f, titleBottom = .0f;
-    if (titleText && *titleText)
+    if (*titleText)
     {
         CalcTightYBoundsFromTop(
             layout.fontTitle, layout.titleFontSize, titleText, titleTop, titleBottom);
@@ -827,7 +842,21 @@ static void ComputePositionAndBounds(LabelLayout& layout,
     layout.nameplateHeight = layout.nameplateBottom - layout.nameplateTop;
     layout.nameplateCenter =
         ImVec2(layout.startPos.x, (layout.nameplateTop + layout.nameplateBottom) * .5f);
-    layout.mainLineCenterY = layout.startPos.y + layout.mainLineY + (mainTop + mainBottom) * .5f;
+    // Ornament anchor: cap-band optical center of the main line -- topmost ink
+    // down to the BASELINE, not the ink bottom. Descenders (g/j/p/q/y) in a
+    // name extend the ink box downward and dragged the old ink-center anchor
+    // (and the side ornaments with it) below the optical center of the letters.
+    float mainBaseline = -FLT_MAX;
+    for (const auto& seg : layout.segments)
+    {
+        const float vOffset = (layout.mainLineHeight - seg.size.y) * .5f;
+        const float ascentPx = seg.font->Ascent * (seg.fontSize / seg.font->FontSize);
+        mainBaseline = std::max(mainBaseline, vOffset + ascentPx);
+    }
+    layout.mainLineCenterY =
+        layout.segments.empty()
+            ? layout.startPos.y + layout.mainLineY + (mainTop + mainBottom) * .5f
+            : layout.startPos.y + layout.mainLineY + (mainTop + mainBaseline) * .5f;
 }
 
 // ============================================================================
@@ -843,12 +872,41 @@ struct BadgeSlot
     Settings::Color3 color{};
     bool muted = false;
     bool pulse = false;
+    int tierImage = -1;  ///< >=0 -> full-color emblem texture by index (icon unused)
 };
 
 /// Ordered fixed-capacity set of slots for one actor.  Capacity covers the
-/// widest set (six NPC slots); the player set uses four.  Bump
+/// widest set (six NPC slots); the player set uses five.  Bump
 /// MAX_BADGE_SLOTS if NPC slots grow, or excess slots silently drop.
 inline constexpr int MAX_BADGE_SLOTS = 6;
+
+// Map a tier index onto the low/mid/high prestige band (integer thirds).
+// Mirrored in tests/test_utils.cpp -- keep in sync.
+static int TierBandIndex(int tierIdx, int tierCount)
+{
+    if (tierCount <= 1)
+    {
+        return 0;
+    }
+    return std::clamp(tierIdx * 3 / tierCount, 0, 2);
+}
+
+// Map a tier index onto a top-weighted emblem index in [0, imageCount).  A
+// convex gamma (>1) makes the low emblems span more tiers and the rare high
+// emblems span fewer, so the prestige climb steepens near the top of the
+// ladder.  Mirrored in tests/test_utils.cpp -- keep in sync.
+static int TierImageBandIndex(int tierIdx, int tierCount, int imageCount, float gamma)
+{
+    if (imageCount <= 1 || tierCount <= 1)
+    {
+        return 0;
+    }
+    const float t =
+        std::clamp(static_cast<float>(tierIdx) / static_cast<float>(tierCount - 1), .0f, 1.0f);
+    const float g = std::clamp(gamma, .1f, 8.0f);
+    const int band = static_cast<int>(std::floor(std::pow(t, g) * static_cast<float>(imageCount)));
+    return std::clamp(band, 0, imageCount - 1);
+}
 struct BadgeComposition
 {
     BadgeSlot slots[MAX_BADGE_SLOTS];
@@ -860,16 +918,26 @@ struct BadgeComposition
             slots[count++] = {icon, color, muted, pulse};
         }
     }
+    // Push a full-color emblem tier badge (resolved by texture index, untinted).
+    void pushTierImage(bool enabled, int imageIndex)
+    {
+        if (enabled && count < MAX_BADGE_SLOTS && imageIndex >= 0)
+        {
+            slots[count++] = BadgeSlot{{}, {}, false, false, imageIndex};
+        }
+    }
 };
 
 // Map actor facts to an ordered set of badge slots.  Always-on model: every
 // enabled slot renders, with neutral/inactive facts shown in their own resting
 // color (dimmed + slightly desaturated at draw time) and notable facts shown
 // lit.  NPCs get six slots (relationship, creature, role, protection, threat,
-// engagement); the player gets four (sneak, engagement, encumbered, bounty).
-// Mirrored in tests/test_utils.cpp -- keep the logic in sync.
+// engagement); the player gets five (tier, sneak, engagement, encumbered,
+// bounty).  Mirrored in tests/test_utils.cpp -- keep the logic in sync.
 static BadgeComposition ComposeBadges(const ActorDrawData& d,
-                                      const RenderSettingsSnapshot::IconTokens& cfg)
+                                      const RenderSettingsSnapshot::IconTokens& cfg,
+                                      int tierIdx,
+                                      int tierCount)
 {
     BadgeComposition out{};
     if (!cfg.enabled)
@@ -993,7 +1061,26 @@ static BadgeComposition ComposeBadges(const ActorDrawData& d,
         return out;
     }
 
-    // Player slot set: sneak, engagement, encumbered, bounty.
+    // Player slot set: tier, sneak, engagement, encumbered, bounty.
+
+    // Tier band: prestige indicator for the tier ladder.  Always lit -- it is
+    // an identity fact, not an on/off state.  With emblem images loaded it is a
+    // full-color top-weighted rank badge; otherwise the low/mid/high FA icon.
+    if (cfg.tierBadgeImages && cfg.tierImageCount > 0)
+    {
+        out.pushTierImage(
+            cfg.tierEnabled,
+            TierImageBandIndex(tierIdx, tierCount, cfg.tierImageCount, cfg.tierBadgeGamma));
+    }
+    else
+    {
+        const int band = TierBandIndex(tierIdx, tierCount);
+        add(cfg.tierEnabled,
+            band == 2 ? cfg.icoTierHigh : (band == 1 ? cfg.icoTierMid : cfg.icoTierLow),
+            band == 2 ? cfg.colTierHigh : (band == 1 ? cfg.colTierMid : cfg.colTierLow),
+            false);
+    }
+
     switch (d.sneak)
     {
         case SneakKind::Detected:
@@ -1027,12 +1114,13 @@ static BadgeComposition ComposeBadges(const ActorDrawData& d,
 
 // Resolve status badge indicators into a compact strip centered above the
 // title row.  Slot order is relationship, creature, role, protection, threat,
-// engagement for NPCs; sneak, engagement, encumbered, bounty for the player.
-// Must run after ComputePositionAndBounds (needs the plate's top edge).  The
-// strip extends the nameplate bounds used for overlap prevention but never
-// moves the text itself.
+// engagement for NPCs; tier, sneak, engagement, encumbered, bounty for the
+// player.  Must run after ComputePositionAndBounds (needs the plate's top
+// edge).  The strip extends the nameplate bounds used for overlap prevention
+// but never moves the text itself.
 static void BuildBadges(LabelLayout& layout,
                         const ActorDrawData& d,
+                        const LabelStyle& style,
                         float textSizeScale,
                         const RenderSettingsSnapshot& snap)
 {
@@ -1047,21 +1135,37 @@ static void BuildBadges(LabelLayout& layout,
     }
 
     layout.badges.clear();
+    layout.tierEmblemShown = false;
+    layout.tierEmblemTex = 0;
     if (!snap.icons.enabled || layout.segments.empty() || !BadgeTextures::IsInitialized())
     {
         return;
     }
 
-    const BadgeComposition set = ComposeBadges(d, snap.icons);
+    const BadgeComposition set =
+        ComposeBadges(d, snap.icons, style.tierIdx, static_cast<int>(snap.tiers.size()));
 
     const float iconSize =
         layout.levelFontSize * RenderConstants::BADGE_ICON_FACTOR * snap.icons.scale;
+    const float emblemSize = iconSize * std::max(1.0f, snap.icons.tierBadgeScale);
 
-    // Resolve icon textures.  Empty names and icons that failed to load
-    // (missing SVG, bad parse) drop that indicator.
+    // Resolve slots.  The tier emblem is lifted OUT of the horizontal strip and
+    // rendered on its own row above it (larger, with its own glow); the other
+    // icons fill the strip.  Empty/failed icons drop that indicator.
     for (int i = 0; i < set.count; ++i)
     {
         const BadgeSlot& s = set.slots[i];
+        if (s.tierImage >= 0)
+        {
+            const ImTextureID tex = BadgeTextures::GetTierImage(s.tierImage);
+            if (tex != 0)
+            {
+                layout.tierEmblemTex = tex;
+                layout.tierEmblemSize = ImVec2(emblemSize, emblemSize);
+                layout.tierEmblemShown = true;
+            }
+            continue;
+        }
         if (s.icon.empty())
         {
             continue;
@@ -1078,43 +1182,58 @@ static void BuildBadges(LabelLayout& layout,
         item.size = ImVec2(iconSize, iconSize);
         layout.badges.push_back(item);
     }
-    if (layout.badges.empty())
+
+    if (layout.badges.empty() && !layout.tierEmblemShown)
     {
         return;
     }
 
-    const float spacing = RenderConstants::BADGE_SPACING * textSizeScale;
-    float stripWidth = spacing * static_cast<float>(layout.badges.size() - 1);
-    for (const auto& b : layout.badges)
-    {
-        stripWidth += b.size.x;
-    }
-
-    // The indicator strip floats one gap above the plate's current top edge
-    // (the title row; the main row when the title is empty).
     const float rowGap = RenderConstants::BADGE_ROW_GAP * textSizeScale;
-    const float rowTop = layout.nameplateTop - rowGap - iconSize;
-    const float rowCenterY = rowTop + iconSize * .5f;
 
-    float x = layout.startPos.x - stripWidth * .5f;
-    for (auto& b : layout.badges)
+    // Icon strip: a compact row centered one gap above the plate's current top
+    // edge (the title row; the main row when the title is empty).  `rowTop`
+    // becomes the Y the emblem row then sits above.
+    float rowTop = layout.nameplateTop;
+    if (!layout.badges.empty())
     {
-        b.pos.x = x;
-        b.pos.y = rowCenterY - b.size.y * .5f;
-        x += b.size.x + spacing;
+        const float spacing = RenderConstants::BADGE_SPACING * textSizeScale;
+        float stripWidth = spacing * static_cast<float>(layout.badges.size() - 1);
+        for (const auto& b : layout.badges)
+        {
+            stripWidth += b.size.x;
+        }
+        rowTop = layout.nameplateTop - rowGap - iconSize;
+        const float rowCenterY = rowTop + iconSize * .5f;
+        float x = layout.startPos.x - stripWidth * .5f;
+        for (auto& b : layout.badges)
+        {
+            b.pos.x = x;
+            b.pos.y = rowCenterY - b.size.y * .5f;
+            x += b.size.x + spacing;
+        }
+        for (const auto& b : layout.badges)
+        {
+            layout.nameplateLeft = std::min(layout.nameplateLeft, b.pos.x);
+            layout.nameplateRight = std::max(layout.nameplateRight, b.pos.x + b.size.x);
+        }
+        layout.nameplateTop = std::min(layout.nameplateTop, rowTop);
     }
 
-    // Fold the strip into the bounds used for overlap prevention and screen
-    // clamping.
-    layout.nameplateTop = std::min(layout.nameplateTop, rowTop);
+    // Tier emblem: its own row, centered above the icon strip (or above the
+    // title directly when the strip is empty).
+    if (layout.tierEmblemShown)
+    {
+        const float emblemTop = rowTop - rowGap - emblemSize;
+        const float emblemX = layout.startPos.x - emblemSize * .5f;
+        layout.tierEmblemPos = ImVec2(emblemX, emblemTop);
+        layout.nameplateTop = std::min(layout.nameplateTop, emblemTop);
+        layout.nameplateLeft = std::min(layout.nameplateLeft, emblemX);
+        layout.nameplateRight = std::max(layout.nameplateRight, emblemX + emblemSize);
+    }
+
     layout.nameplateHeight = layout.nameplateBottom - layout.nameplateTop;
     layout.nameplateCenter =
         ImVec2(layout.startPos.x, (layout.nameplateTop + layout.nameplateBottom) * .5f);
-    for (const auto& b : layout.badges)
-    {
-        layout.nameplateLeft = std::min(layout.nameplateLeft, b.pos.x);
-        layout.nameplateRight = std::max(layout.nameplateRight, b.pos.x + b.size.x);
-    }
     layout.nameplateWidth = layout.nameplateRight - layout.nameplateLeft;
 }
 
@@ -1123,13 +1242,19 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
                                ActorCache& entry,
                                const LabelStyle& style,
                                float textSizeScale,
-                               const RenderSettingsSnapshot& snap)
+                               const RenderSettingsSnapshot& snap,
+                               int forcedCharsToShow)
 {
     LabelLayout layout{};
 
-    // Typewriter character count
+    // Typewriter character count.  A forced budget (Last Rites crumble)
+    // overrides the entry-driven reveal.
     int typewriterCharsToShow = -1;
-    if (snap.enableTypewriter && !entry.typewriterComplete)
+    if (forcedCharsToShow >= 0)
+    {
+        typewriterCharsToShow = forcedCharsToShow;
+    }
+    else if (snap.enableTypewriter && !entry.typewriterComplete)
     {
         float effectiveTime = entry.typewriterTime - snap.typewriterDelay;
         if (effectiveTime > .0f)
@@ -1160,9 +1285,99 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
         layout, d, style, textSizeScale, typewriterCharsToShow, totalCharsProcessed, snap);
     ComputePositionAndBounds(
         layout, style, d, entry, typewriterCharsToShow, totalCharsProcessed, snap);
-    BuildBadges(layout, d, textSizeScale, snap);
+    BuildBadges(layout, d, style, textSizeScale, snap);
 
     return layout;
+}
+
+// Last Rites: pull every resolved style color toward `target` by `mixT`,
+// calm the effect strength to match, and re-pack the draw-ready colors.
+// Composable -- callers stage multi-stop ramps (sear-bright then dark) by
+// applying successive tints to the freshly computed per-frame style.
+void ApplyDeathRiteTint(LabelStyle& style,
+                        const ImVec4& target,
+                        float mixT,
+                        const RenderSettingsSnapshot& snap)
+{
+    if (mixT <= .0f)
+    {
+        return;
+    }
+    mixT = std::min(mixT, 1.0f);
+
+    style.LcName = MixVec4(style.LcName, target, mixT);
+    style.RcName = MixVec4(style.RcName, target, mixT);
+    style.LcLevel = MixVec4(style.LcLevel, target, mixT);
+    style.RcLevel = MixVec4(style.RcLevel, target, mixT);
+    style.LcTitle = MixVec4(style.LcTitle, target, mixT);
+    style.RcTitle = MixVec4(style.RcTitle, target, mixT);
+    style.supportName = MixVec4(style.supportName, target, mixT);
+    style.supportLevel = MixVec4(style.supportLevel, target, mixT);
+    style.supportTitle = MixVec4(style.supportTitle, target, mixT);
+    style.specialGlowColor = MixVec4(style.specialGlowColor, target, mixT);
+
+    // The ink is going out -- animated effects calm with it.
+    style.strength *= 1.0f - mixT;
+    style.effectAlpha *= 1.0f - mixT;
+    style.highlight =
+        ImGui::ColorConvertFloat4ToU32(ImVec4(target.x, target.y, target.z, style.effectAlpha));
+
+    PackStyleColors(style, style.alpha, snap);
+}
+
+// Candlelight Metering: adapt the resolved ink to the scene behind the
+// plate.  Bright backgrounds dim the ink a touch; dark backgrounds lift it
+// a few percent and pull it fractionally toward the scene's own chroma
+// (torchlight warms nearby type).  All adjustments are hard-capped by
+// snap.candleStrength -- nobody should ever *name* this effect, only miss
+// it when it's gone.  Mapping mirrored in tests/test_utils.cpp.
+void ApplyCandlelight(LabelStyle& style,
+                      float bgLum,
+                      const float bgRGB[3],
+                      const RenderSettingsSnapshot& snap)
+{
+    const float strength = snap.candleStrength;
+    if (strength <= .0f || bgLum < .0f)
+    {
+        return;
+    }
+
+    // Exposure: a mid-grey scene (0.5) leaves the ink untouched.
+    const float gain = 1.0f + std::clamp((.5f - bgLum) * 2.0f * strength, -strength, strength);
+
+    // Warmth: only in genuinely dark scenes, and only a whisper.
+    float warmT = .0f;
+    ImVec4 sceneTint(1.0f, 1.0f, 1.0f, 1.0f);
+    if (bgLum < .35f && snap.candleWarmth > .0f)
+    {
+        // Normalize the scene color so the pull carries hue, not darkness.
+        const float maxC = std::max({bgRGB[0], bgRGB[1], bgRGB[2], .05f});
+        sceneTint = ImVec4(bgRGB[0] / maxC, bgRGB[1] / maxC, bgRGB[2] / maxC, 1.0f);
+        warmT = snap.candleWarmth * .06f * ((.35f - bgLum) / .35f);
+    }
+
+    const auto adapt = [&](ImVec4& c)
+    {
+        c.x = std::clamp(c.x * gain, .0f, 1.0f);
+        c.y = std::clamp(c.y * gain, .0f, 1.0f);
+        c.z = std::clamp(c.z * gain, .0f, 1.0f);
+        if (warmT > .0f)
+        {
+            c = MixVec4(
+                c, ImVec4(c.x * sceneTint.x, c.y * sceneTint.y, c.z * sceneTint.z, 1.0f), warmT);
+        }
+    };
+    adapt(style.LcName);
+    adapt(style.RcName);
+    adapt(style.LcLevel);
+    adapt(style.RcLevel);
+    adapt(style.LcTitle);
+    adapt(style.RcTitle);
+    adapt(style.supportName);
+    adapt(style.supportLevel);
+    adapt(style.supportTitle);
+
+    PackStyleColors(style, style.alpha, snap);
 }
 
 }  // namespace Renderer
