@@ -48,10 +48,12 @@ void AddTextAurora(ImDrawList* list,
 
     const float time = (float)ImGui::GetTime() * speed;
 
-    // Create intermediate colors for richer aurora palette
+    // The curtain spans a real luminance range: deep dusk shade -> base pair
+    // -> white-hot crest. The tier's own L/R colors are a same-family pair
+    // ~15% apart, so a curtain confined to them is invisible by construction.
+    ImU32 colDeep = DeepShade(LerpColorU32(colA, colB, .5f), .50f, 1.40f);
     ImU32 colMid = LerpColorU32(colA, colB, .5f);
-    // Add subtle brightness variation
-    ImU32 colBright = LerpColorU32(colA, IM_COL32(255, 255, 255, 255), .25f);
+    ImU32 colBright = HotHighlight(colB, .70f);
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
@@ -72,8 +74,9 @@ void AddTextAurora(ImDrawList* list,
         float combined = (wave1 + wave2 + wave3) / 2.0f;  // Range roughly [-1, 1]
         combined = combined * .5f + .5f;                  // Normalize to [0, 1]
 
-        // Add subtle shimmer
-        float shimmer = std::sin(time * 4.0f + nx * 12.0f + ny * 8.0f) * .5f + .5f;
+        // Add subtle shimmer (1.5x, was 4x -- the one fast term in an
+        // otherwise slow curtain; at shipped speeds it crossed 0.3 Hz)
+        float shimmer = std::sin(time * 1.5f + nx * 12.0f + ny * 8.0f) * .5f + .5f;
         shimmer = shimmer * shimmer * .15f;  // Subtle sparkle
 
         // Horizontal sway effect
@@ -81,15 +84,15 @@ void AddTextAurora(ImDrawList* list,
         float swayedX = nx + swayOffset;
         float swayFactor = std::sin(swayedX * TWO_PI * waves + time) * .5f + .5f;
 
-        // Blend all factors (whisper: cap aurora amplitude)
-        static constexpr float kAmplitudeCap = .30f;
+        // Full-range curtain: t sweeps deep dusk -> palette -> white crest.
         float t =
-            Saturate((combined * .6f + curtain * .25f + swayFactor * .15f) * intensity + shimmer) *
-            kAmplitudeCap;
+            Saturate((combined * .6f + curtain * .25f + swayFactor * .15f) * intensity + shimmer);
 
-        // Continuous 4-color gradient with smoothstep transitions
-        ImU32 mid1 = ThreeColorGradient(colA, colMid, colB, t);
-        ImU32 finalColor = LerpColorU32(mid1, colBright, SmoothStep(Saturate(t * 2.0f - 1.0f)));
+        // Continuous gradient across the widened range with smooth handoffs:
+        // deep (0) -> A (1/3) -> B (2/3) -> bright crest (1).
+        ImU32 low = LerpColorU32(colDeep, colA, SmoothStep(Saturate(t * 3.0f)));
+        ImU32 mid = LerpColorU32(low, colB, SmoothStep(Saturate(t * 3.0f - 1.0f)));
+        ImU32 finalColor = LerpColorU32(mid, colBright, SmoothStep(Saturate(t * 3.0f - 2.0f)));
 
         list->VtxBuffer[i].col = finalColor;
     }
@@ -115,17 +118,21 @@ void AddTextSparkle(ImDrawList* list,
 
     const float time = (float)ImGui::GetTime();
 
-    // Create color variations for richer sparkle
-    ImU32 sparkleWhite = IM_COL32(255, 255, 255, 255);
-    ImU32 sparkleTint = LerpColorU32(sparkleColor, sparkleWhite, .3f);
+    // Create color variations for richer sparkle. Glint targets adopt the
+    // fill's alpha -- the raw highlight carries the low effectAlpha, which
+    // would make glyphs transparent exactly where they glint.
+    ImU32 sparkleWhite = WithAlphaFrom(IM_COL32(255, 255, 255, 255), baseL);
+    ImU32 sparkleBase = WithAlphaFrom(sparkleColor, baseL);
+    ImU32 sparkleTint = LerpColorU32(sparkleBase, sparkleWhite, .3f);
+    // Resting face endpoints, slightly shaded (see kFaceShade below).
+    const ImU32 faceL = LerpColorU32(baseL, DeepShade(baseL, .70f, 1.20f), .12f);
+    const ImU32 faceR = LerpColorU32(baseR, DeepShade(baseR, .70f, 1.20f), .12f);
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
         const ImVec2 p = list->VtxBuffer[i].pos;
         const float nx = s.normalizedX(p.x);
         const float ny = s.normalizedY(p.y);
-
-        ImU32 base = LerpColorU32(baseL, baseR, nx);
         float totalSparkle = .0f;
         float colorShift = .0f;  // For varying sparkle color
 
@@ -157,10 +164,12 @@ void AddTextSparkle(ImDrawList* list,
             float thresh2 = 1.0f - density * .7f;
             float mask2 = SmoothStep(Saturate((seed2 - thresh2) / (density * .15f + .01f)));
             float phase2 = seed2 * TWO_PI;
-            float sparkleTime2 = time * speed * 1.8f * (.8f + seed2 * .4f);
+            // .8x layer rate + gentler pow (was 1.8x / pow 5): the medium layer
+            // was the main "rapid blinking" read -- glints now swell and fade.
+            float sparkleTime2 = time * speed * .8f * (.8f + seed2 * .4f);
             float sparkle2 = std::sin(sparkleTime2 + phase2);
             sparkle2 = std::max(.0f, sparkle2);
-            sparkle2 = std::pow(sparkle2, 5.0f);
+            sparkle2 = std::pow(sparkle2, 3.0f);
             totalSparkle += sparkle2 * .6f * mask2;
         }
 
@@ -170,9 +179,11 @@ void AddTextSparkle(ImDrawList* list,
             float thresh3 = 1.0f - density * .9f;
             float mask3 = SmoothStep(Saturate((seed3 - thresh3) / (density * .15f + .01f)));
             float phase3 = seed3 * TWO_PI;
-            float sparkle3 = std::sin(time * speed * 2.5f + phase3);
+            // 1.0x layer rate + pow 4 (was 2.5x / pow 8): the dust layer's
+            // needle flashes exceeded 0.5 Hz at every shipped speed.
+            float sparkle3 = std::sin(time * speed * 1.0f + phase3);
             sparkle3 = std::max(.0f, sparkle3);
-            sparkle3 = std::pow(sparkle3, 8.0f);
+            sparkle3 = std::pow(sparkle3, 4.0f);
             totalSparkle += sparkle3 * .35f * mask3;
         }
 
@@ -188,15 +199,18 @@ void AddTextSparkle(ImDrawList* list,
             colorShift += flare * .6f * mask4;
         }
 
-        // Whisper: cap sparkle amplitude so each twinkle reads as a glint,
-        // not a flare.
-        static constexpr float kAmplitudeCap = .28f;
+        // Glints are spatially tiny, so they can afford to flash near-full --
+        // that contrast IS the effect. The face rests slightly shaded (12%
+        // toward the deep pole, precomputed above) so each glint has
+        // something to flash against.
+        static constexpr float kAmplitudeCap = .95f;
         totalSparkle = Saturate(totalSparkle * intensity) * kAmplitudeCap;
         colorShift = Saturate(colorShift);
 
+        ImU32 face = LerpColorU32(faceL, faceR, nx);
         // Blend sparkle color with white based on intensity for brighter sparkles
-        ImU32 finalSparkle = LerpColorU32(sparkleColor, sparkleTint, colorShift);
-        list->VtxBuffer[i].col = LerpColorU32(base, finalSparkle, totalSparkle);
+        ImU32 finalSparkle = LerpColorU32(sparkleBase, sparkleTint, colorShift);
+        list->VtxBuffer[i].col = LerpColorU32(face, finalSparkle, totalSparkle);
     }
 }
 
@@ -218,8 +232,12 @@ void AddTextEnchant(ImDrawList* list,
     }
 
     const float time = (float)ImGui::GetTime() * speed;
+    // Magical fabric with a real luminance weave: deep arcane shade in the
+    // folds, palette mid-tones in the body, white-hot filaments at the energy
+    // peaks. (The old .26 cap over the tier's ~15%-apart pair was invisible.)
+    ImU32 colDeep = DeepShade(LerpColorU32(colA, colB, .5f), .48f, 1.45f);
     ImU32 colMid = LerpColorU32(colA, colB, .5f);
-    ImU32 colBright = LerpColorU32(colB, IM_COL32(255, 255, 255, 255), .3f);
+    ImU32 colBright = HotHighlight(colB, .75f);
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
@@ -237,24 +255,20 @@ void AddTextEnchant(ImDrawList* list,
         // Combine for organic, flowing pattern
         float combined = (energy * .6f + energy2 * .4f);
 
-        // Whisper: cap amplitude so enchant reads as a faint magical fabric.
-        static constexpr float kAmplitudeCap = .26f;
+        // Bright filaments at the energy peaks. Threshold .52 (was .58): the
+        // FBM field rarely crested .58 at low strength, so lower tiers showed
+        // the weave but never a filament.
+        float highlight = SmoothStep(Saturate((combined - .52f) * 3.0f)) * intensity;
 
-        // Pulsing highlight at noise peaks (smooth transition)
-        float highlight =
-            SmoothStep(Saturate((combined - .45f) * 2.5f)) * intensity * kAmplitudeCap;
+        // Full-range weave: deep folds -> palette -> mid.
+        float t = Saturate(combined * intensity);
+        ImU32 low = LerpColorU32(colDeep, colA, SmoothStep(Saturate(t * 2.4f)));
+        ImU32 finalColor = LerpColorU32(low, colMid, SmoothStep(Saturate(t * 2.4f - 1.2f)));
 
-        // Smooth base blend driven by noise
-        float t = Saturate(combined * intensity) * kAmplitudeCap;
-
-        // Continuous 4-color gradient with smoothstep transitions
-        ImU32 mid1 = ThreeColorGradient(colA, colMid, colB, t);
-        ImU32 finalColor = LerpColorU32(mid1, colBright, SmoothStep(Saturate(t * 2.0f - 1.0f)));
-
-        // Add bright highlight pulse at energy peaks (softer blend)
+        // White-hot filament pulse on top.
         if (highlight > .0f)
         {
-            finalColor = LerpColorU32(finalColor, colBright, highlight * .5f);
+            finalColor = LerpColorU32(finalColor, colBright, Saturate(highlight * .9f));
         }
 
         list->VtxBuffer[i].col = finalColor;
@@ -279,7 +293,8 @@ void AddTextFrost(ImDrawList* list,
     }
 
     const float time = (float)ImGui::GetTime();
-    ImU32 iceWhite = IM_COL32(220, 235, 255, 255);
+    // Icy glaze target adopts the fill's alpha (see WithAlphaFrom).
+    const ImU32 iceWhite = WithAlphaFrom(IM_COL32(220, 235, 255, 255), colA);
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
@@ -289,9 +304,11 @@ void AddTextFrost(ImDrawList* list,
 
         ImU32 base = LerpColorU32(colA, colB, nx);
 
-        // Crystalline frost pattern: sharp, high-frequency noise
-        float frost1 = Hash(std::floor(p.x * .08f + time * speed * .3f), std::floor(p.y * .08f));
-        float frost2 = Hash(std::floor(p.x * .15f - time * speed * .2f) + 50.0f,
+        // Crystalline frost pattern: sharp, high-frequency noise. Scroll rates
+        // .1/.07 (were .3/.2): each hash-cell boundary crossing is an instant
+        // recolor pop, so the scroll is kept slow enough that pops are rare.
+        float frost1 = Hash(std::floor(p.x * .08f + time * speed * .1f), std::floor(p.y * .08f));
+        float frost2 = Hash(std::floor(p.x * .15f - time * speed * .07f) + 50.0f,
                             std::floor(p.y * .15f) + 50.0f);
 
         // Creeping frost animation
@@ -302,9 +319,10 @@ void AddTextFrost(ImDrawList* list,
         float frostThreshold = 1.0f - density;
         float frostMask = SmoothStep(Saturate((frostPattern - frostThreshold + .1f) * 2.0f));
 
-        // Whisper: frost should feel like a cold breath, not a glaze.
-        static constexpr float kFrostTintCap = .20f;
-        static constexpr float kSparkleCap = .40f;
+        // Frost reads as a real glaze now: a visible icy film with hard
+        // crystalline glints. (The old .20/.40 caps left a ~5% tint.)
+        static constexpr float kFrostTintCap = .50f;
+        static constexpr float kSparkleCap = .90f;
 
         // Tint base color toward icy blue-white at frosted areas (gentler)
         ImU32 frosted = LerpColorU32(base, iceWhite, frostMask * kFrostTintCap);
@@ -318,9 +336,10 @@ void AddTextFrost(ImDrawList* list,
             float fThresh1 = 1.0f - density * .5f;
             float fMask1 = SmoothStep(Saturate((seed1 - fThresh1) / (density * .15f + .01f)));
             float phase = seed1 * TWO_PI;
-            float s1 = std::sin(time * speed * 2.0f + phase);
+            // 1.2x + pow 4 (was 2x / pow 6): swell-and-fade, not a blink.
+            float s1 = std::sin(time * speed * 1.2f + phase);
             s1 = (std::max)(.0f, s1);
-            sparkle += std::pow(s1, 6.0f) * .7f * fMask1;
+            sparkle += std::pow(s1, 4.0f) * .7f * fMask1;
         }
 
         // Layer 2: Rare brilliant flash (soft threshold)
@@ -358,9 +377,14 @@ void AddTextDrift(ImDrawList* list,
 
     // Uniform hue wander: the whole text drifts by the same hue offset per
     // frame, so color slowly breathes between the two flanks of the base pair
-    // without pattern, band, or character variation.
+    // without pattern, band, or character variation. A gentle saturation and
+    // value swell rides the same cycle (offset so the peaks interleave):
+    // hue-only drift on the low-chroma tier palettes was imperceptible.
     const float time = (float)ImGui::GetTime();
-    const float hueShift = (hueRangeDeg / 360.0f) * std::sin(TWO_PI * time * speed);
+    const float cycle = TWO_PI * time * speed;
+    const float hueShift = (hueRangeDeg / 360.0f) * std::sin(cycle);
+    const float satSwell = 1.0f + .18f * std::sin(cycle + TWO_PI * .25f);
+    const float valSwell = 1.0f + .07f * std::sin(cycle + TWO_PI * .60f);
 
     for (int i = s.vtxStart; i < s.vtxEnd; ++i)
     {
@@ -375,6 +399,8 @@ void AddTextDrift(ImDrawList* list,
         float hue = .0f, sat = .0f, val = .0f;
         ImGui::ColorConvertRGBtoHSV(rI / 255.0f, gI / 255.0f, bI / 255.0f, hue, sat, val);
         hue = Frac(hue + hueShift);
+        sat = Saturate(sat * satSwell);
+        val = Saturate(val * valSwell);
 
         float nr = .0f, ng = .0f, nb = .0f;
         ImGui::ColorConvertHSVtoRGB(hue, sat, val, nr, ng, nb);
@@ -435,12 +461,18 @@ void AddTextGlow(ImDrawList* list,
     for (int layer = 0; layer < numLayers; ++layer)
     {
         float layerRadius = radius * layers[layer].radiusMul;
-        // Divide by sample count so additive accumulation reaches the
-        // intended brightness instead of oversaturating at the center.
+        // Per-copy alpha solved so N overlapping stamps SUM to the layer's
+        // target peak: the call sites render this under additive blending
+        // (PushAdditiveBlend), where copies add linearly instead of
+        // saturating like alpha-over. The old alpha-over solve
+        // (1-(1-p)^(1/N)) overshot the peak by up to ~20% and clipped the
+        // stacked layers toward white.
         int numOffsets = (samples > 4) ? 8 : 4;
-        int layerAlpha = (int)(baseAlpha * intensity * layers[layer].alphaMul / (float)numOffsets);
-        layerAlpha = std::clamp(layerAlpha, 0, 255);
-        if (layerAlpha < 3)
+        const float peak =
+            std::clamp(baseAlpha / 255.0f * intensity * layers[layer].alphaMul, .0f, 1.0f);
+        const float perCopy = peak / (float)numOffsets;
+        int layerAlpha = std::clamp((int)(perCopy * 255.0f + .5f), 0, 255);
+        if (layerAlpha < 1)
         {
             continue;
         }
