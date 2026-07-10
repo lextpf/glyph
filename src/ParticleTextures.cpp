@@ -1,6 +1,7 @@
 #include <SKSE/SKSE.h>
 
 #include "ParticleTextures.hpp"
+#include "ProjectManifest.hpp"
 #include "Settings.hpp"
 
 #include <wincodec.h>
@@ -26,11 +27,72 @@ namespace fs = std::filesystem;
 // Shutdown() releases resources and allows safe re-initialization.
 namespace ParticleTextures
 {
-// Number of particle texture types
-// One slot per Settings::ParticleStyle weather type (see Settings.hpp). The
-// order must match that enum: Firefly, Rain, Snow, Smoke, Spark, Wisp, Leaf,
-// Aurora, CherryBlossom, Dust, Mote.
-static constexpr int NUM_TYPES = 11;
+// Number of particle texture types -- one slot per Settings::ParticleStyle.
+// The canonical style/token order lives in Settings::kParticleStyleTokens.
+static constexpr int NUM_TYPES = Settings::kParticleStyleCount;
+
+// Explicit art compensation in ParticleStyle enum order. A full coin/heart
+// already fills much of its frame; dust, pixiedust, rain, etc. paint only a
+// handful of pixels and therefore need a much larger crisp quad. The halo
+// scale is independent so increasing a sparse core never increases its
+// background bloom. Values were derived from every active strip frame's
+// alpha-weighted area, then art-directed by silhouette (mist stays mist,
+// sparks stay pinpoints, solid icons stay compact).
+static constexpr std::array<StyleVisibilityTuning, NUM_TYPES> kStyleVisibilityTuning = {{
+    {1.90f, .35f, .70f},  // firefly
+    {2.05f, .40f, .45f},  // rain
+    {1.45f, .70f, .55f},  // snow
+    {1.05f, .85f, .40f},  // smoke
+    {2.35f, .38f, .70f},  // spark
+    {1.70f, .45f, .55f},  // wisp
+    {1.10f, .90f, .45f},  // leaf
+    {1.30f, .65f, .55f},  // aurora
+    {1.00f, .85f, .40f},  // cherryblossom
+    {2.40f, .36f, .40f},  // dust
+    {1.25f, .90f, .65f},  // mote
+    {1.45f, .45f, .60f},  // arcane
+    {1.65f, .55f, .45f},  // ash
+    {1.20f, .80f, .35f},  // bat
+    {1.15f, .55f, .45f},  // bubble
+    {1.20f, .90f, .35f},  // butterfly
+    {1.00f, 1.0f, 1.0f},  // coin
+    {1.35f, .90f, .25f},  // confetti
+    {1.55f, .58f, .55f},  // constellation
+    {1.20f, .55f, .30f},  // curse
+    {1.85f, .38f, .55f},  // enchant
+    {1.90f, .38f, .65f},  // fairy
+    {1.10f, .72f, .30f},  // fog
+    {1.00f, 1.0f, .55f},  // gem
+    {1.55f, .72f, .55f},  // glitter
+    {1.00f, 1.0f, 1.0f},  // heart
+    {1.20f, .85f, .45f},  // hex
+    {1.25f, .75f, .20f},  // ink
+    {1.00f, .90f, .55f},  // moon
+    {1.00f, 1.0f, .50f},  // planet
+    {2.10f, .45f, .45f},  // pollen
+    {1.00f, 1.0f, 1.0f},  // soul
+    {1.85f, .48f, .35f},  // steam
+    {1.00f, .95f, .35f},  // void
+    {1.05f, .75f, .50f},  // vortex
+    {1.45f, .75f, .35f},  // wind
+    {1.35f, .65f, .65f},  // zap
+    {1.40f, .65f, .35f},  // zzz
+    {1.70f, .40f, .55f},  // ember
+    {2.25f, .35f, .50f},  // pixiedust
+    {1.65f, .45f, .55f},  // runes
+    {1.70f, .65f, .30f},  // sand
+}};
+static_assert(kStyleVisibilityTuning.size() == Settings::kParticleStyleCount);
+
+const StyleVisibilityTuning& GetStyleVisibilityTuning(int style)
+{
+    static constexpr StyleVisibilityTuning neutral{};
+    if (style < 0 || style >= NUM_TYPES)
+    {
+        return neutral;
+    }
+    return kStyleVisibilityTuning[style];
+}
 
 // Texture info struct
 struct TextureInfo
@@ -38,12 +100,30 @@ struct TextureInfo
     ComPtr<ID3D11ShaderResourceView> srv;
     int width = 0;
     int height = 0;
+    int frames = 1;  ///< Horizontal flipbook frames (strips: width / height)
 };
 
 // Multiple textures per particle type
 static std::array<std::vector<TextureInfo>, NUM_TYPES>& Textures()
 {
     static std::array<std::vector<TextureInfo>, NUM_TYPES> instance;
+    return instance;
+}
+
+// One optional end-of-life "pop" sprite per style, outside the hash rotation
+// (a pop frame inside Textures() would render a fraction of the particles as
+// permanently mid-pop). Today only Bubble ships one (bubblepop.png).
+static std::array<TextureInfo, NUM_TYPES>& PopTextures()
+{
+    static std::array<TextureInfo, NUM_TYPES> instance;
+    return instance;
+}
+
+// Shared soft light disc used for every particle's glow halo and specular
+// glint (see HaloSoftDisc). Procedural, generated once at Initialize.
+static TextureInfo& SoftGlowTexture()
+{
+    static TextureInfo instance;
     return instance;
 }
 static std::atomic<bool> s_Initialized{false};
@@ -72,6 +152,13 @@ static void ReleaseResources_NoLock()
         }
         typeTextures.clear();
     }
+    for (auto& pop : PopTextures())
+    {
+        pop.srv.Reset();
+        pop = TextureInfo{};
+    }
+    SoftGlowTexture().srv.Reset();
+    SoftGlowTexture() = TextureInfo{};
 
     s_PointSampler.Reset();
     s_LinearSampler.Reset();
@@ -83,11 +170,13 @@ static void ReleaseResources_NoLock()
 }
 
 // Load a PNG file using WIC and create a D3D11 texture.
-// Returns TextureInfo with dimensions.
+// Returns TextureInfo with dimensions. `alphaGamma` below 1 lifts partially
+// transparent painted pixels while preserving fully transparent texels.
 static TextureInfo LoadTextureFromFile(ID3D11Device* device,
                                        ID3D11DeviceContext* context,
                                        const std::string& path,
-                                       IWICImagingFactory* wicFactory)
+                                       IWICImagingFactory* wicFactory,
+                                       float alphaGamma = 1.0f)
 {
     TextureInfo info;
     if (!device || path.empty())
@@ -183,12 +272,20 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
             BYTE& r = pixels[idx + 0];
             BYTE& g = pixels[idx + 1];
             BYTE& b = pixels[idx + 2];
-            const BYTE a = pixels[idx + 3];
+            BYTE& a = pixels[idx + 3];
             if (a == 0)
             {
                 r = 0;
                 g = 0;
                 b = 0;
+            }
+            else if (alphaGamma < 1.0f)
+            {
+                const float normalized = static_cast<float>(a) / 255.0f;
+                a = static_cast<BYTE>(std::clamp(
+                    static_cast<int>(std::round(std::pow(normalized, alphaGamma) * 255.0f)),
+                    1,
+                    255));
             }
         }
     }
@@ -968,6 +1065,17 @@ static float RuneEye(float nx, float ny)
 
 // ---- Orbs ----
 
+// Soft featureless light disc for the particle glow halo: a pure Gaussian
+// falloff with no core, spikes, or art. Drawn additively behind the crisp
+// sprite it reads as emitted light -- reusing the sprite art itself for the
+// halo (the old approach) read as a transparent scaled-up duplicate of the
+// particle instead of a glow.
+static float HaloSoftDisc(float nx, float ny)
+{
+    float r = std::sqrt(nx * nx + ny * ny);
+    return std::clamp(PGaussian(r, .32f), .0f, 1.0f);
+}
+
 // Multi-layered gaussian sphere with hot center
 static float OrbGaussian(float nx, float ny)
 {
@@ -1158,21 +1266,54 @@ struct GenArray
 };
 
 // Procedural sets are a safety fallback only -- they render solely for a
-// weather type whose PNG is missing. Each new type reuses the closest-looking
-// legacy generator set rather than shipping 11 bespoke generators.
+// weather type whose PNG is missing. Each type reuses the closest-looking
+// legacy generator set rather than shipping bespoke generators.
 static const GenArray kAllGens[NUM_TYPES] = {
-    {kOrbGens, 5},    // Firefly  -> soft glowing orbs
-    {kSparkGens, 6},  // Rain     -> streaky sparks
-    {kStarGens, 7},   // Snow     -> star/flake points
-    {kOrbGens, 5},    // Smoke    -> soft blobs
-    {kSparkGens, 6},  // Spark    -> embers
-    {kWispGens, 8},   // Wisp     -> wisps
-    {kStarGens, 7},   // Leaf     -> small shapes
-    {kWispGens, 8},   // Aurora   -> ribbons
-    {kStarGens, 7},   // CherryBlossom -> small petals/points
-    {kOrbGens, 5},    // Dust     -> tiny soft motes
-    {kOrbGens, 5},    // Mote     -> soft glowing motes
+    {kOrbGens, 5},      // Firefly  -> soft glowing orbs
+    {kSparkGens, 6},    // Rain     -> streaky sparks
+    {kStarGens, 7},     // Snow     -> star/flake points
+    {kOrbGens, 5},      // Smoke    -> soft blobs
+    {kSparkGens, 6},    // Spark    -> embers
+    {kWispGens, 8},     // Wisp     -> wisps
+    {kStarGens, 7},     // Leaf     -> small shapes
+    {kWispGens, 8},     // Aurora   -> ribbons
+    {kStarGens, 7},     // CherryBlossom -> small petals/points
+    {kOrbGens, 5},      // Dust     -> tiny soft motes
+    {kOrbGens, 5},      // Mote     -> soft glowing motes
+    {kRuneGens, 6},     // Arcane   -> rune glyphs
+    {kSparkGens, 6},    // Ash      -> embers
+    {kWispGens, 8},     // Bat      -> moth silhouette is the nearest wing shape
+    {kOrbGens, 5},      // Bubble   -> ringed orbs
+    {kWispGens, 8},     // Butterfly -> moth silhouette
+    {kOrbGens, 5},      // Coin     -> round discs
+    {kStarGens, 7},     // Confetti -> small bright shapes
+    {kStarGens, 7},     // Constellation -> star points
+    {kRuneGens, 6},     // Curse    -> dark sigils
+    {kStarGens, 7},     // Enchant  -> sparkle points
+    {kSparkGens, 6},    // Fairy    -> firefly-like glints
+    {kOrbGens, 5},      // Fog      -> soft blobs
+    {kCrystalGens, 4},  // Gem      -> faceted crystals
+    {kStarGens, 7},     // Glitter  -> sparkle points
+    {kOrbGens, 5},      // Heart    -> soft rounded shapes
+    {kRuneGens, 6},     // Hex      -> sigils
+    {kOrbGens, 5},      // Ink      -> soft blobs
+    {kOrbGens, 5},      // Moon     -> glowing discs
+    {kOrbGens, 5},      // Planet   -> ringed orbs
+    {kOrbGens, 5},      // Pollen   -> soft motes
+    {kWispGens, 8},     // Soul     -> wisps
+    {kWispGens, 8},     // Steam    -> tendrils
+    {kOrbGens, 5},      // Void     -> nebula orbs
+    {kWispGens, 8},     // Vortex   -> spirals
+    {kWispGens, 8},     // Wind     -> tendrils
+    {kSparkGens, 6},    // Zap      -> crackles
+    {kStarGens, 7},     // Zzz      -> small bright shapes
+    {kSparkGens, 6},    // Ember    -> embers
+    {kStarGens, 7},     // Pixiedust -> sparkle points
+    {kRuneGens, 6},     // Runes    -> rune glyphs
+    {kOrbGens, 5},      // Sand     -> tiny soft grains
 };
+static_assert(sizeof(kAllGens) / sizeof(kAllGens[0]) == Settings::kParticleStyleCount,
+              "kAllGens must cover every ParticleStyle");
 
 // Create a D3D11 texture from a pixel generator function (white RGBA with computed alpha).
 // Runs the full quality pipeline: supersampling, mip chain, dithered quantization.
@@ -1339,19 +1480,7 @@ static int GenerateProceduralTextures(ID3D11Device* device, int styleIndex)
 
     if (loaded > 0)
     {
-        static const char* kStyleNames[] = {"firefly",
-                                            "rain",
-                                            "snow",
-                                            "smoke",
-                                            "spark",
-                                            "wisp",
-                                            "leaf",
-                                            "aurora",
-                                            "cherryblossom",
-                                            "dust",
-                                            "mote"};
-        const char* name =
-            (styleIndex >= 0 && styleIndex < NUM_TYPES) ? kStyleNames[styleIndex] : "?";
+        const char* name = Settings::kParticleStyleTokens[styleIndex].token;
         SKSE::log::info("ParticleTextures: [{}] generated {} procedural textures", name, loaded);
     }
 
@@ -1466,47 +1595,63 @@ bool Initialize(ID3D11Device* device)
                 CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
             if (SUCCEEDED(wicHr))
             {
-                const std::string basePath = "Data/SKSE/Plugins/glyph/particles/";
-
-                // One hand-made PNG sprite per weather type, loaded directly
-                // from the particles root. The style index must match
-                // Settings::ParticleStyle (and kAllGens / kStyleNames above).
-                struct FileMapping
+                // Sprite sources come from the obfuscated asset manifest: each
+                // style token maps to a list of GUID-named variant files (the
+                // curated static-or-strip set the old on-disk scan resolved).
+                // A file that is a horizontal flipbook (width a multiple of
+                // height) auto-detects its frame count from its dimensions --
+                // the "_strip" naming is no longer needed. Every loaded variant
+                // enters the per-particle hash rotation (GetTextureInfoForIndex),
+                // so a style with N variants spawns each on ~1/N of its
+                // particles, stably (no flicker across frames).
+                const auto detectFrames = [](TextureInfo& info)
                 {
-                    int style;
-                    const char* file;
-                };
-
-                static const FileMapping mappings[NUM_TYPES] = {
-                    {0, "firefly.png"},
-                    {1, "rain.png"},
-                    {2, "snow.png"},
-                    {3, "smoke.png"},
-                    {4, "spark.png"},
-                    {5, "wisp.png"},
-                    {6, "leaf.png"},
-                    {7, "aurora.png"},
-                    {8, "cherryblossom.png"},
-                    {9, "dust.png"},
-                    {10, "mote.png"},
-                };
-
-                for (const auto& m : mappings)
-                {
-                    const std::string path = basePath + m.file;
-                    auto info =
-                        LoadTextureFromFile(device, s_Context.Get(), path, wicFactory.Get());
-                    if (info.srv)
+                    if (info.height > 0 && info.width % info.height == 0 &&
+                        info.width / info.height > 1)
                     {
-                        Textures()[m.style].push_back(std::move(info));
-                        SKSE::log::info("ParticleTextures: [{}] loaded sprite {}", m.style, path);
+                        info.frames = info.width / info.height;
+                    }
+                };
+
+                for (int style = 0; style < NUM_TYPES; ++style)
+                {
+                    const char* token = Settings::kParticleStyleTokens[style].token;
+                    const float alphaGamma = GetStyleVisibilityTuning(style).alphaGamma;
+                    for (const std::string& path : ProjectManifest::ParticleVariants(token))
+                    {
+                        auto info = LoadTextureFromFile(
+                            device, s_Context.Get(), path, wicFactory.Get(), alphaGamma);
+                        if (!info.srv)
+                        {
+                            SKSE::log::warn("ParticleTextures: failed to load {}", path);
+                            continue;
+                        }
+                        detectFrames(info);
+                        SKSE::log::info("ParticleTextures: [{}] loaded {} ({} frame(s))",
+                                        token,
+                                        path,
+                                        info.frames);
+                        Textures()[style].push_back(std::move(info));
                         ++totalLoaded;
                     }
-                    else
+                }
+
+                // End-of-life pop sprite for Bubble, outside the hash rotation
+                // (see PopTextures); frame count auto-detected as above.
+                if (const std::string& popPath = ProjectManifest::BubblePop(); !popPath.empty())
+                {
+                    const int bubbleStyle = static_cast<int>(Settings::ParticleStyle::Bubble);
+                    const float popAlphaGamma = GetStyleVisibilityTuning(bubbleStyle).alphaGamma;
+                    auto info = LoadTextureFromFile(
+                        device, s_Context.Get(), popPath, wicFactory.Get(), popAlphaGamma);
+                    if (info.srv)
                     {
-                        SKSE::log::warn(
-                            "ParticleTextures: missing sprite {} (will use procedural fallback)",
-                            path);
+                        detectFrames(info);
+                        SKSE::log::info(
+                            "ParticleTextures: [bubble] loaded pop sprite {} ({} frame(s))",
+                            popPath,
+                            info.frames);
+                        PopTextures()[bubbleStyle] = std::move(info);
                     }
                 }
             }
@@ -1526,6 +1671,13 @@ bool Initialize(ID3D11Device* device)
         {
             totalLoaded += GenerateProceduralTextures(device, i);
         }
+    }
+
+    // Shared soft glow disc (halo + glint light layer for every style).
+    SoftGlowTexture() = CreateProceduralTexture(device, HaloSoftDisc);
+    if (SoftGlowTexture().srv)
+    {
+        SKSE::log::info("ParticleTextures: generated soft glow disc");
     }
 
     s_Initialized.store(totalLoaded > 0, std::memory_order_release);
@@ -1605,8 +1757,14 @@ static const TextureInfo* GetTextureInfoForIndex(int style, int particleIndex)
         return nullptr;
     }
 
+    // Stratified round-robin with a per-style hash offset: consecutive
+    // particles cycle through the variants, so a style with N variants puts
+    // each on an equal share of its particles (within +/-1) even at small
+    // counts -- a raw hash can starve a variant entirely at count ~8. Still
+    // deterministic per particle across frames (no flicker), and the style
+    // offset keeps different styles from starting on the same variant.
     const size_t texCount = Textures()[style].size();
-    const size_t texIndex = HashIndex(style, particleIndex) % texCount;
+    const size_t texIndex = (static_cast<size_t>(particleIndex) + HashIndex(style, 0)) % texCount;
     return &Textures()[style][texIndex];
 }
 
@@ -1616,31 +1774,32 @@ ImTextureID GetRandomTexture(int style, int particleIndex)
     return info ? reinterpret_cast<ImTextureID>(info->srv.Get()) : ImTextureID{};
 }
 
-void DrawSpriteWithIndex(ImDrawList* list,
-                         const ImVec2& center,
-                         float size,
-                         int style,
-                         int particleIndex,
-                         ImU32 color,
-                         BlendMode blendMode,
-                         float rotation)
+// Shared quad emitter for sprite draws: frame-UV selection, resolution
+// normalization, sampler + blend callbacks. `frame` indexes into a horizontal
+// flipbook strip and is wrapped into [0, frames).
+static void DrawSpriteQuad(ImDrawList* list,
+                           const ImVec2& center,
+                           float size,
+                           const TextureInfo& texInfo,
+                           int frame,
+                           ImU32 color,
+                           BlendMode blendMode,
+                           float rotation)
 {
-    if (!list || style < 0 || style >= NUM_TYPES)
+    if (!list || !texInfo.srv)
     {
         return;
     }
+    ImTextureID tex = reinterpret_cast<ImTextureID>(texInfo.srv.Get());
 
-    const TextureInfo* texInfo = GetTextureInfoForIndex(style, particleIndex);
-    if (!texInfo || !texInfo->srv)
-    {
-        return;
-    }
-    ImTextureID tex = reinterpret_cast<ImTextureID>(texInfo->srv.Get());
+    const int frames = (texInfo.frames > 0) ? texInfo.frames : 1;
+    frame = ((frame % frames) + frames) % frames;
+    const float frameWidth = static_cast<float>(texInfo.width) / static_cast<float>(frames);
 
     // Normalize display size for high-resolution textures.
     // 2K (2048px) sources should display at a visible size, not shrink to dots.
-    const int texMaxPx = (texInfo->width > texInfo->height) ? texInfo->width : texInfo->height;
-    const float texMaxDim = static_cast<float>(texMaxPx);
+    // Strips measure by the single frame, not the whole sheet.
+    const float texMaxDim = (std::max)(frameWidth, static_cast<float>(texInfo.height));
     const float resolutionScale =
         (texMaxDim > .0f) ? std::clamp(1200.0f / texMaxDim, .45f, 1.0f) : 1.0f;
     const float scaledSize = size * resolutionScale;
@@ -1653,7 +1812,8 @@ void DrawSpriteWithIndex(ImDrawList* list,
     // Point-sample by default so the low-res pixel-art sprites stay razor-crisp
     // at any magnification -- the premium look layers soft glow AROUND the hard
     // pixel edge, it never blurs it.  Linear filtering only for genuinely HD
-    // source textures (>64px), where nearest-neighbor would alias on minify.
+    // source textures (>64px per frame), where nearest-neighbor would alias on
+    // minify.
     ID3D11SamplerState* samplerToUse =
         (texMaxDim > 64.0f && s_LinearSampler) ? s_LinearSampler.Get() : s_PointSampler.Get();
 
@@ -1681,12 +1841,16 @@ void DrawSpriteWithIndex(ImDrawList* list,
         list->AddCallback(SetBlendCallback, blendToUse);
     }
 
+    // Horizontal flipbook frame window in U.
+    const float u0 = static_cast<float>(frame) / static_cast<float>(frames);
+    const float u1 = static_cast<float>(frame + 1) / static_cast<float>(frames);
+
     if (rotation == .0f)
     {
         // Simple axis-aligned quad
         ImVec2 pMin(center.x - halfSize, center.y - halfSize);
         ImVec2 pMax(center.x + halfSize, center.y + halfSize);
-        list->AddImage(tex, pMin, pMax, ImVec2(0, 0), ImVec2(1, 1), color);
+        list->AddImage(tex, pMin, pMax, ImVec2(u0, 0), ImVec2(u1, 1), color);
     }
     else
     {
@@ -1712,10 +1876,10 @@ void DrawSpriteWithIndex(ImDrawList* list,
 
         // UV coordinates for the corners
         ImVec2 uvs[4] = {
-            ImVec2(0, 0),  // Top-left
-            ImVec2(1, 0),  // Top-right
-            ImVec2(1, 1),  // Bottom-right
-            ImVec2(0, 1),  // Bottom-left
+            ImVec2(u0, 0),  // Top-left
+            ImVec2(u1, 0),  // Top-right
+            ImVec2(u1, 1),  // Bottom-right
+            ImVec2(u0, 1),  // Bottom-left
         };
 
         list->AddImageQuad(tex,
@@ -1735,6 +1899,74 @@ void DrawSpriteWithIndex(ImDrawList* list,
     {
         list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     }
+}
+
+void DrawSpriteWithIndex(ImDrawList* list,
+                         const ImVec2& center,
+                         float size,
+                         int style,
+                         int particleIndex,
+                         ImU32 color,
+                         BlendMode blendMode,
+                         float rotation,
+                         int frame)
+{
+    if (!list || style < 0 || style >= NUM_TYPES)
+    {
+        return;
+    }
+
+    const TextureInfo* texInfo = GetTextureInfoForIndex(style, particleIndex);
+    if (!texInfo || !texInfo->srv)
+    {
+        return;
+    }
+    DrawSpriteQuad(list, center, size, *texInfo, frame, color, blendMode, rotation);
+}
+
+int GetFrameCountForIndex(int style, int particleIndex)
+{
+    const TextureInfo* info = GetTextureInfoForIndex(style, particleIndex);
+    return info ? (std::max)(1, info->frames) : 1;
+}
+
+bool HasPopSprite(int style)
+{
+    return style >= 0 && style < NUM_TYPES && PopTextures()[style].srv;
+}
+
+int GetPopFrameCount(int style)
+{
+    if (style < 0 || style >= NUM_TYPES || !PopTextures()[style].srv)
+    {
+        return 1;
+    }
+    return (std::max)(1, PopTextures()[style].frames);
+}
+
+void DrawPopSprite(ImDrawList* list,
+                   const ImVec2& center,
+                   float size,
+                   int style,
+                   ImU32 color,
+                   BlendMode blendMode,
+                   float rotation,
+                   int frame)
+{
+    if (!list || style < 0 || style >= NUM_TYPES)
+    {
+        return;
+    }
+    DrawSpriteQuad(list, center, size, PopTextures()[style], frame, color, blendMode, rotation);
+}
+
+void DrawSoftGlow(ImDrawList* list, const ImVec2& center, float size, ImU32 color)
+{
+    if (!list)
+    {
+        return;
+    }
+    DrawSpriteQuad(list, center, size, SoftGlowTexture(), 0, color, BlendMode::Additive, .0f);
 }
 
 void PushAdditiveBlend(ImDrawList* dl)
