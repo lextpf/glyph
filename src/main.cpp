@@ -1,31 +1,8 @@
-//  ============================================================================================
-//                                                             ⠀    ⠀⠀⡄⠀⠀⠀⠀⠀⠀⣠⠀⠀⢀⠀⠀⢠⠀⠀⠀
-//                                                             ⠀     ⢸⣧⠀⠀⠀⠀⢠⣾⣇⣀⣴⣿⠀⠀⣼⡇⠀⠀
-//                                                                ⠀⠀⣾⣿⣧⠀⠀⢀⣼⣿⣿⣿⣿⣿⠀⣼⣿⣷⠀⠀
-//                                                                ⠀⢸⣿⣿⣿⡀⠀⠸⠿⠿⣿⣿⣿⡟⢀⣿⣿⣿⡇⠀
-//        ::::::::  :::     :::   ::: :::::::::  :::    :::       ⠀⣾⣿⣿⣿⣿⡀⠀⢀⣼⣿⣿⡿⠁⣿⣿⣿⣿⣷⠀
-//       :+:    :+: :+:     :+:   :+: :+:    :+: :+:    :+:       ⢸⣿⣿⣿⣿⠁⣠⣤⣾⣿⣿⣯⣤⣄⠙⣿⣿⣿⣿⡇
-//       +:+        +:+      +:+ +:+  +:+    +:+ +:+    +:+       ⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿⣿⣿⣿⣶⣿⣿⣿⣿⣿
-//       :#:        +#+       +#++:   +#++:++#+  +#++:++#++       ⠘⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏
-//       +#+   +#+# +#+        +#+    +#+        +#+    +#+       ⠀⠘⢿⣿⣿⣿⠛⠻⢿⣿⣿⣿⠹⠟⣿⣿⣿⣿⣿⠀
-//       #+#    #+# #+#        #+#    #+#        #+#    #+#       ⠀⠀⠘⢿⣿⣿⣦⡄⢸⣿⣿⣿⡇⠠⣿⣿⣿⣿⡇⠀
-//        ########  ########## ###    ###        ###    ###       ⠀⠀⠀⠘⢿⣿⣿⠀⣸⣿⣿⣿⠇⠀⠙⣿⣿⣿⠁⠀
-//                                                                ⠀⠀⠀⠀⠘⣿⠃⢰⣿⣿⣿⡇⠀⠀⠀⠈⢻⡇⠀⠀
-//                                                                ⠀⠀⠀⠀⠀⠈⠀⠈⢿⣿⣿⣿⣶⡶⠂⠀⠀⠁⠀⠀
-//                                << S K Y R I M   P L U G I N >>         ⠀⠀⠈⠻⣿⡿⠋⠀⠀⠀⠀⠀⠀⠀
-//
-//  ============================================================================================
-//
-//      An SKSE plugin for Skyrim SE/AE that renders an ImGui overlay displaying
-//      actor nameplates via the game's D3D11 pipeline.
-//
-//    ----------------------------------------------------------------------
-//
-//      Repository:   https://github.com/lextpf/glyph
-//      License:      MIT
+// The plugin initializes settings and asset paths before installing the D3D hooks.
 
 #include "PCH.hpp"
 
+#include "ActorOverrides.hpp"
 #include "ConsoleCommands.hpp"
 #include "Hooks.hpp"
 #include "HudCompat.hpp"
@@ -37,25 +14,37 @@
 
 namespace
 {
-// On "RaceMenu" close, request a player identity refresh so a rename reaches
-// the plate. The live name is logged to confirm the engine already applied it.
-// RE::UI dispatches menu events on the game thread, so the RE::* dereference in
-// ProcessEvent is legal. The refresh only sets a flag: Renderer::Draw() consumes
-// it on the render thread, drops the player cache entry, and clears the snapshot
-// pause so the next game-thread update republishes the name.
+/**
+ * @class RaceMenuCloseSink
+ * @brief Forward RaceMenu closure to the renderer's identity-refresh request.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Menu events run on the game thread. The render thread consumes the request and
+ * owns the cache mutation. The sink has process lifetime after registration.
+ */
 class RaceMenuCloseSink : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 {
 public:
+    /**
+     * @fn static RaceMenuCloseSink* GetSingleton()
+     * @brief Access the menu event sink with process lifetime.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     static RaceMenuCloseSink* GetSingleton()
     {
         static RaceMenuCloseSink s;
         return &s;
     }
+    /**
+     * @fn RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* e,
+     *     RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+     * @brief Request a player identity refresh when RaceMenu closes.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* e,
                                           RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
     {
-        // String literal (not RE::RaceSexMenu::MENU_NAME) to avoid a
-        // BSFixedString-vs-string_view comparison ambiguity; the value is stable.
+        // The literal avoids BSFixedString/string_view comparison ambiguity.
         if (e && !e->opening && e->menuName == "RaceSex Menu")
         {
             if (auto* pc = RE::PlayerCharacter::GetSingleton())
@@ -71,16 +60,18 @@ public:
 };
 }  // namespace
 
-// One CommonLibSSE-NG build supports SE 1.5.x and AE 1.6.x (Steam and GOG).
-// Address Library resolves the runtime-specific IDs; CommonLib handles the
-// pre/post-1.6.629 structure layouts.
+// Address library selects SE/AE IDs; CommonLib handles pre/post-1.6.629 layouts.
 SKSEPluginInfo(.Version = REL::Version(0, 1, 0, 0),
                .Name = "glyph",
                .Author = "lextpf | powerof3 | expired6978",
                .StructCompatibility = SKSE::StructCompatibility::Independent,
                .RuntimeCompatibility = SKSE::VersionIndependence::AddressLibrary)
 
-    // SKSE message handler for plugin lifecycle events.
+    /**
+     * @fn void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
+     * @brief Initialize event-dependent services and clear recycled actor overrides.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
     switch (a_msg->type)
@@ -90,49 +81,45 @@ SKSEPluginInfo(.Version = REL::Version(0, 1, 0, 0),
             break;
 
         case SKSE::MessagingInterface::kPostPostLoad:
-            // Every PostLoad handler has run; SKEE may send its interface here.
             logger::debug("PostPostLoad event received");
-            // Every SKSE plugin is loaded, so request the TrueHUD API and detect
-            // the moreHUD SKSE DLL. That detection keeps the two overlays from
-            // both labelling the same actor. The .esp/.esl fallback inside
-            // HudCompat::Initialize needs the TESDataHandler mod list, which is
-            // empty until kDataLoaded, so that branch does nothing here. This is
-            // the only call site, so the fallback never contributes: in practice
-            // the AHZmoreHUDPlugin.dll module probe is what detects moreHUD.
             HudCompat::Initialize();
             break;
 
         case SKSE::MessagingInterface::kDataLoaded:
             logger::debug("Data loaded event received");
             ConsoleCommands::Register();
-            // RaceMenu rename -> prompt player-name refresh (see RaceMenuCloseSink).
+
             if (auto* ui = RE::UI::GetSingleton())
             {
                 ui->AddEventSink<RE::MenuOpenCloseEvent>(RaceMenuCloseSink::GetSingleton());
             }
             break;
 
+        // Runtime FormIDs are recycled across loads; keep overrides only for persistent references.
         case SKSE::MessagingInterface::kPostLoadGame:
             logger::debug("Post load game event received");
+            ActorOverrides::EraseDynamic();
             break;
 
         case SKSE::MessagingInterface::kNewGame:
             logger::debug("New game event received");
+            ActorOverrides::EraseDynamic();
             break;
     }
 }
 
-// SKSE plugin entry point. Rejects any runtime that is not SE or AE, allocates
-// the trampoline, starts logging, loads settings and the asset manifest,
-// registers the message listener, then installs the hooks.
-//
-// The order is a constraint, not a preference. Hooks::Install() must run last:
-// the CreateD3DAndSwapChain hook can fire as soon as it is installed, and the
-// ImGui init it drives reads font sizes from Settings and font paths from
-// ProjectManifest. Both must already be loaded. SKSE::AllocTrampoline must run
-// before Install() because the call hook draws from that trampoline.
-//
-// Returns false to abort loading: unsupported runtime, or no SKSE log directory.
+/**
+ * @fn bool SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
+ * @brief Initialize plugin services before enabling D3D hooks.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Hooks run last because device creation can immediately require settings, manifest
+ * paths, and trampoline memory. Logging truncates glyph.log for each process launch.
+ *
+ * @param a_skse Non-null SKSE interface supplied by the loader.
+ * @return False for an unsupported runtime or unavailable SKSE log directory.
+ * Hook installation failures are logged and do not change the successful load result.
+ */
 extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
     using namespace std::literals;
@@ -170,12 +157,8 @@ extern "C" __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadIn
                  runtime == REL::Module::Runtime::AE ? "AE/GOG" : "SE");
     Settings::Load();
 
-    // Resolve the obfuscated asset manifest: fonts, tier emblems, particles. A
-    // missing or invalid manifest is not fatal; each loader falls back to its
-    // built-in default.
     ProjectManifest::Load();
 
-    // Lifecycle messages drive the rest of the setup (see MessageHandler).
     auto messaging = SKSE::GetMessagingInterface();
     if (messaging)
     {
