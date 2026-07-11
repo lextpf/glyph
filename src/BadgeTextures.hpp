@@ -7,28 +7,18 @@
 
 /**
  * @namespace BadgeTextures
- * @brief Status badge icon textures rasterized from duotone SVGs.
- * @author Alex (https://github.com/lextpf)
+ * @brief Mipmapped status icons and full-color rank emblems.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup BadgeTextures
  *
- * Loads the status badge icons referenced by the `[Icons]` settings from a folder of Font
- * Awesome duotone SVGs, rasterizes them via nanosvg, and creates mipmapped D3D11 shader
- * resource views for ImGui textured quads.
+ * Duotone SVGs become white alpha masks with a 0.80 opacity floor and normalized peak
+ * alpha; the renderer applies semantic vertex tint. Transparent texels have black RGB
+ * to prevent hidden color from leaking into screen blending. CPU mip chains stabilize
+ * minification. Status icons use 256-pixel source squares; tier emblems use 512 pixels.
  *
- * ## :material-layers: Duotone Pipeline
- *
- * Each Font Awesome duotone SVG carries two `currentColor` paths: a secondary layer at
- * `opacity=".4"` and a fully opaque primary layer. The source `.4` is not used as-is: before
- * rasterization every shape below an opacity floor of 0.80 is lifted to 0.80, because at `.4`
- * half of each icon reads faint. The primary layer at 1.0 is untouched, so the on-screen
- * two-tone ratio is 0.80:1.0. Both layers are rasterized together, so the per-pixel alpha
- * already encodes the two-tone look; the badge's semantic color is applied as a vertex tint at
- * draw time. Icons whose strongest layer is translucent (some glyphs keep all content in the
- * secondary layer) are normalized so their peak alpha is fully opaque.
- *
- * Texels are white with computed alpha; fully transparent texels carry black RGB so
- * screen-style blending cannot lift hidden white into the framebuffer. A full CPU-built mip
- * chain keeps minified badges stable. Status icons use a 256-pixel square source canvas.
+ * Returned texture IDs borrow the stored SRVs; lookups do not extend resource lifetimes.
+ * Finish draw-list playback before replacing or releasing textures. The map mutex protects
+ * lookup and mutation, but it cannot protect an ID after the lookup returns.
  *
  * ```mermaid
  * ---
@@ -66,78 +56,97 @@
 namespace BadgeTextures
 {
 /**
- * @brief Rasterize the given icon names and create their textures.
+ * @fn bool Initialize(ID3D11Device* device, const std::string& folder, const
+ *     std::vector<std::string>& names)
+ * @brief Replace the status icon texture set.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Names resolve to `<folder>/<name>.svg`; empty names are skipped, missing or unparsable
- * files are logged once and skipped.
- *
- * Call on the render thread once the D3D11 device exists. The call replaces the icon set: it
- * drops the previously loaded icons first, also when it then fails, so a reload with a bad
- * folder leaves no icon loaded. No Shutdown() is needed between reloads (settings hot reload
- * calls Initialize directly).
- *
- * @param device D3D11 device to create textures on
- * @param folder SVG folder path (relative to the game directory or absolute)
- * @param names  Icon names to load (duplicates are loaded once)
- * @return true if at least one icon loaded successfully
+ * Clears existing icons even if loading fails. Empty names are skipped; missing or invalid
+ * `<folder>/<name>.svg` files are logged and skipped. Duplicate names load once.
+ * @param device Device used to create textures; null loads nothing.
+ * @param folder Absolute or relative to the game directory.
+ * @param names SVG filename stems, matched exactly and without case folding.
+ * @return True if at least one icon loaded.
+ * @pre Render thread; a D3D11 device exists.
  */
 bool Initialize(ID3D11Device* device,
                 const std::string& folder,
                 const std::vector<std::string>& names);
 
-/// @brief True after Initialize has run, even when no icon loaded.
+/**
+ * @fn int AddIcons(ID3D11Device* device, const std::string& folder, const std::vector<std::string>&
+ *     names)
+ * @brief Add textures without replacing loaded icons.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Skips empty, loaded, missing, and invalid names; failures are logged. Leaves the
+ * initialized flag unchanged, so pre-initialization textures remain hidden from layout.
+ * @param device Device used to create textures; null loads nothing.
+ * @param folder Absolute or relative to the game directory.
+ * @param names SVG filename stems, matched exactly and without case folding.
+ * @return Number loaded.
+ * @pre Render thread; a D3D11 device exists; call before the frame's first `Get`.
+ */
+int AddIcons(ID3D11Device* device,
+             const std::string& folder,
+             const std::vector<std::string>& names);
+
+/**
+ * @fn bool IsInitialized()
+ * @brief Report whether status icon initialization has completed.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True after Initialize, including an empty result; false after Shutdown.
+ */
 bool IsInitialized();
 
-/// @brief Release all badge texture resources.
+/**
+ * @fn void Shutdown()
+ * @brief Release all badge texture resources.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Clears icons, rank emblems, and availability flags. All returned texture IDs become invalid.
+ */
 void Shutdown();
 
 /**
- * @brief Look up a loaded badge texture by icon name.
+ * @fn ImTextureID Get(const std::string& name)
+ * @brief Texture lookup by configured icon name.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param name Icon name as configured (e.g. "shield-halved")
- * @return ImTextureID of the icon, or 0 when the icon is not loaded
+ * @return Borrowed texture ID, or zero when the entry is unavailable.
  */
 ImTextureID Get(const std::string& name);
 
 /**
- * @brief Load the full-color prestige emblem PNGs used by actor rank badges.
+ * @fn int InitializeTierImages(ID3D11Device* device, const std::vector<std::string>& paths)
+ * @brief Replace rank emblems with centered, mipmapped PNG images.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Unlike the duotone SVG icons above (alpha masks tinted at draw time), these are true-color
- * images rendered untinted. `paths` lists the emblem files in rank order (index 0 = lowest
- * rank), resolved from the obfuscated asset manifest. A file that fails to load keeps its rank
- * slot (rendered blank) so the emblem-to-rank alignment is preserved; if *none* load, the set
- * is cleared so the tier badge falls back to the Font Awesome medal/gem/crown icons.
- *
- * Each image is trimmed to its opaque content and resampled into a centered, 512-pixel,
- * mipmapped square so all emblems read at a uniform on-screen size.
- *
- * Call on the render thread once the D3D11 device exists. An empty `paths` clears any loaded
- * emblems. Safe to call again (settings hot reload).
- *
- * @pre COM is initialized on the calling thread; WIC decodes the PNGs. The
- *      call warns and returns 0 otherwise, and the emblems fall back to the
- *      Font Awesome icons.
- * @param device D3D11 device to create textures on
- * @param paths  Emblem file paths in rank order (empty clears the set)
- * @return number of emblem images that loaded successfully
+ * Trim opaque bounds and resample to 512-pixel squares. Failed files retain blank rank
+ * slots; if none load, clear the set to restore Font Awesome rank icons.
+ * @param device Device used to create textures; null clears the set without loading.
+ * @param paths Rank order, lowest first; empty clears the set.
+ * @return Number loaded, or zero if COM is unavailable, with a warning.
+ * @pre Render thread with a D3D11 device and initialized COM for WIC decoding.
  */
 int InitializeTierImages(ID3D11Device* device, const std::vector<std::string>& paths);
 
 /**
- * @brief Get a tier-emblem texture by zero-based index.
+ * @fn ImTextureID GetTierImage(int index)
+ * @brief Rank texture at a zero-based index.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param index  Tier-emblem index.
- * @return       The texture, or zero when it is not loaded.
+ * @return Borrowed texture ID, or zero when the entry is unavailable.
  */
 ImTextureID GetTierImage(int index);
 
 /**
- * @brief Get the number of tier-emblem rank slots.
+ * @fn int TierImageCount()
+ * @brief Rank-slot count, including failed image slots.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * A slot whose file failed still counts, and `GetTierImage` returns zero for it. The result
- * can exceed the number that `InitializeTierImages` loaded. This query is lock-free.
- *
- * @return The number of rank slots, or zero when tier emblems are disabled.
+ * @return Zero when disabled; this query is lock-free.
  */
 int TierImageCount();
 }  // namespace BadgeTextures
