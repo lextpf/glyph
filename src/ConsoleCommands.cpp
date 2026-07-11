@@ -66,6 +66,16 @@ std::string ToLowerAscii(std::string s)
     return s;
 }
 
+// True when `typed` is a non-empty leading prefix of `full`.  Lets any
+// unambiguous abbreviation stand in for a sub-command ("n" -> "nameplates",
+// "d" -> "debug").  The sub-command initials are all distinct, so a single
+// letter is never ambiguous; a full word still matches itself since no
+// command word is a prefix of another.
+bool IsPrefixOf(std::string_view typed, std::string_view full)
+{
+    return !typed.empty() && typed.size() <= full.size() && full.substr(0, typed.size()) == typed;
+}
+
 enum class TriState : std::uint8_t
 {
     On,
@@ -107,14 +117,14 @@ void WriteDebugOverlayEnabled(bool enabled)
 
 void PrintHelp()
 {
-    Echo("glyph - sub-commands:");
+    Echo("glyph - sub-commands (any unambiguous prefix works, e.g. n / d / s):");
     Echo("  glyph                              toggle nameplate rendering");
-    Echo("  glyph help                         show this help");
-    Echo("  glyph status                       print current state");
-    Echo("  glyph nameplates [on|off]          enable / disable / toggle nameplates");
-    Echo("  glyph plates [on|off]              alias for 'nameplates'");
-    Echo("  glyph debug [on|off]               enable / disable / toggle debug overlay");
-    Echo("  glyph appearance                   print appearance template state");
+    Echo("  glyph help | ?                     show this help");
+    Echo("  glyph status | s                   print current state");
+    Echo("  glyph nameplates | n [on|off]      enable / disable / toggle nameplates");
+    Echo("  glyph plates | p [on|off]          alias for 'nameplates'");
+    Echo("  glyph debug | d [on|off]           enable / disable / toggle debug overlay");
+    Echo("  glyph appearance | a               print appearance template state");
     Echo("  glyph appearance on                apply template using INI target");
     Echo("  glyph appearance on <id> <plugin>  apply template with explicit target");
     Echo("                                     (e.g. 'glyph appearance on 0xD62 Inigo.esp')");
@@ -285,23 +295,24 @@ bool GlyphExecute(const RE::SCRIPT_PARAMETER*,
     const auto sub = ToLowerAscii(tokens[cmdIdx]);
     const size_t argIdx = cmdIdx + 1;
 
-    if (sub == "help" || sub == "?")
+    // Any unambiguous prefix of a sub-command works (e.g. 'n', 'd', 's').
+    if (IsPrefixOf(sub, "help") || sub == "?")
     {
         PrintHelp();
     }
-    else if (sub == "status")
+    else if (IsPrefixOf(sub, "status"))
     {
         HandleStatus();
     }
-    else if (sub == "nameplates" || sub == "plates")
+    else if (IsPrefixOf(sub, "nameplates") || IsPrefixOf(sub, "plates"))
     {
         HandleNameplates(tokens, argIdx);
     }
-    else if (sub == "debug")
+    else if (IsPrefixOf(sub, "debug"))
     {
         HandleDebug(tokens, argIdx);
     }
-    else if (sub == "appearance")
+    else if (IsPrefixOf(sub, "appearance"))
     {
         HandleAppearance(tokens, argIdx);
     }
