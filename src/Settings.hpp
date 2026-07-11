@@ -178,8 +178,12 @@ enum class EffectType
     Breathe,  ///< Slow uniform brightness pulse (param1 = speed Hz, param2 = amplitude)
     Drift,    ///< Slow uniform hue wander (param1 = speed Hz, param2 = hue range degrees)
     Mote,     ///< Rare single twinkle (param1 = period s, param2 = peak alpha)
-    Wander    ///< Per-character asynchronous breathing (param1 = speed Hz, param2 = amplitude,
+    Wander,   ///< Per-character asynchronous breathing (param1 = speed Hz, param2 = amplitude,
               ///< param3 = phase spread)
+    Eclipse,  ///< Shadow band sweeping with a hot leading rim (param1 = width,
+              ///< param2 = strength)
+    Pulse,    ///< Weighty two-beat heartbeat glow (param1 = rate Hz, param2 = amplitude)
+    Electric  ///< Rare crackling arc sweeping the text (param1 = rate Hz, param2 = intensity)
 };
 
 /**
@@ -306,12 +310,86 @@ struct SpecialTitleDefinition
     std::string rightOrnaments;  ///< Right side ornament characters
 };
 
+/**
+ * @brief Deeds, Not Words -- a faction-driven honorific title.
+ *
+ * Honorifics replace the static tier title with one the game state actually
+ * granted: an actor (player included) that holds at least `minRank` in the
+ * resolved faction shows `title` in the title slot the moment the deed is
+ * done.  Defined in `[HonorificN]` INI sections; the highest-priority match
+ * wins; special titles (name-keyword styling) still take precedence.
+ *
+ * `factionSpec` is `0xFORMID` or `0xFORMID@Plugin.esp` (plugin defaults to
+ * Skyrim.esm), resolved against the load order on the game thread.
+ */
+struct HonorificDefinition
+{
+    std::string factionSpec;  ///< "0xFORMID[@Plugin.esp]" faction reference
+    std::string title;        ///< Honorific text shown in the title slot
+    int minRank = 0;          ///< Minimum faction rank required
+    int priority = 0;         ///< Higher wins when several factions match
+    bool playerOnly = false;  ///< Only the player's plate may earn this
+    bool npcOnly = false;     ///< Only NPC plates may earn this
+};
+
+/// Scene-context predicate bits for Registers (context-conditional profiles).
+/// The game thread computes the current mask once per snapshot; a register
+/// matches when all `whenMask` bits are set and no `whenNotMask` bit is.
+namespace Context
+{
+inline constexpr uint32_t Interior = 1u << 0;  ///< Player's cell is interior
+inline constexpr uint32_t Night = 1u << 1;     ///< Game hour outside [6, 20)
+inline constexpr uint32_t City = 1u << 2;      ///< Location keyword LocTypeCity/Town
+inline constexpr uint32_t Sneaking = 1u << 3;  ///< Player is sneaking
+inline constexpr uint32_t Dialogue = 1u << 4;  ///< Dialogue menu speaker active
+inline constexpr uint32_t Crowded = 1u << 5;   ///< Visible plates >= threshold
+}  // namespace Context
+
+/**
+ * @brief A Register -- one context-conditional overlay profile.
+ *
+ * Registers bind a small, curated knob set to scene predicates so the
+ * overlay swells and recedes with the scene instead of asking the player to
+ * retune per situation: dimmer at night, fewer plates in a packed city,
+ * quieter sub-lines in dialogue.  The highest-priority matching register is
+ * active; transitions ease over `RegisterSettings::TransitionTime` on the
+ * render thread.  An empty `When` matches every scene (a base register).
+ */
+struct RegisterDefinition
+{
+    std::string name;          ///< Optional label (logs/debugging)
+    uint32_t whenMask = 0;     ///< Context bits that must all be set
+    uint32_t whenNotMask = 0;  ///< Context bits that must all be clear
+    float alphaMul = 1.0f;     ///< Overlay-wide alpha multiplier [0,1]
+    float fadeMul = 1.0f;      ///< Fade/scale distance multiplier [0.2,2]
+    float subLineMul = 1.0f;   ///< Title/info/level/badge alpha multiplier [0,1]
+    bool hideNeutral = false;  ///< Hide neutral + ally NPC plates entirely
+    int priority = 0;          ///< Highest-priority match wins
+
+    /// True once any key parsed inside this section.  Index gaps in
+    /// [RegisterN] numbering back-fill with defaults whose empty `When`
+    /// would otherwise match every scene and shadow the real register on
+    /// priority ties -- unconfigured entries never match.
+    bool configured = false;
+};
+
+/// Register globals (the profiles themselves live in Registers()).
+struct RegisterSettings
+{
+    bool Enabled = true;          ///< Master toggle for the register system
+    float TransitionTime = 1.2f;  ///< Seconds for knob transitions to settle
+    int CrowdedThreshold = 12;    ///< Visible plates that count as "crowded"
+};
+RegisterSettings& RegisterConfig();
+
 // Collection accessors (function-local statics for safe destruction order)
 std::string& TitleFormat();             ///< Format string for title line (e.g., "%t")
 std::vector<Segment>& DisplayFormat();  ///< Segments for main nameplate line (row 2)
 std::vector<Segment>& InfoFormat();     ///< Segments for contextual info row (row 3, below main)
 std::vector<TierDefinition>& Tiers();   ///< All tier definitions (indexed by tier number)
 std::vector<SpecialTitleDefinition>& SpecialTitles();  ///< Special title overrides
+std::vector<HonorificDefinition>& Honorifics();        ///< Faction-driven honorific titles
+std::vector<RegisterDefinition>& Registers();          ///< Context-conditional profiles
 
 /// Distance and visibility fade/scale settings.
 struct DistanceSettings
@@ -417,7 +495,9 @@ struct OrnamentSettings
     std::string FontPath;    ///< Path to ornament font (TTF/OTF)
     float FontSize = 64.0f;  ///< Ornament font size in points
     bool AnchorToMainLine =
-        true;  ///< Anchor ornaments to main text line instead of nameplate center
+        true;             ///< Anchor ornaments to main text line instead of nameplate center
+    float OffsetY = .0f;  ///< Manual vertical nudge in pixels (negative = up),
+                          ///< scaled with text size, applied after anchoring
 };
 OrnamentSettings& Ornament();
 
@@ -426,24 +506,127 @@ OrnamentSettings& Ornament();
  *
  * @see ParticleSettings, TextEffects::DrawParticleAura
  */
-/// @note The ordinal is significant: it indexes the per-type sprite in
-/// `ParticleTextures` (each value maps to one PNG in
-/// `Data/SKSE/Plugins/glyph/particles/`). Keep this order in sync with the
-/// filename table in `ParticleTextures.cpp` and the generator table.
+/// @note The ordinal is significant: it indexes the per-type sprite set in
+/// `ParticleTextures`. The single source of truth linking each style to its
+/// INI token / sprite filename base is `kParticleStyleTokens` below -- every
+/// dependent table static_asserts against `kParticleStyleCount`.
 enum class ParticleStyle
 {
     Firefly,        ///< Slow wandering glow that flickers in place
-    Rain,           ///< Fast downward streaks, wind-angled
-    Snow,           ///< Slow swaying flakes drifting down
+    Rain,           ///< Suspended streaks orbiting slowly around the aura
+    Snow,           ///< Snowflakes drifting around a broad slow orbit
     Smoke,          ///< Rising, expanding, fading puffs
-    Spark,          ///< Buoyant fire embers rising from the text
+    Spark,          ///< Orbiting embers that periodically flare outward hot
     Wisp,           ///< Serpentine ethereal trails
-    Leaf,           ///< Tumbling leaves falling with sway
+    Leaf,           ///< Orbiting leaves with in/out drift and fluttering tumble
     Aurora,         ///< Wavy horizontal shimmer band
-    CherryBlossom,  ///< Drifting petals falling with a slow spin
+    CherryBlossom,  ///< Orbiting petals with a gentle bob and slow spin
     Dust,           ///< Very slow floating motes
-    Mote            ///< Soft glowing motes that gently drift and pulse
+    Mote,           ///< Soft glowing motes that gently drift and pulse
+    // -- 2026-07 sprite expansion. Appended so existing ordinals stay stable. --
+    Arcane,         ///< Stately orbiting rune, slow spin, glow pulse
+    Ash,            ///< Slow-falling embers with a fading glow pulse
+    Bat,            ///< Bats circling the plate with swooping flight (flap strip)
+    Bubble,         ///< Rising wobbling bubbles that pop at the top
+    Butterfly,      ///< Slow fluttering orbit with figure-eight bob (flap strip)
+    Coin,           ///< Slowly orbiting coins spinning on their axis (spin strip)
+    Confetti,       ///< Tumbling festive scraps drifting down
+    Constellation,  ///< Near-static twinkling star clusters, high band
+    Curse,          ///< Skittering dark sigils on a slow low orbit
+    Enchant,        ///< Orbiting arcane sparkles with a shimmer weave
+    Fairy,          ///< Bright darting wanderer, firefly-class but livelier
+    Fog,            ///< Slow horizontal haze bank along the lower edge
+    Gem,            ///< Upright orbiting jewels with a facet glint
+    Glitter,        ///< Anchored sparkle field, twinkling in place
+    Heart,          ///< Rising hearts with a heartbeat pulse
+    Hex,            ///< Slow orbiting hex marks with green flame flicker
+    Ink,            ///< Matte ink marks creeping around a low slow orbit
+    Moon,           ///< A single slow crescent arcing across the top band
+    Planet,         ///< A single majestic ringed planet on a slow deep orbit
+    Pollen,         ///< Air-borne golden specks on a very slow sway-fall
+    Soul,           ///< Ghostly wisps rising and fading out
+    Steam,          ///< Brisk narrow rising vapor that expands
+    Void,           ///< Dark swirls orbiting with an inward breathing pull
+    Vortex,         ///< Coherent spinning spirals on a brisk shared orbit
+    Wind,           ///< Fast horizontal gust streaks across the plate
+    Zap,            ///< Electric arcs jumping between hashed positions
+    Zzz,            ///< Sleepy Z glyphs drifting up and to the side
+    Ember,          ///< Rising fire embers that flicker as they cool
+    Pixiedust,      ///< Pastel sparkle motes sprinkling down, twinkling
+    Runes,          ///< Floating glyphs that morph between rune shapes
+    Sand            ///< Wind-blown grains gusting across the lower band
 };
+
+/// Canonical style -> token mapping. The token is simultaneously the
+/// case-insensitive `ParticleTypes` INI name and the sprite filename base in
+/// `Data/SKSE/Plugins/glyph/particles/` (`<token>.png`, `<token>2.png`,
+/// `<token>_strip.png`, ...). Order must match the enum; dependent tables
+/// (`ParticleTextures`, `RendererEffects`, the motion spec table) size-check
+/// against `kParticleStyleCount`.
+struct ParticleStyleToken
+{
+    ParticleStyle style;
+    const char* token;
+};
+inline constexpr ParticleStyleToken kParticleStyleTokens[] = {
+    {ParticleStyle::Firefly, "firefly"},
+    {ParticleStyle::Rain, "rain"},
+    {ParticleStyle::Snow, "snow"},
+    {ParticleStyle::Smoke, "smoke"},
+    {ParticleStyle::Spark, "spark"},
+    {ParticleStyle::Wisp, "wisp"},
+    {ParticleStyle::Leaf, "leaf"},
+    {ParticleStyle::Aurora, "aurora"},
+    {ParticleStyle::CherryBlossom, "cherryblossom"},
+    {ParticleStyle::Dust, "dust"},
+    {ParticleStyle::Mote, "mote"},
+    {ParticleStyle::Arcane, "arcane"},
+    {ParticleStyle::Ash, "ash"},
+    {ParticleStyle::Bat, "bat"},
+    {ParticleStyle::Bubble, "bubble"},
+    {ParticleStyle::Butterfly, "butterfly"},
+    {ParticleStyle::Coin, "coin"},
+    {ParticleStyle::Confetti, "confetti"},
+    {ParticleStyle::Constellation, "constellation"},
+    {ParticleStyle::Curse, "curse"},
+    {ParticleStyle::Enchant, "enchant"},
+    {ParticleStyle::Fairy, "fairy"},
+    {ParticleStyle::Fog, "fog"},
+    {ParticleStyle::Gem, "gem"},
+    {ParticleStyle::Glitter, "glitter"},
+    {ParticleStyle::Heart, "heart"},
+    {ParticleStyle::Hex, "hex"},
+    {ParticleStyle::Ink, "ink"},
+    {ParticleStyle::Moon, "moon"},
+    {ParticleStyle::Planet, "planet"},
+    {ParticleStyle::Pollen, "pollen"},
+    {ParticleStyle::Soul, "soul"},
+    {ParticleStyle::Steam, "steam"},
+    {ParticleStyle::Void, "void"},
+    {ParticleStyle::Vortex, "vortex"},
+    {ParticleStyle::Wind, "wind"},
+    {ParticleStyle::Zap, "zap"},
+    {ParticleStyle::Zzz, "zzz"},
+    {ParticleStyle::Ember, "ember"},
+    {ParticleStyle::Pixiedust, "pixiedust"},
+    {ParticleStyle::Runes, "runes"},
+    {ParticleStyle::Sand, "sand"},
+};
+inline constexpr int kParticleStyleCount =
+    static_cast<int>(sizeof(kParticleStyleTokens) / sizeof(kParticleStyleTokens[0]));
+static_assert(
+    []() consteval
+    {
+        for (int i = 0; i < kParticleStyleCount; ++i)
+        {
+            if (static_cast<int>(kParticleStyleTokens[i].style) != i)
+            {
+                return false;
+            }
+        }
+        return true;
+    }(),
+    "kParticleStyleTokens rows must be listed in ParticleStyle enum order");
 
 /// Particle aura settings.
 ///
@@ -463,7 +646,7 @@ struct ParticleSettings
     int BlendMode = 0;                ///< 0=Additive, 1=Screen, 2=Alpha
     float DepthStrength = .7f;        ///< Scales the 3D depth read (size/alpha/parallax)
     float ColorWarmth = .5f;          ///< Warm/cool depth temperature mix [0,1]
-    float GlowStrength = .35f;        ///< Additive backlight halo alpha (0 disables glow pass)
+    float GlowStrength = .28f;        ///< Additive backlight halo alpha (0 disables glow pass)
     float GlowSize = 2.2f;            ///< Halo radius as a multiple of the crisp sprite size
     float ShineThreshold = .84f;      ///< Sine threshold for the rare specular glint
 };
@@ -506,12 +689,20 @@ FontSettings& Font();
 /// Entrance/exit transition animation settings.
 struct TransitionSettings
 {
-    bool EnableEntrance = false;      ///< Enable pop-in/slide entrance animation
-    int EntranceStyle = 0;            ///< 0=PopIn, 1=SlideDown, 2=Expand
-    float EntranceDuration = .35f;    ///< Entrance animation duration in seconds
-    float EntranceOvershoot = 1.05f;  ///< Scale overshoot for PopIn style
-    bool EnableExit = false;          ///< Enable exit animation
-    float ExitDuration = .20f;        ///< Exit animation duration in seconds
+    bool EnableEntrance = false;    ///< Enable pop-in/slide entrance animation
+    int EntranceStyle = 0;          ///< 0=PopIn, 1=SlideDown, 2=Expand
+    float EntranceDuration = .35f;  ///< Entrance animation duration in seconds
+    bool EnableExit = false;        ///< Enable exit animation
+    float ExitDuration = .20f;      ///< Exit animation duration in seconds
+
+    // Roll Call -- staggered entrance cascade
+    // When several plates begin their entrance on the same frame (overlay
+    // wake after combat/menus/loads, hot reload, a group entering range),
+    // each successive plate waits one step longer, nearest first, so the
+    // scene introduces itself as a quiet near-to-far wave instead of a
+    // simultaneous pop.  Step 0 disables staggering.
+    float EntranceStaggerStep = .06f;  ///< Delay between successive entrances (s)
+    float EntranceStaggerMax = .8f;    ///< Ceiling for any single plate's delay (s)
 };
 TransitionSettings& Transition();
 
@@ -592,37 +783,29 @@ VisualSettings& Visual();
  */
 struct LabelSettings
 {
-    /// @name Relationship labels (`%r`)
-    /// @{
+    // Relationship labels (`%r`)
     std::string RelationshipFollower = "Follower";  ///< Player teammate
     std::string RelationshipAlly = "Ally";          ///< Friendly NPC that can talk
     std::string RelationshipNeutral;                ///< Default: empty
     std::string RelationshipHostile = "Hostile";    ///< Actively hostile to player
-    /// @}
 
-    /// @name Level delta labels (`%d`, actor level vs. player level)
-    /// @{
+    // Level delta labels (`%d`, actor level vs. player level)
     std::string LevelDeltaWeak = "Weak";      ///< Far below player
     std::string LevelDeltaEven;               ///< Default: empty (similar level)
     std::string LevelDeltaStrong = "Strong";  ///< Notably above player
     std::string LevelDeltaDeadly = "Deadly";  ///< Far above player
-    /// @}
 
-    /// @name Creature type labels (`%c`)
-    /// @{
+    // Creature type labels (`%c`)
     std::string CreatureTypeNPC;                ///< Default: empty
     std::string CreatureTypeBeast = "Beast";    ///< ActorTypeCreature / ActorTypeAnimal
     std::string CreatureTypeUndead = "Undead";  ///< ActorTypeUndead
     std::string CreatureTypeDaedra = "Daedra";  ///< ActorTypeDaedra
     std::string CreatureTypeDragon = "Dragon";  ///< ActorTypeDragon
-    /// @}
 
-    /// @name Level delta classification thresholds (actor level minus player level)
-    /// @{
+    // Level delta classification thresholds (actor level minus player level)
     int WeakAtOrBelow = -5;    ///< delta <= this -> Weak
     int StrongAtOrAbove = 5;   ///< delta >= this -> Strong
     int DeadlyAtOrAbove = 10;  ///< delta >= this -> Deadly (overrides Strong)
-    /// @}
 };
 LabelSettings& Labels();
 
@@ -649,8 +832,7 @@ struct IconSettings
     float Scale = 1.0f;       ///< Badge size relative to the level font size
     bool DeadlyPulse = true;  ///< Subtle alpha pulse on the Deadly skull
 
-    /// @name Icon names (SVG file names without extension -- the INI surface)
-    /// @{
+    // Icon names (SVG file names without extension -- the INI surface)
     std::string FollowerIcon = "shield-halved";
     std::string AllyIcon = "handshake";
     std::string HostileIcon = "skull-crossbones";
@@ -661,10 +843,8 @@ struct IconSettings
     std::string UndeadIcon = "ghost";
     std::string DaedraIcon = "fire";
     std::string DragonIcon = "dragon";
-    /// @}
 
-    /// @name Badge colors (comma-separated RGB strings -- the INI surface)
-    /// @{
+    // Badge colors (comma-separated RGB strings -- the INI surface)
     std::string FollowerColorStr = "0.46, 0.68, 0.84";
     std::string AllyColorStr = "0.52, 0.74, 0.50";
     std::string HostileColorStr = "0.86, 0.36, 0.32";
@@ -672,10 +852,8 @@ struct IconSettings
     std::string StrongColorStr = "0.86, 0.62, 0.32";
     std::string DeadlyColorStr = "0.90, 0.28, 0.24";
     std::string CreatureColorStr = "0.80, 0.74, 0.62";
-    /// @}
 
-    /// @name Derived values (computed in ClampAndValidate, not INI keys)
-    /// @{
+    // Derived values (computed in ClampAndValidate, not INI keys)
     Color3 FollowerColor;
     Color3 AllyColor;
     Color3 HostileColor;
@@ -683,15 +861,13 @@ struct IconSettings
     Color3 StrongColor;
     Color3 DeadlyColor;
     Color3 CreatureColor;
-    /// @}
 
-    /// @name Expanded always-on slots (more NPC + player indicators)
-    /// New status slots render alongside the original three.  Neutral/inactive
-    /// states show muted (MutedColor, dimmed via MutedAlpha + desaturated via
-    /// MutedDesat at draw time); active states show lit in their own color.
-    /// Set any `*Icon` empty to hide that state; toggle a whole slot via its
-    /// `*Enabled`.  Icon names require matching SVGs in the IconFolder.
-    /// @{
+    // Expanded always-on slots (more NPC + player indicators)
+    // New status slots render alongside the original three.  Neutral/inactive
+    // states show muted (MutedColor, dimmed via MutedAlpha + desaturated via
+    // MutedDesat at draw time); active states show lit in their own color.
+    // Set any `*Icon` empty to hide that state; toggle a whole slot via its
+    // `*Enabled`.  Icon names require matching SVGs in the IconFolder.
     // Always-on neutral states (previously blank) + new NPC categories.
     std::string NeutralIcon = "circle";  ///< muted relationship
     std::string HumanoidIcon = "user";   ///< muted creature
@@ -713,6 +889,18 @@ struct IconSettings
     std::string NormalWeightIcon = "feather";  ///< muted
     std::string WantedIcon = "gavel";
     std::string BountyClearIcon = "scale-balanced";  ///< muted
+    // Player tier-band prestige badge (low / mid / high thirds of the ladder).
+    std::string TierLowIcon = "medal";
+    std::string TierMidIcon = "gem";
+    std::string TierHighIcon = "crown";
+    // Full-color prestige emblem images for the tier badge.  When enabled and at
+    // least one emblem loads, they replace the medal/gem/crown icons above with
+    // a top-weighted rank climb (see BadgeTextures::InitializeTierImages).
+    // Emblems are PNGs named 1.png, 2.png, ... in TierBadgeFolder.
+    bool TierBadgeImages = true;
+    std::string TierBadgeFolder = "Data/SKSE/Plugins/glyph/badges";
+    float TierBadgeGamma = 1.8f;  ///< Emblem->tier top-weighting (>1 = high emblems rarer)
+    float TierBadgeScale = 1.7f;  ///< Emblem size as a multiple of the status-icon size
 
     // Lit colors for the active states.
     std::string GuardColorStr = "0.60, 0.68, 0.84";
@@ -725,6 +913,11 @@ struct IconSettings
     std::string SneakDetectedColorStr = "0.86, 0.36, 0.32";
     std::string EncumberedColorStr = "0.82, 0.64, 0.40";
     std::string WantedColorStr = "0.84, 0.34, 0.30";
+    // Tier-band prestige colors: bronze -> silver-blue -> calm gold, in the
+    // same muted-saturation family as the other lit colors.
+    std::string TierLowColorStr = "0.70, 0.62, 0.52";
+    std::string TierMidColorStr = "0.62, 0.70, 0.80";
+    std::string TierHighColorStr = "0.86, 0.74, 0.46";
     // Resting-state colors: each "muted" slot carries its own calm hue so the
     // always-on strip reads as a colored spectrum rather than uniform grey.
     std::string NeutralColorStr = "0.56, 0.62, 0.70";       ///< neutral relationship
@@ -748,6 +941,9 @@ struct IconSettings
     Color3 SneakDetectedColor;
     Color3 EncumberedColor;
     Color3 WantedColor;
+    Color3 TierLowColor;
+    Color3 TierMidColor;
+    Color3 TierHighColor;
     Color3 NeutralColor;
     Color3 HumanoidColor;
     Color3 CommonerColor;
@@ -772,12 +968,16 @@ struct IconSettings
     bool PlayerCombatEnabled = true;
     bool EncumberedEnabled = true;
     bool BountyEnabled = true;
+    bool TierEnabled = true;  ///< player tier-band prestige badge
+
+    // Lit-badge opacity gain, multiplied into the icon tint alpha (clamped to
+    // 1.0 at draw). Raises overall icon visibility; muted slots use MutedAlpha.
+    float Opacity = 1.15f;
 
     // Resting styling: alpha multiplier and desaturation strength [0,1].
     // Lower desat keeps each resting slot's hue; alpha keeps it subordinate.
     float MutedAlpha = 0.45f;
     float MutedDesat = 0.18f;
-    /// @}
 };
 IconSettings& Icons();
 
@@ -794,23 +994,19 @@ IconSettings& Icons();
  */
 struct NpcColorSettings
 {
-    /// @name Colors (comma-separated RGB strings -- the INI surface)
-    /// @{
+    // Colors (comma-separated RGB strings -- the INI surface)
     std::string NeutralColorStr = "1.0, 1.0, 1.0";     ///< Neutral + talkable civilians
     std::string HostileColorStr = "1.0, 0.72, 0.68";   ///< Slight warm lean for hostiles
     std::string FollowerColorStr = "0.72, 0.84, 1.0";  ///< Slight cool lean for teammates
     std::string LevelColorStr = "0.82, 0.84, 0.88";    ///< Dimmed silver level readout
     std::string TitleColorStr = "0.92, 0.93, 0.95";    ///< Soft white title text
-    /// @}
 
-    /// @name Derived values (computed in ClampAndValidate, not INI keys)
-    /// @{
+    // Derived values (computed in ClampAndValidate, not INI keys)
     Color3 NeutralColor;
     Color3 HostileColor;
     Color3 FollowerColor;
     Color3 LevelColor;
     Color3 TitleColor;
-    /// @}
 };
 NpcColorSettings& NpcColors();
 
@@ -839,6 +1035,109 @@ struct FocusSettings
     bool IgnoreOccluded = true;     ///< Skip occluded actors when picking focus
 };
 FocusSettings& Focus();
+
+/**
+ * One Voice Per Actor -- TrueHUD / moreHUD deconfliction.
+ *
+ * When TrueHUD floats an info/boss bar over an actor, glyph yields that
+ * actor's plate (fading it to `TrueHUDYieldAlpha`); when moreHUD's
+ * crosshair readout already shows the target's level, glyph drops its own
+ * level segment for that actor.  Both handshakes are automatic -- absent
+ * mods simply leave the behavior off.
+ *
+ * @see HudCompat
+ */
+struct CompatSettings
+{
+    bool YieldToTrueHUD = true;       ///< Yield plates to TrueHUD floating bars
+    float TrueHUDYieldAlpha = .0f;    ///< Plate alpha while yielded [0,1]
+    bool YieldLevelToMoreHUD = true;  ///< Drop level for moreHUD's crosshair target
+    float YieldSettleTime = .3f;      ///< Seconds for the yield crossfade
+};
+CompatSettings& Compat();
+
+/**
+ * Last Rites -- a one-shot death valediction.
+ *
+ * A tracked actor that dies in view no longer pops out: the plate holds
+ * perfectly still for a beat, its ink drains to ash, and the name takes a
+ * creature-keyed farewell -- a mortal's gutters out and sinks, a draugr's
+ * crumbles letter by letter, a dragon's sears bright before going dark.
+ * Plays once per corpse, never for corpses first seen dead, and rites
+ * pending while the overlay was suppressed (player combat) are cancelled
+ * on wake rather than replayed stale.
+ */
+struct DeathRiteSettings
+{
+    bool Enabled = true;    ///< Master toggle
+    float Duration = 1.6f;  ///< Full rite length in seconds
+};
+DeathRiteSettings& DeathRite();
+
+/**
+ * The Quiet Frame -- camera-motion quieting.
+ *
+ * During fast camera pans nothing on screen is readable, so the overlay
+ * exhales: sub-lines (title, info row, level, badges) fold away entirely
+ * and names thin to a low-alpha trace.  When the camera settles the
+ * information re-resolves in a damped cadence -- names first, sub-lines
+ * breathing back after -- via an asymmetric envelope (fast attack toward
+ * quiet, slow weighty release back).
+ *
+ * Angular speed below `PanThresholdLo` leaves the overlay untouched; above
+ * `PanThresholdHi` it is fully quiet; smoothstep in between.
+ *
+ * @see Renderer::UpdateQuietFrame, RendererState::quietName
+ */
+struct QuietSettings
+{
+    bool Enabled = true;            ///< Master toggle
+    float PanThresholdLo = 40.0f;   ///< deg/s where quieting begins
+    float PanThresholdHi = 160.0f;  ///< deg/s where fully quiet
+    float AttackTime = .10f;        ///< Settle time receding into quiet (s)
+    float NameReleaseTime = .28f;   ///< Name resolve-back settle time (s)
+    float SubReleaseTime = .50f;    ///< Sub-line resolve-back settle time (s)
+    float NameFloor = .35f;         ///< Name alpha multiplier at full quiet
+};
+QuietSettings& Quiet();
+
+/**
+ * Candlelight Metering -- exposure-adaptive ink.
+ *
+ * The renderer meters the scene behind each plate like a film exposure
+ * meter: over a bright snowfield the ink dims a touch; in a torchlit crypt
+ * it lifts a few percent and picks up a whisper of the scene's warmth.
+ * All adjustments are hard-capped (`Strength`) and smoothed per actor, so
+ * the typography participates in the scene's lighting without ever calling
+ * attention to itself.  Unsupported render setups disable the feature
+ * silently (one log line, zero visual change).
+ */
+struct CandlelightSettings
+{
+    bool Enabled = true;     ///< Master toggle
+    float Strength = .08f;   ///< Max brightness adjustment (fraction, [0, 0.15])
+    float Warmth = .5f;      ///< Chroma pull toward the scene in dark shots [0,1]
+    float SettleTime = .6f;  ///< Per-actor smoothing settle time (s)
+};
+CandlelightSettings& Candlelight();
+
+/**
+ * Cut by the World -- per-pixel depth occlusion.
+ *
+ * Plates are depth-tested per pixel against the game's own depth buffer, so
+ * a name is physically sliced by a doorframe as an actor walks behind it
+ * instead of the whole plate popping.  The soft feather hides the raw
+ * intersection edge.  The coarse line-of-sight culling stays on regardless;
+ * this is the fine, sub-plate truth layered on top.  Setups where the depth
+ * buffer is unavailable (some ENB/upscaler stacks) fall back to LOS-only
+ * occlusion automatically, with one log line.
+ */
+struct DepthClipSettings
+{
+    bool Enabled = true;   ///< Master toggle
+    float Feather = 2.5f;  ///< Feather radius at the occlusion edge (px, [0,8])
+};
+DepthClipSettings& DepthClipConfig();
 
 /**
  * Shared settings mutex.

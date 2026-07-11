@@ -21,7 +21,7 @@
 namespace Settings
 {
 // Single source of truth for EffectType <-> lowercase string mapping.
-static constexpr Stl::EnumStringMap<EffectType, 15> kEffectTypeMap{{
+static constexpr Stl::EnumStringMap<EffectType, 18> kEffectTypeMap{{
     {{"none", EffectType::None},
      {"gradient", EffectType::Gradient},
      {"verticalgradient", EffectType::VerticalGradient},
@@ -36,7 +36,10 @@ static constexpr Stl::EnumStringMap<EffectType, 15> kEffectTypeMap{{
      {"breathe", EffectType::Breathe},
      {"drift", EffectType::Drift},
      {"mote", EffectType::Mote},
-     {"wander", EffectType::Wander}},
+     {"wander", EffectType::Wander},
+     {"eclipse", EffectType::Eclipse},
+     {"pulse", EffectType::Pulse},
+     {"electric", EffectType::Electric}},
 }};
 
 // Parser helper forward declarations (used before definitions).
@@ -87,6 +90,24 @@ std::vector<SpecialTitleDefinition>& SpecialTitles()
 {
     static std::vector<SpecialTitleDefinition> v;
     return v;
+}
+
+std::vector<HonorificDefinition>& Honorifics()
+{
+    static std::vector<HonorificDefinition> v;
+    return v;
+}
+
+std::vector<RegisterDefinition>& Registers()
+{
+    static std::vector<RegisterDefinition> v;
+    return v;
+}
+
+RegisterSettings& RegisterConfig()
+{
+    static RegisterSettings s;
+    return s;
 }
 
 // Category struct accessors (function-local statics)
@@ -198,6 +219,36 @@ NpcColorSettings& NpcColors()
     return s;
 }
 
+QuietSettings& Quiet()
+{
+    static QuietSettings s;
+    return s;
+}
+
+DeathRiteSettings& DeathRite()
+{
+    static DeathRiteSettings s;
+    return s;
+}
+
+CompatSettings& Compat()
+{
+    static CompatSettings s;
+    return s;
+}
+
+CandlelightSettings& Candlelight()
+{
+    static CandlelightSettings s;
+    return s;
+}
+
+DepthClipSettings& DepthClipConfig()
+{
+    static DepthClipSettings s;
+    return s;
+}
+
 // Default font paths (shared between table and ResetToDefaults)
 static constexpr auto kDefaultNameFontPath =
     "Data/SKSE/Plugins/glyph/fonts/bd1aab18-7649-4946-9f7b-6ddd6a81311d.ttf";
@@ -285,9 +336,10 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"EnableEntranceAnimation","", &Transition().EnableEntrance,      false,    NoClamping{}},
     {"EntranceStyle",          "", &Transition().EntranceStyle,       0,        ClampInt{0, 2}},
     {"EntranceDuration",       "", &Transition().EntranceDuration,    .35f,     ClampFloat{.05f, 3.0f}},
-    {"EntranceOvershoot",      "", &Transition().EntranceOvershoot,   1.0f,     ClampFloat{1.0f, 1.0f}},
     {"EnableExitAnimation",    "", &Transition().EnableExit,          false,    NoClamping{}},
     {"ExitDuration",           "", &Transition().ExitDuration,        .20f,     ClampFloat{.05f, 2.0f}},
+    {"EntranceStaggerStep",    "", &Transition().EntranceStaggerStep, .06f,     ClampFloat{.0f, .5f}},
+    {"EntranceStaggerMax",     "", &Transition().EntranceStaggerMax,  .8f,      ClampFloat{.0f, 3.0f}},
 
     // Debug
     {"EnableDebugOverlay",     "", &Display().EnableDebugOverlay,     false,    NoClamping{}},
@@ -297,19 +349,20 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OrnamentScale",          "FlourishScale",      &Ornament().Scale,        1.0f,     NoClamping{}},
     {"OrnamentSpacing",        "FlourishSpacing",    &Ornament().Spacing,      3.0f,     NoClamping{}},
     {"OrnamentAnchorToMainLine", "",                  &Ornament().AnchorToMainLine, true, NoClamping{}},
+    {"OrnamentOffsetY",        "FlourishOffsetY",    &Ornament().OffsetY,      .0f,      NoClamping{}},
 
     // Particle Aura
     {"EnableParticleAura",     "", &Particle().Enabled,               true,     NoClamping{}},
     {"UseParticleTextures",    "", &Particle().UseParticleTextures,   true,     NoClamping{}},
     {"ParticleCount",          "", &Particle().Count,                 8,        MinInt{0}},
-    {"ParticleSize",           "", &Particle().Size,                  3.5f,     MinFloat{.0f}},
+    {"ParticleSize",           "", &Particle().Size,                  4.2f,     MinFloat{.0f}},
     {"ParticleSpeed",          "", &Particle().Speed,                 1.0f,     MinFloat{.0f}},
     {"ParticleSpread",         "", &Particle().Spread,                20.0f,    MinFloat{.0f}},
     {"ParticleAlpha",          "", &Particle().Alpha,                 .8f,      ClampFloat{.0f, 1.0f}},
-    {"ParticleBlendMode",      "", &Particle().BlendMode,             0,        ClampInt{0, 2}},
+    {"ParticleBlendMode",      "", &Particle().BlendMode,             1,        ClampInt{0, 2}},
     {"ParticleDepthStrength",  "", &Particle().DepthStrength,         .7f,      ClampFloat{.0f, 1.5f}},
     {"ParticleColorWarmth",    "", &Particle().ColorWarmth,           .5f,      ClampFloat{.0f, 1.0f}},
-    {"ParticleGlowStrength",   "", &Particle().GlowStrength,          .35f,     ClampFloat{.0f, 1.0f}},
+    {"ParticleGlowStrength",   "", &Particle().GlowStrength,          .28f,     ClampFloat{.0f, 1.0f}},
     {"ParticleGlowSize",       "", &Particle().GlowSize,              2.2f,     ClampFloat{1.0f, 4.0f}},
     {"ParticleShineThreshold", "", &Particle().ShineThreshold,        .84f,     ClampFloat{.0f, .99f}},
 
@@ -459,6 +512,13 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconNormalWeight",       "", &Icons().NormalWeightIcon,  std::string("feather"),           NoClamping{}},
     {"IconWanted",             "", &Icons().WantedIcon,        std::string("gavel"),             NoClamping{}},
     {"IconBountyClear",        "", &Icons().BountyClearIcon,   std::string("scale-balanced"),    NoClamping{}},
+    {"IconTierLow",            "", &Icons().TierLowIcon,       std::string("medal"),             NoClamping{}},
+    {"IconTierMid",            "", &Icons().TierMidIcon,       std::string("gem"),               NoClamping{}},
+    {"IconTierHigh",           "", &Icons().TierHighIcon,      std::string("crown"),             NoClamping{}},
+    {"TierBadgeImages",        "", &Icons().TierBadgeImages,   true,                             NoClamping{}},
+    {"TierBadgeFolder",        "", &Icons().TierBadgeFolder,   std::string("Data/SKSE/Plugins/glyph/badges"), NoClamping{}},
+    {"TierBadgeGamma",         "", &Icons().TierBadgeGamma,    1.8f,                             ClampFloat{.5f, 4.0f}},
+    {"TierBadgeScale",         "", &Icons().TierBadgeScale,    1.7f,                             ClampFloat{1.0f, 4.0f}},
 
     // Expanded slots -- lit (active) colors.
     {"IconGuardColor",         "", &Icons().GuardColorStr,         std::string("0.60, 0.68, 0.84"),  NoClamping{}},
@@ -471,6 +531,9 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconSneakDetectedColor", "", &Icons().SneakDetectedColorStr, std::string("0.86, 0.36, 0.32"),  NoClamping{}},
     {"IconEncumberedColor",    "", &Icons().EncumberedColorStr,    std::string("0.82, 0.64, 0.40"),  NoClamping{}},
     {"IconWantedColor",        "", &Icons().WantedColorStr,        std::string("0.84, 0.34, 0.30"),  NoClamping{}},
+    {"IconTierLowColor",       "", &Icons().TierLowColorStr,       std::string("0.70, 0.62, 0.52"),  NoClamping{}},
+    {"IconTierMidColor",       "", &Icons().TierMidColorStr,       std::string("0.62, 0.70, 0.80"),  NoClamping{}},
+    {"IconTierHighColor",      "", &Icons().TierHighColorStr,      std::string("0.86, 0.74, 0.46"),  NoClamping{}},
     // Expanded slots -- per-slot resting colors (each "muted" slot's own hue).
     {"IconNeutralColor",       "", &Icons().NeutralColorStr,      std::string("0.56, 0.62, 0.70"),  NoClamping{}},
     {"IconHumanoidColor",      "", &Icons().HumanoidColorStr,     std::string("0.74, 0.68, 0.58"),  NoClamping{}},
@@ -496,10 +559,47 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconPlayerCombatEnabled","", &Icons().PlayerCombatEnabled, true,                            NoClamping{}},
     {"IconEncumberedEnabled",  "", &Icons().EncumberedEnabled,   true,                            NoClamping{}},
     {"IconBountyEnabled",      "", &Icons().BountyEnabled,       true,                            NoClamping{}},
+    {"IconTierEnabled",        "", &Icons().TierEnabled,         true,                            NoClamping{}},
 
     // Expanded slots -- muted styling.
     {"IconMutedAlpha",         "", &Icons().MutedAlpha,          0.45f,            ClampFloat{.0f, 1.0f}},
     {"IconMutedDesat",         "", &Icons().MutedDesat,          0.18f,            ClampFloat{.0f, 1.0f}},
+    {"IconOpacity",            "", &Icons().Opacity,             1.15f,            ClampFloat{.5f, 2.0f}},
+
+    // Last Rites -- one-shot death valediction.
+    {"DeathRiteEnabled",       "", &DeathRite().Enabled,          true,     NoClamping{}},
+    {"DeathRiteDuration",      "", &DeathRite().Duration,         1.6f,     ClampFloat{.4f, 4.0f}},
+
+    // One Voice Per Actor -- TrueHUD / moreHUD deconfliction.
+    {"CompatYieldToTrueHUD",     "", &Compat().YieldToTrueHUD,     true,   NoClamping{}},
+    {"CompatTrueHUDYieldAlpha",  "", &Compat().TrueHUDYieldAlpha,  .0f,    ClampFloat{.0f, 1.0f}},
+    {"CompatYieldLevelToMoreHUD","", &Compat().YieldLevelToMoreHUD,true,   NoClamping{}},
+    {"CompatYieldSettleTime",    "", &Compat().YieldSettleTime,    .3f,    ClampFloat{.01f, 2.0f}},
+
+    // Registers -- context-conditional profiles ([RegisterN] sections hold
+    // the profiles; these are the system globals).
+    {"RegistersEnabled",         "", &RegisterConfig().Enabled,          true,   NoClamping{}},
+    {"RegisterTransitionTime",   "", &RegisterConfig().TransitionTime,   1.2f,   ClampFloat{.05f, 5.0f}},
+    {"RegisterCrowdedThreshold", "", &RegisterConfig().CrowdedThreshold, 12,     MinInt{2}},
+
+    // Cut by the World -- per-pixel depth occlusion.
+    {"DepthClipEnabled",       "", &DepthClipConfig().Enabled,    true,     NoClamping{}},
+    {"DepthClipFeather",       "", &DepthClipConfig().Feather,    2.5f,     ClampFloat{.0f, 8.0f}},
+
+    // Candlelight Metering -- exposure-adaptive ink.
+    {"CandlelightEnabled",     "", &Candlelight().Enabled,        true,     NoClamping{}},
+    {"CandlelightStrength",    "", &Candlelight().Strength,       .08f,     ClampFloat{.0f, .15f}},
+    {"CandlelightWarmth",      "", &Candlelight().Warmth,         .5f,      ClampFloat{.0f, 1.0f}},
+    {"CandlelightSettleTime",  "", &Candlelight().SettleTime,     .6f,      ClampFloat{.05f, 3.0f}},
+
+    // The Quiet Frame -- camera-motion quieting (asymmetric envelope).
+    {"QuietFrameEnabled",      "", &Quiet().Enabled,              true,     NoClamping{}},
+    {"QuietPanThresholdLo",    "", &Quiet().PanThresholdLo,       40.0f,    ClampFloat{1.0f, 720.0f}},
+    {"QuietPanThresholdHi",    "", &Quiet().PanThresholdHi,       160.0f,   ClampFloat{2.0f, 1440.0f}},
+    {"QuietAttackTime",        "", &Quiet().AttackTime,           .10f,     ClampFloat{.01f, 1.0f}},
+    {"QuietNameReleaseTime",   "", &Quiet().NameReleaseTime,      .28f,     ClampFloat{.01f, 2.0f}},
+    {"QuietSubReleaseTime",    "", &Quiet().SubReleaseTime,       .50f,     ClampFloat{.01f, 3.0f}},
+    {"QuietNameFloor",         "", &Quiet().NameFloor,            .35f,     ClampFloat{.0f, 1.0f}},
 
     // NPC nameplate text colors -- flat white-leaning text (tier palettes are
     // player/special-title only).  Name color is keyed by relationship.
@@ -650,6 +750,15 @@ static std::string CanonicalizeStructKey(const std::string& rawKey)
         {"forceparticles", "ForceParticles"},
         {"priority", "Priority"},
         {"format", "Format"},
+        {"faction", "Faction"},
+        {"minrank", "MinRank"},
+        {"playeronly", "PlayerOnly"},
+        {"npconly", "NpcOnly"},
+        {"when", "When"},
+        {"alphamultiplier", "AlphaMultiplier"},
+        {"fadedistancemultiplier", "FadeDistanceMultiplier"},
+        {"sublinealphamultiplier", "SubLineAlphaMultiplier"},
+        {"hideneutral", "HideNeutral"},
     };
 
     const std::string lowered = ToLowerAscii(Trim(rawKey));
@@ -671,6 +780,8 @@ static void ResetToDefaults()
     Tiers().clear();
     Tiers().push_back(MakeDefaultTier());
     SpecialTitles().clear();
+    Honorifics().clear();
+    Registers().clear();
 
     // All scalar settings are reset from the descriptor table.
     ResetTableDefaults();
@@ -729,6 +840,20 @@ static void ClampAndValidate()
         special.glowColor.clamp01();
     }
 
+    for (auto& honorific : Honorifics())
+    {
+        honorific.factionSpec = Trim(honorific.factionSpec);
+        honorific.title = Trim(honorific.title);
+        honorific.minRank = std::max(0, honorific.minRank);
+    }
+
+    for (auto& reg : Registers())
+    {
+        reg.alphaMul = std::clamp(reg.alphaMul, .0f, 1.0f);
+        reg.fadeMul = std::clamp(reg.fadeMul, .2f, 2.0f);
+        reg.subLineMul = std::clamp(reg.subLineMul, .0f, 1.0f);
+    }
+
     // Derive icon colors from their INI string forms.
     auto& ic = Icons();
     const auto deriveColor = [](const std::string& str, Color3& out)
@@ -754,6 +879,9 @@ static void ClampAndValidate()
     deriveColor(ic.SneakDetectedColorStr, ic.SneakDetectedColor);
     deriveColor(ic.EncumberedColorStr, ic.EncumberedColor);
     deriveColor(ic.WantedColorStr, ic.WantedColor);
+    deriveColor(ic.TierLowColorStr, ic.TierLowColor);
+    deriveColor(ic.TierMidColorStr, ic.TierMidColor);
+    deriveColor(ic.TierHighColorStr, ic.TierHighColor);
     deriveColor(ic.NeutralColorStr, ic.NeutralColor);
     deriveColor(ic.HumanoidColorStr, ic.HumanoidColor);
     deriveColor(ic.CommonerColorStr, ic.CommonerColor);
@@ -913,30 +1041,31 @@ static void ParseEffectString(const std::string& val, EffectParams& effect)
     while (std::getline(paramStream, token, ',') && paramIdx < 5)
     {
         token = Trim(token);
-        if (token.empty())
+        if (!token.empty())
         {
-            continue;
+            const float v = ParseFloat(token, .0f);
+            switch (paramIdx)
+            {
+                case 0:
+                    effect.param1 = v;
+                    break;
+                case 1:
+                    effect.param2 = v;
+                    break;
+                case 2:
+                    effect.param3 = v;
+                    break;
+                case 3:
+                    effect.param4 = v;
+                    break;
+                case 4:
+                    effect.param5 = v;
+                    break;
+            }
         }
-
-        float v = ParseFloat(token, .0f);
-        switch (paramIdx)
-        {
-            case 0:
-                effect.param1 = v;
-                break;
-            case 1:
-                effect.param2 = v;
-                break;
-            case 2:
-                effect.param3 = v;
-                break;
-            case 3:
-                effect.param4 = v;
-                break;
-            case 4:
-                effect.param5 = v;
-                break;
-        }
+        // Advance even on empty fields so positional params keep their slot:
+        // "Aurora 0.5,,0.85" assigns 0.85 to param3 (not param2); an empty field
+        // leaves that param at its existing/default value.
         paramIdx++;
     }
 }
@@ -1109,6 +1238,147 @@ static bool ParseSpecialTitleField(SpecialTitleDefinition& st,
     return true;
 }
 
+// Parse a comma-separated `When` predicate list into required / forbidden
+// context masks.  Tokens: interior, exterior, night, day, city, sneaking,
+// dialogue, crowded; a leading '!' negates.  `exterior` and `day` are sugar
+// for !interior / !night.  Unknown tokens are ignored.
+// Mirrored in tests/test_settings.cpp -- keep the logic in sync.
+static void ParseWhenTokens(const std::string& val, uint32_t& whenMask, uint32_t& whenNotMask)
+{
+    whenMask = 0;
+    whenNotMask = 0;
+    std::istringstream ss(val);
+    std::string token;
+    while (std::getline(ss, token, ','))
+    {
+        token = ToLowerAscii(Trim(token));
+        bool negate = false;
+        if (!token.empty() && token[0] == '!')
+        {
+            negate = true;
+            token = Trim(token.substr(1));
+        }
+        uint32_t bit = 0;
+        if (token == "interior")
+        {
+            bit = Context::Interior;
+        }
+        else if (token == "exterior")
+        {
+            bit = Context::Interior;
+            negate = !negate;
+        }
+        else if (token == "night")
+        {
+            bit = Context::Night;
+        }
+        else if (token == "day")
+        {
+            bit = Context::Night;
+            negate = !negate;
+        }
+        else if (token == "city")
+        {
+            bit = Context::City;
+        }
+        else if (token == "sneaking")
+        {
+            bit = Context::Sneaking;
+        }
+        else if (token == "dialogue")
+        {
+            bit = Context::Dialogue;
+        }
+        else if (token == "crowded")
+        {
+            bit = Context::Crowded;
+        }
+        if (bit == 0)
+        {
+            continue;
+        }
+        (negate ? whenNotMask : whenMask) |= bit;
+    }
+}
+
+// Parse a single key-value pair for a [RegisterN] section.
+static bool ParseRegisterField(RegisterDefinition& r,
+                               const std::string& key,
+                               const std::string& val)
+{
+    if (key == "Name")
+    {
+        r.name = val;
+    }
+    else if (key == "When")
+    {
+        ParseWhenTokens(val, r.whenMask, r.whenNotMask);
+    }
+    else if (key == "AlphaMultiplier")
+    {
+        r.alphaMul = ParseFloat(val, 1.0f);
+    }
+    else if (key == "FadeDistanceMultiplier")
+    {
+        r.fadeMul = ParseFloat(val, 1.0f);
+    }
+    else if (key == "SubLineAlphaMultiplier")
+    {
+        r.subLineMul = ParseFloat(val, 1.0f);
+    }
+    else if (key == "HideNeutral")
+    {
+        r.hideNeutral = ParseBool(val);
+    }
+    else if (key == "Priority")
+    {
+        r.priority = ParseInt(val, 0);
+    }
+    else
+    {
+        return false;
+    }
+    r.configured = true;
+    return true;
+}
+
+// Parse a single key-value pair for an [HonorificN] section.  The honorific
+// text uses the `Title` INI key, which CanonicalizeStructKey folds to "Name".
+static bool ParseHonorificField(HonorificDefinition& h,
+                                const std::string& key,
+                                const std::string& val)
+{
+    if (key == "Faction")
+    {
+        h.factionSpec = val;
+    }
+    else if (key == "Name")
+    {
+        h.title = val;
+    }
+    else if (key == "MinRank")
+    {
+        h.minRank = ParseInt(val, 0);
+    }
+    else if (key == "Priority")
+    {
+        h.priority = ParseInt(val, 0);
+    }
+    else if (key == "PlayerOnly")
+    {
+        h.playerOnly = ParseBool(val);
+    }
+    else if (key == "NpcOnly")
+    {
+        h.npcOnly = ParseBool(val);
+    }
+    else
+    {
+        return false;
+    }
+    return true;
+}
+
 // Parse quoted segments with optional trailing `?` droppable marker.
 // `outTitle` (when non-null) absorbs segments containing `%t`; remaining
 // segments flow into `out`.  `forceLevelFont` overrides the per-segment
@@ -1236,6 +1506,8 @@ void Load()
     std::string currentSectionLower;
     int currentTier = -1;          // Tracks which tier we're parsing (-1 = global settings)
     int currentSpecialTitle = -1;  // Tracks which special title we're parsing (-1 = none)
+    int currentHonorific = -1;     // Tracks which honorific we're parsing (-1 = none)
+    int currentRegister = -1;      // Tracks which register we're parsing (-1 = none)
     size_t lineNumber = 0;
     size_t malformedLineCount = 0;
     size_t unknownKeyCount = 0;
@@ -1285,6 +1557,8 @@ void Load()
                 std::string numStr = currentSection.substr(4);
                 currentTier = ParseInt(numStr, -1);
                 currentSpecialTitle = -1;  // Not in a special title section
+                currentHonorific = -1;
+                currentRegister = -1;
 
                 if (currentTier < 0 || currentTier > RenderConstants::MAX_TIER_INDEX)
                 {
@@ -1294,7 +1568,22 @@ void Load()
                 }
                 else
                 {
-                    // Dynamically grow the Tiers vector to accommodate the specified tier
+                    // Dynamically grow the Tiers vector to accommodate the specified
+                    // tier. Growing past the current size back-fills intermediate
+                    // indices with default 'Unknown' tiers (level range 1-250).
+                    // Because MatchTier() scans from index 0 and stops at the first
+                    // level-range match, those phantom tiers would shadow this (and
+                    // any higher) tier, so warn when a gap is created.
+                    const int oldTierCount = static_cast<int>(Tiers().size());
+                    if (oldTierCount < currentTier)
+                    {
+                        addWarning(currentLineNumber,
+                                   "Tier section '" + currentSection + "' leaves tiers " +
+                                       std::to_string(oldTierCount) + "-" +
+                                       std::to_string(currentTier - 1) +
+                                       " undefined; they default to 'Unknown' (level range "
+                                       "1-250) and will shadow this and higher tiers");
+                    }
                     while (static_cast<int>(Tiers().size()) <= currentTier)
                     {
                         Tiers().emplace_back();
@@ -1308,6 +1597,8 @@ void Load()
                 std::string numStr = currentSection.substr(12);
                 currentSpecialTitle = ParseInt(numStr, -1);
                 currentTier = -1;  // Not in a tier section
+                currentHonorific = -1;
+                currentRegister = -1;
 
                 if (currentSpecialTitle >= 0 &&
                     currentSpecialTitle <= RenderConstants::MAX_SPECIAL_TITLE_INDEX)
@@ -1334,10 +1625,71 @@ void Load()
                     currentSpecialTitle = -1;
                 }
             }
+            // Honorific sections like [Honorific0], [Honorific1], etc.
+            else if (currentSectionLower.size() >= 9 &&
+                     currentSectionLower.rfind("honorific", 0) == 0)
+            {
+                std::string numStr = currentSection.substr(9);
+                currentHonorific = ParseInt(numStr, -1);
+                currentTier = -1;
+                currentSpecialTitle = -1;
+                currentRegister = -1;
+
+                if (currentHonorific >= 0 &&
+                    currentHonorific <= RenderConstants::MAX_HONORIFIC_INDEX)
+                {
+                    while (static_cast<int>(Honorifics().size()) <= currentHonorific)
+                    {
+                        Honorifics().emplace_back();
+                    }
+                }
+                else
+                {
+                    addWarning(
+                        currentLineNumber,
+                        "Invalid or out-of-range honorific section '" + currentSection + "'");
+                    currentHonorific = -1;
+                }
+            }
+            // Register sections like [Register0], [Register1], etc.
+            else if (currentSectionLower.size() >= 8 &&
+                     currentSectionLower.rfind("register", 0) == 0)
+            {
+                std::string numStr = currentSection.substr(8);
+                currentRegister = ParseInt(numStr, -1);
+                currentTier = -1;
+                currentSpecialTitle = -1;
+                currentHonorific = -1;
+
+                if (currentRegister >= 0 && currentRegister <= RenderConstants::MAX_REGISTER_INDEX)
+                {
+                    const int oldCount = static_cast<int>(Registers().size());
+                    if (oldCount < currentRegister)
+                    {
+                        addWarning(currentLineNumber,
+                                   "Register section '" + currentSection + "' leaves registers " +
+                                       std::to_string(oldCount) + "-" +
+                                       std::to_string(currentRegister - 1) +
+                                       " undefined; they stay inert until given keys");
+                    }
+                    while (static_cast<int>(Registers().size()) <= currentRegister)
+                    {
+                        Registers().emplace_back();
+                    }
+                }
+                else
+                {
+                    addWarning(currentLineNumber,
+                               "Invalid or out-of-range register section '" + currentSection + "'");
+                    currentRegister = -1;
+                }
+            }
             else
             {
                 currentTier = -1;  // Non-tier section, switch to global context
                 currentSpecialTitle = -1;
+                currentHonorific = -1;
+                currentRegister = -1;
 
                 static const std::unordered_set<std::string> kKnownSections = {"",
                                                                                "general",
@@ -1348,7 +1700,16 @@ void Load()
                                                                                "visual",
                                                                                "fonts",
                                                                                "particles",
-                                                                               "occlusion"};
+                                                                               "occlusion",
+                                                                               "labels",
+                                                                               "leveldelta",
+                                                                               "icons",
+                                                                               "focus",
+                                                                               "quiet",
+                                                                               "deathrite",
+                                                                               "compat",
+                                                                               "candlelight",
+                                                                               "depthclip"};
                 if (kKnownSections.find(currentSectionLower) == kKnownSections.end())
                 {
                     ++unknownSectionCount;
@@ -1385,6 +1746,18 @@ void Load()
             currentSpecialTitle < static_cast<int>(SpecialTitles().size()))
         {
             handled = ParseSpecialTitleField(SpecialTitles()[currentSpecialTitle], key, val);
+        }
+
+        if (!handled && currentHonorific >= 0 &&
+            currentHonorific < static_cast<int>(Honorifics().size()))
+        {
+            handled = ParseHonorificField(Honorifics()[currentHonorific], key, val);
+        }
+
+        if (!handled && currentRegister >= 0 &&
+            currentRegister < static_cast<int>(Registers().size()))
+        {
+            handled = ParseRegisterField(Registers()[currentRegister], key, val);
         }
 
         if (!handled)
