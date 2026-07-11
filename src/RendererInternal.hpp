@@ -2,6 +2,7 @@
 
 #include "PCH.hpp"
 
+#include "ActorOverrides.hpp"
 #include "DebugOverlay.hpp"
 #include "RenderConstants.hpp"
 #include "Settings.hpp"
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <cctype>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -25,23 +27,18 @@
 /**
  * @namespace Renderer
  * @brief Shared internal types and state for the Renderer translation units.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * The public entry points live in Renderer.hpp.  This file declares what the five
- * translation units that include it share: Renderer.cpp (frame orchestration),
- * RendererSnapshot.cpp (game thread), RendererLayout.cpp (measurement),
- * RendererEffects.cpp (draw passes) and Deck.cpp (card capture).
+ * Public entry points are in Renderer.hpp. `_GameThread` runs on the game thread;
+ * `_RenderThread` and `...RT` run on the render thread. ActorDrawData must not hold
+ * engine pointers. Copy the published snapshot and target while holding
+ * `snapshotLock`, then release it before layout or GPU work.
  *
- * Thread affinity is part of every declaration here.  A name suffixed `_GameThread` runs on
- * the game thread only; `_RenderThread` and `...RT` run on the render thread only.
- * `ActorDrawData` is the plain-data handover between the two threads and must never hold an
- * `RE::Actor*`.
+ * When both locks are needed, acquire `Settings::Mutex()` before `snapshotLock`.
+ * The actor-override store mutex is a leaf lock: acquire no other lock while holding it.
  *
- * ## :material-swap-horizontal: Snapshot handshake
- *
- * The atomics in RendererState coalesce update requests and let a hot reload drain the
- * pipeline before Settings::Load() runs.
+ * ### :material-swap-horizontal: Snapshot handshake
  *
  * ```mermaid
  * ---
@@ -65,7 +62,7 @@
  *     RT->>RT: Draw copies the snapshot under snapshotLock
  * ```
  *
- * ## :material-vector-link: Per-label Data Derivation
+ * ### :material-vector-link: Per-label data derivation
  *
  * ```mermaid
  * ---
@@ -79,9 +76,9 @@
  *     classDef resolved fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
  *     classDef draw fill:#1a3a2a,stroke:#10b981,color:#e2e8f0
  *
- *     A[ActorDrawData<br/>game-thread facts]:::input --> R[Frame resolution]:::resolved
- *     S[RenderSettingsSnapshot<br/>immutable settings]:::input --> R
- *     C[ActorCache<br/>persistent animation state]:::state --> R
+ *     A[ActorDrawData<br/>Game-thread facts]:::input --> R[Frame resolution]:::resolved
+ *     S[RenderSettingsSnapshot<br/>Immutable settings]:::input --> R
+ *     C[ActorCache<br/>Persistent animation state]:::state --> R
  *     R -.->|advance for the next frame| C
  *     R --> D[DistanceFactors]:::resolved
  *     R --> X[ActorLabelContext<br/>and RenderSeg text]:::resolved
@@ -104,36 +101,26 @@ using Utf8Utils::Utf8CharCount;
 using Utf8Utils::Utf8Next;
 using Utf8Utils::Utf8Truncate;
 
-// ============================================================================
-// Render-thread Settings snapshot
-// ============================================================================
-
 /**
  * @struct RenderSettingsSnapshot
- * @brief Render-thread copy of the Settings values the draw path consumes.
+ * @brief Render settings owned by RendererState::cachedSnap.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Holds every mutable Settings value the per-frame draw path uses, so the render thread never
- * reads non-POD Settings globals without a lock.  `RefreshCachedSettingsSnapshot`
- * (Renderer.cpp) recaptures it under a `Settings::Mutex()` shared lock only when
- * `Settings::Generation()` advances, from `Draw()` and `PrepareDeckCaptureRT()`; in steady
- * state nothing is captured.  The copy lives at `RendererState::cachedSnap` and is passed by
- * const reference to every render-thread function.
- *
- * Two values are read from Settings directly under a shared lock instead: the Deck block
- * (`TickRT`, `PrepareDeckCaptureRT`) and the reload key (`HandleHotReload` reads
- * `Settings::Display().ReloadKey`, not the `reloadKey` member below).
+ * Recaptured under `Settings::Mutex()` when `Settings::Generation()` changes, then passed
+ * by const reference. Settings-backed views expire on refresh, even though cachedSnap lives.
+ * Build `sortedSpecialTitles` after the capture is assigned to its final owner; its pointers
+ * must refer to that owner's `specialTitles` vector.
+ * Deck settings and the reload key are read separately under that lock.
  */
 struct RenderSettingsSnapshot
 {
-    // Distance and fade
     float fadeStartDistance = .0f;
     float fadeEndDistance = .0f;
     float scaleStartDistance = .0f;
     float scaleEndDistance = .0f;
     float minimumScale = .0f;
 
-    // Outline and shadow
     float outlineWidthMin = .0f;
     float outlineWidthMax = .0f;
     float titleShadowOffsetX = .0f;
@@ -142,14 +129,12 @@ struct RenderSettingsSnapshot
     float mainShadowOffsetY = .0f;
     bool fastOutlines = false;
 
-    // Glow
     bool enableGlow = false;
     float glowRadius = .0f;
     float glowIntensity = .0f;
     int glowSamples = 0;
     float glowDivideStrength = .0f;
 
-    // Outline glow
     bool enableOutlineGlow = false;
     float outlineGlowScale = 1.6f;
     float outlineGlowAlpha = .1f;
@@ -158,7 +143,6 @@ struct RenderSettingsSnapshot
     float outlineGlowG = 1.0f;
     float outlineGlowB = 1.0f;
     bool outlineGlowTierTint = false;
-    // Dual-tone directional outline
     bool dualOutlineEnabled = false;
     float innerOutlineTint = .3f;
     float innerOutlineAlpha = .5f;
@@ -169,7 +153,6 @@ struct RenderSettingsSnapshot
     float outlineColorTint = .0f;
     float shadowColorTint = .0f;
 
-    // Soft directional drop-shadow
     bool softShadowEnabled = false;
     float softShadowDistance = 4.0f;
     float softShadowSoftness = 3.0f;
@@ -177,18 +160,15 @@ struct RenderSettingsSnapshot
     float softShadowAngle = 45.0f;
     int softShadowSamples = 12;
 
-    // Shine overlay
     bool enableShine = false;
     float shineIntensity = .35f;
     float shineFalloff = 2.0f;
     float textGlowAlpha = .0f;
 
-    // Typewriter
     bool enableTypewriter = false;
     float typewriterSpeed = .0f;
     float typewriterDelay = .0f;
 
-    // Ornaments
     bool enableOrnaments = false;
     float ornamentScale = .0f;
     float ornamentSpacing = .0f;
@@ -197,7 +177,6 @@ struct RenderSettingsSnapshot
     bool ornamentAnchorToMainLine = true;
     float ornamentOffsetY = .0f;
 
-    // Particles
     bool useParticleTextures = false;
     bool enableParticleAura = false;
     int particleCount = 0;
@@ -207,18 +186,18 @@ struct RenderSettingsSnapshot
     float particleAlpha = .0f;
     int particleBlendMode = 0;
     float particleDepthStrength = .7f;    ///< Depth drive on size, alpha, parallax [0, 1.5]
-    float particleColorWarmth = .5f;      ///< Warm/cool depth temperature mix [0, 1]
+    float particleColorWarmth = .5f;      ///< warm/cool depth temperature mix [0, 1]
     float particleGlowStrength = .28f;    ///< Additive backlight halo alpha [0, 1]
     float particleGlowSize = 2.2f;        ///< Halo radius, multiple of the sprite [1, 4]
     float particleShineThreshold = .84f;  ///< Glint sine threshold [0, 0.99]; higher = rarer
 
-    // Animation and color
     float innerTextAlpha = 1.0f;
     float outlineAlpha = 1.0f;
 
     /**
      * @struct NpcColors
      * @brief Flat white-leaning colors for NPC nameplate text.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * @see Settings::NpcColorSettings
      */
@@ -232,13 +211,11 @@ struct RenderSettingsSnapshot
     };
     NpcColors npcColors = {};
 
-    // Smoothing
     float alphaSettleTime = .0f;
     float scaleSettleTime = .0f;
     float positionSettleTime = .0f;
     float occlusionSettleTime = .0f;
 
-    // Display
     bool enableDebugOverlay = false;
     bool enableOcclusionCulling = false;
     float verticalOffset = .0f;
@@ -251,7 +228,6 @@ struct RenderSettingsSnapshot
     // Font size (paths are only used during ImGui init, not per-frame)
     float nameFontSize = .0f;
 
-    // Entrance and exit transitions
     bool enableEntrance = false;
     int entranceStyle = 0;
     float entranceDuration = .35f;
@@ -260,7 +236,6 @@ struct RenderSettingsSnapshot
     float entranceStaggerStep = .06f;
     float entranceStaggerMax = .8f;
 
-    // Visual polish settings (value copy)
     Settings::VisualSettings visual = {};
 
     // Non-POD collections (value copies - small, recaptured on generation change)
@@ -276,10 +251,10 @@ struct RenderSettingsSnapshot
 
     /**
      * @struct LabelTokens
-     * @brief Resolved text and thresholds for contextual nameplate tokens.
+     * @brief Owned text and thresholds for contextual tokens.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The values support `%r`, `%d`, and `%c`. They remain plain values so render helpers can
-     * use a `string_view` for each actor without locking the settings again.
+     * Supports `%r`, `%d`, and `%c`; actor views expire when the snapshot refreshes.
      */
     struct LabelTokens
     {
@@ -304,11 +279,10 @@ struct RenderSettingsSnapshot
 
     /**
      * @struct IconTokens
-     * @brief Resolved configuration for status-icon badges.
+     * @brief Status-icon configuration with derived colors.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * `Settings::ClampAndValidate` derives the colors. Icon names map to duotone SVG textures
-     * that `BadgeTextures` loads. Layout drops a badge when its icon is not loaded. `enabled`
-     * is false when badges are disabled or no icon folder is configured.
+     * Layout drops unloaded icons. Badges require an enabled gate and an icon folder.
      */
     struct IconTokens
     {
@@ -333,7 +307,6 @@ struct RenderSettingsSnapshot
         Settings::Color3 colDeadly{};
         Settings::Color3 colCreature{};
 
-        // Always-on neutral resting states, plus the NPC category slots.
         std::string icoNeutral;   ///< Resting relationship slot (muted)
         std::string icoHumanoid;  ///< Resting creature slot (muted)
         std::string icoEven;      ///< Resting threat slot (muted)
@@ -346,7 +319,6 @@ struct RenderSettingsSnapshot
         std::string icoCombat;
         std::string icoAlert;
         std::string icoIdle;  ///< Resting engagement slot (muted)
-        // Player slot icons.
         std::string icoSneakHidden;
         std::string icoSneakDetected;
         std::string icoSneakOff;  ///< Resting sneak slot (muted)
@@ -354,11 +326,9 @@ struct RenderSettingsSnapshot
         std::string icoNormalWeight;  ///< Resting encumbrance slot (muted)
         std::string icoWanted;
         std::string icoBountyClear;  ///< Resting bounty slot (muted)
-        // Actor rank badge (low / mid / high ladder thirds).
         std::string icoTierLow;
         std::string icoTierMid;
         std::string icoTierHigh;
-        // Lit colors for the active states.
         Settings::Color3 colGuard{};
         Settings::Color3 colMerchant{};
         Settings::Color3 colEssential{};
@@ -376,9 +346,8 @@ struct RenderSettingsSnapshot
         // icons above when enabled and the images loaded.
         bool tierBadgeImages = false;  ///< Use emblem PNGs for the tier badge
         int tierImageCount = 0;        ///< Emblem images loaded (from BadgeTextures)
-        float tierBadgeGamma = 1.8f;   ///< Top-weighting exponent (>1 = high emblems rarer)
+        float tierBadgeGamma = 1.0f;   ///< Curve exponent without a Badge key (>1 = high rarer)
         float tierBadgeScale = 1.7f;   ///< Emblem size as a multiple of the status-icon size
-        // Per-slot resting colors; each muted slot carries its own hue.
         Settings::Color3 colNeutral{};
         Settings::Color3 colHumanoid{};
         Settings::Color3 colCommoner{};
@@ -389,7 +358,7 @@ struct RenderSettingsSnapshot
         Settings::Color3 colNormalWeight{};
         Settings::Color3 colBountyClear{};
         Settings::Color3 colMuted{};  ///< Unused shared tint; no draw path reads it
-        // Per-slot enables (a disabled active state drops that actor's badge).
+        // per-slot enables (a disabled active state drops that actor's badge).
         bool relationshipEnabled = true;
         bool creatureEnabled = true;
         bool threatEnabled = true;
@@ -408,7 +377,7 @@ struct RenderSettingsSnapshot
         float mutedAlpha = 1.0f;
         float mutedDesat = 0.18f;
         // Player-only lighting block behind the badge strip and the emblem (see DrawBadges
-        // and DrawTierEmblem).  Colors are optional: empty => derive from the Name color.
+        // and DrawTierEmblem).  Colors are optional: empty => derive from the name color.
         bool playerStripBedEnabled = true;
         float playerStripBedAlpha = 0.10f;
         float playerStripBedSize = 2.6f;
@@ -469,40 +438,36 @@ struct RenderSettingsSnapshot
     bool depthClipEnabled = true;
     float depthClipFeather = 2.5f;
 
-    /// @brief Capture all render settings while a shared settings lock is held.
+    /**
+     * @fn static RenderSettingsSnapshot CaptureFromSettings()
+     * @brief Capture all render settings while a shared settings lock is held.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     static RenderSettingsSnapshot CaptureFromSettings();
 
     /**
-     * @brief Build the priority-ordered special-title pointer list.
+     * @fn void PopulateSortedSpecialTitles()
+     * @brief Sort nonempty special titles by descending priority.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The function removes entries with an empty `keywordLower` and sorts the other entries
-     * by descending priority. Call it only after the snapshot reaches its final storage
-     * location. The pointers refer to elements in `specialTitles`. Copying the snapshot after
-     * this call leaves the copy with pointers into the original snapshot.
+     * Call after the snapshot reaches its final location. Pointers alias `specialTitles`;
+     * copying this snapshot leaves the copy's pointers attached to the original.
      */
     void PopulateSortedSpecialTitles();
 };
 
-// ============================================================================
-// Structs
-// ============================================================================
-
 /**
  * @struct ActorCache
- * @brief Per-actor render-thread cache for smooth nameplate animation.
+ * @brief Render-thread animation state, keyed by FormID in RendererState::cache.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Holds the smoothed values and the animation state for one actor's plate: position, alpha,
- * scale, occlusion, entrance and exit, and the effect timers.  Keyed by formID in
- * `RendererState::cache`.  Render-thread only.
+ * Position combines a moving average with exponential smoothing. Large jumps
+ * use `Visual().LargeMovementBlend` to limit lag. The cache retains no engine pointers.
  */
 struct ActorCache
 {
-    /// Smoothed screen position: an exponential approach (positionSettleTime, or a fixed
-    /// 0.015 s for the player) blended with the posHistory moving average by
-    /// Visual().PositionSmoothingBlend.  A jump larger than Visual().LargeMovementThreshold
-    /// advances by Visual().LargeMovementBlend instead, so the head never lags a hard screen
-    /// jump.
+    /// Screen-pixel anchor after moving-average and exponential smoothing.
     ImVec2 smooth{};
     float alphaSmooth = 1.0f;      ///< Smoothed alpha for fade transitions
     float textSizeScale = 1.0f;    ///< Smoothed font scale for distance-based sizing
@@ -524,18 +489,16 @@ struct ActorCache
 
     float typewriterTime = .0f;       ///< Seconds since actor first appeared
     bool typewriterComplete = false;  ///< True when reveal animation finished
+    /// Console edits rearm reveal, temporarily disabling player/aim forced completion.
+    bool revealArmed = false;
 
     float entrancePhase = .0f;  ///< Entrance animation progress (0=start, 1=complete)
     float exitPhase = .0f;      ///< Exit animation progress (0=visible, 1=fully exited)
     bool entranceDone = false;  ///< True when entrance animation finished
 
-    /// Entrance stagger: seconds this plate still waits before its entrance begins.  A
-    /// negative value means not yet assigned; on the first frame the entrance block runs
-    /// for this plate it claims the next stagger slot in snapshot order, which is the
-    /// player first, then the camera-ray target, then the Deck target, then nearest first.
+    /// Seconds until entrance; negative means unassigned. Slots follow snapshot order.
     float entranceDelay = -1.0f;
 
-    // ---- Death fade - one-shot, replays the last live facts ----
     // It plays only for actors this cache entry saw alive; corpses first seen dead never
     // render it.  deathDone latches, so the fade never repeats for the same corpse while
     // this entry lives.
@@ -543,45 +506,33 @@ struct ActorCache
     float deathPhase = .0f;  ///< Fade progress (0=just died, 1=finished)
     bool deathDone = false;  ///< Fade finished, or cancelled on overlay wake
 
-    /// Smoothed focus state for the focus-target expanded nameplate.  Targets 1.0 while this
-    /// actor is the cone winner, 0.0 otherwise.  Drives both the ambient dim multiplier and
-    /// the title/info row fade.
+    /// Focus weight from 0 to 1; controls ambient alpha and title/info visibility.
     float focusSmooth = .0f;
 
-    /// Smoothed actor yaw used by Graffito.  Keeping the angle on the render thread avoids
-    /// visible stepping at the game-thread snapshot cadence.
+    /// Render-thread yaw smoothing hides game-thread snapshot steps.
     float graffitoYaw = .0f;
     bool graffitoYawInitialized = false;
     bool graffitoForcedFront = false;  ///< Previous live frame was held readable by the aim ray
 
-    // ---- Low-latency player pose tracking ----
     // The game thread publishes rendered-head samples.  On render frames that reuse a
     // sample, a bounded velocity estimate bridges the gap.  NPCs do not use these fields.
     RE::NiPoint3 playerPoseSample{};    ///< Last published rendered-head position (world units)
     RE::NiPoint3 playerPoseVelocity{};  ///< Estimated head velocity (world units per second)
-    /// Time of playerPoseSample, in seconds on the monotonic pose clock
-    /// (`PoseClockSeconds()`, a steady_clock epoch - not `ImGui::GetTime()`).
+    /// Sample time in PoseClockSeconds steady-clock seconds, not ImGui time.
     double playerPoseSampleTime = .0;
-    /// Measured seconds between game-thread samples.  The measurement is clamped to the
-    /// range 0.001 s to 0.050 s.  Seeded to 1/60 s and held there until a second sample
-    /// arrives.
+    /// Sample interval in seconds, clamped between 0.001 and 0.050; seeded to 1/60.
     double playerPoseInterval = 1.0 / 60.0;
     bool playerPoseInitialized = false;  ///< True once a first sample seeded the tracker
 
-    /// Smoothed HUD-compat yield state.  Targets 1.0 while another HUD mod (TrueHUD) floats
-    /// a widget over this actor, fading the plate to the configured yield alpha and back on
-    /// the same curve.  It settles on `compatYieldSettleTime`, not on the focus weight.
+    /// HUD yield weight; approaches 1 over compatYieldSettleTime while covered.
     float yieldSmooth = .0f;
 
-    // ---- Smoothed scene sample behind this plate ----
     float bgLum = -1.0f;  ///< Smoothed background luminance (-1 = no sample yet)
     float bgR = .5f;      ///< Smoothed background red
     float bgG = .5f;      ///< Smoothed background green
     float bgB = .5f;      ///< Smoothed background blue
 
-    /// Motion trail history, separate from the posHistory used for smoothing.  Stored in
-    /// world space and reprojected through the current camera each frame, so a pure camera
-    /// pan maps every ghost onto the head and only real actor movement leaves a trail.
+    /// World-space trail history; current-camera reprojection excludes camera-only motion.
     static constexpr int TRAIL_HISTORY_SIZE = 8;
     RE::NiPoint3 trailHistory[TRAIL_HISTORY_SIZE]{};  ///< Trail ghost positions (world space)
     int trailIndex = 0;                               ///< Current write index in trailHistory
@@ -591,12 +542,11 @@ struct ActorCache
     std::string cachedNameLower;  ///< Pre-lowered name for special title matching
 
     /**
-     * @brief Add a screen-position sample and compute the ring-buffer mean.
+     * @fn ImVec2 AddAndGetSmoothed(const ImVec2& pos)
+     * @brief Append a screen-pixel sample and return the filled ring-buffer mean.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The first call returns the new sample without modification.
-     *
-     * @param pos  Screen position to add.
-     * @return     The unweighted mean of the filled part of the ring buffer.
+     * The first call returns the sample unchanged.
      */
     ImVec2 AddAndGetSmoothed(const ImVec2& pos)
     {
@@ -625,7 +575,8 @@ struct ActorCache
 
 /**
  * @enum RelationshipKind
- * @brief Player-relationship channel for the `%r` token and the badge strip.
+ * @brief Player-relationship channel for the %r token and the badge strip.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
  * Also selects the folio glass tint and the NPC text support tint
@@ -641,25 +592,25 @@ enum class RelationshipKind : std::uint8_t
 
 /**
  * @enum LevelDelta
- * @brief Actor level relative to player level, for the `%d` token.
+ * @brief Actor level relative to player level for the %d token.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * The three thresholds live in `Settings::Labels()` and default to <=-5, >=+5 and >=+10.
- * `Settings::ClampAndValidate()` requires WeakAtOrBelow < StrongAtOrAbove < DeadlyAtOrAbove
- * and resets all three to those defaults when the order is broken.  The bounds are otherwise
- * free, so the Even band is not symmetric unless the user configures it that way.
+ * `Settings::Labels()` requires WeakAtOrBelow < StrongAtOrAbove < DeadlyAtOrAbove.
+ * Invalid ordering restores -5, +5, +10. The Even band need not be symmetric.
  */
 enum class LevelDelta : std::uint8_t
 {
-    Weak,    ///< delta <= WeakAtOrBelow
+    Weak,    ///< Delta <= WeakAtOrBelow
     Even,    ///< WeakAtOrBelow < delta < StrongAtOrAbove (the band width is user-defined)
     Strong,  ///< StrongAtOrAbove <= delta < DeadlyAtOrAbove
-    Deadly   ///< delta >= DeadlyAtOrAbove (tested first, so it wins over Strong)
+    Deadly   ///< Delta >= DeadlyAtOrAbove (tested first, so it wins over Strong)
 };
 
 /**
  * @enum CreatureKind
- * @brief Coarse actor classification for the `%c` token.
+ * @brief Coarse actor classification for the %c token.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
  * Derived from the `ActorTypeX` keyword set.  NPC is the fallback when no creature keyword
@@ -677,6 +628,7 @@ enum class CreatureKind : std::uint8_t
 /**
  * @enum RoleKind
  * @brief Social role for the NPC role badge slot.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
  * Commoner is the muted default; Guard and Merchant render lit.  Derived from `IsGuard()`
@@ -692,6 +644,7 @@ enum class RoleKind : std::uint8_t
 /**
  * @enum ProtectionKind
  * @brief Invulnerability status for the protection badge slot.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
  * Mortal is the muted default.  Essential overrides Protected when both flags are set.
@@ -706,6 +659,7 @@ enum class ProtectionKind : std::uint8_t
 /**
  * @enum EngagementKind
  * @brief Awareness state for the engagement badge slot.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
  * One mutually exclusive axis: combat supersedes alert, alert supersedes idle.  Idle is
@@ -714,13 +668,14 @@ enum class ProtectionKind : std::uint8_t
 enum class EngagementKind : std::uint8_t
 {
     Idle,   ///< Not in combat, not alerted - muted
-    Alert,  ///< Aware/searching proxy (weapon drawn + detects player)
+    Alert,  ///< aware/searching proxy (weapon drawn + detects player)
     Combat  ///< IsInCombat()
 };
 
 /**
  * @enum SneakKind
  * @brief Player stealth state for the sneak badge slot.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
  * Off is the muted default (not sneaking); Hidden and Detected render lit while sneaking.
@@ -734,57 +689,50 @@ enum class SneakKind : std::uint8_t
 
 /**
  * @struct ActorDrawData
- * @brief Plain-data description of one actor, handed from game to render thread.
+ * @brief Actor facts published from the game thread to the render thread.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Every fact the render thread needs about an actor is resolved on the game thread and stored
- * here.  The struct holds no engine pointer, so the render thread can read it after the game
- * thread has moved on.
- *
- * A dead actor is published as a bare marker: identity, pose, targeting bounds, heading,
- * distance, level, uniqueness and `isDead`.  The contextual facts below (relationship, level
- * delta, creature kind, badge slots, honorific, occlusion, yield) keep their default values
- * for a corpse, because the death fade replays that actor's last live
- * `RendererState::lastDrawData` entry instead.
+ * Contains no engine pointers. Dead actors publish identity, pose, targeting bounds,
+ * heading, distance, level, uniqueness and `isDead` only. Death fades use the last live
+ * `RendererState::lastDrawData` entry for contextual facts.
+ * Override records own their strings, so frame copies can outlive the store and
+ * release the last record reference on the render thread.
  */
 struct ActorDrawData
 {
-    uint32_t formID{0};       ///< Actor's form ID (unique identifier)
+    uint32_t formID{0};       ///< actor's form ID (unique identifier)
     RE::NiPoint3 worldPos{};  ///< Nameplate anchor above the head, in world units
     RE::NiPoint3 feetPos{};   ///< Actor root/feet position for portrait framing
-    /// Center of the actor's rendered world bound, or a height-derived sphere center when the
-    /// 3D root is absent or its bound radius is outside [4, 4096] world units.
+    /// Rendered world-bound center; absent 3D or radius below 4 or above 4096 uses actor height.
     RE::NiPoint3 raycastCenter{};
     float raycastRadius{.0f};   ///< Radius of that sphere, in world units
     float headingRadians{.0f};  ///< Actor world yaw, captured on the game thread
-    /// Time of the worldPos and feetPos sample, in seconds on the monotonic pose clock
-    /// (a steady_clock epoch).  The render thread extrapolates the player pose from it.
+    /// worldPos/feetPos sample time in steady-clock seconds for player extrapolation.
     double poseSampleTime{.0};
     std::string name;         ///< Display name (capitalized); may be empty for an NPC
-    uint16_t level{0};        ///< Actor's level
+    uint16_t level{0};        ///< actor's level
     float distToPlayer{.0f};  ///< Distance to the player in world units; 0 for the player
     bool isPlayer{false};     ///< Whether this is the player character
     bool deckOnly{false};     ///< Extra crosshair target retained only for card capture
     bool isUnique{false};     ///< Unique actor base; eligible for collectible rarity rolls
     bool isOccluded{false};   ///< Line-of-sight result; stays false when occlusion is off
-    /// Actor is dead - triggers the death fade,
-    /// which replays the last live facts
+    /// Death marker; rendering replays cached live facts.
     bool isDead{false};
 
-    /// Faction-earned honorific, resolved on the game thread; empty means none.  It replaces
-    /// the tier title in the title slot, but a special title still wins.
+    /// Empty means none; replaces tier title, below special-title precedence.
     std::string honorific;
 
-    // ---- HUD-compat facts (resolved on the game thread) ----
+    /// Immutable override record owned across frame copies; null means no override.
+    std::shared_ptr<const ActorOverrides::Record> overrides;
+
     bool yieldPlate{false};  ///< TrueHUD floats a bar here - fade the plate out
     bool yieldLevel{false};  ///< moreHUD shows this target's level - drop ours
 
-    // ---- Contextual nameplate facts (resolved on game thread) ----
     RelationshipKind relationship{RelationshipKind::Neutral};  ///< %r token source
     LevelDelta levelDelta{LevelDelta::Even};                   ///< %d token source
     CreatureKind creatureKind{CreatureKind::NPC};              ///< %c token source
 
-    // ---- Status badge facts (resolved on the game thread) ----
     // NPC slots: role, protection, engagement.  Player slots: sneak, playerInCombat,
     // encumbered, wanted.  Each drives one always-on badge.
     RoleKind role{RoleKind::Commoner};                  ///< NPC role badge
@@ -798,11 +746,12 @@ struct ActorDrawData
 
 /**
  * @struct ComposedBadgeSlot
- * @brief One actor-fact badge before texture lookup and screen-space layout.
+ * @brief Badge facts before texture lookup and layout.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * `icon` views into the active `RenderSettingsSnapshot`, so a slot is valid only while that
- * snapshot lives.
+ * `icon` aliases the active settings snapshot or `ActorOverrides::Record`.
+ * Both owners must outlive the slot; settings views also expire on snapshot refresh.
  */
 struct ComposedBadgeSlot
 {
@@ -815,21 +764,19 @@ struct ComposedBadgeSlot
 };
 
 /**
- * @brief Maximum number of badges in one composition.
+ * @brief Seven NPC slots plus RenderConstants::MAX_EXTRA_BADGES.
  *
- * Seven is the exact NPC slot count that `ComposeBadges` produces: rank, relationship,
- * creature, role, protection, threat, and engagement. Raise this value before adding an
- * eighth NPC slot. The mutators silently drop a slot that exceeds the capacity.
+ * Increase the base capacity when adding an NPC slot. Overflow is silently discarded.
  */
-inline constexpr int MAX_BADGE_SLOTS = 7;
+inline constexpr int MAX_BADGE_SLOTS = 7 + RenderConstants::MAX_EXTRA_BADGES;
 
 /**
  * @struct BadgeComposition
- * @brief Fixed-capacity ordered badge set shared by nameplates and Deck cards.
+ * @brief Ordered badges shared by nameplates and Deck cards.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * The mutators fail silently: a slot that does not fit, or that carries no icon, is discarded
- * without a diagnostic.
+ * Mutators silently discard empty icons and slots beyond capacity.
  */
 struct BadgeComposition
 {
@@ -837,14 +784,9 @@ struct BadgeComposition
     int count = 0;                             ///< Filled slot count, at most MAX_BADGE_SLOTS
 
     /**
-     * @brief Append one status badge slot.
-     *
-     * Ignored when the set is full or @p icon is empty.
-     *
-     * @param icon   Duotone icon name resolved later by BadgeTextures.
-     * @param color  Semantic tint for the slot.
-     * @param muted  True to draw the resting (dimmed, desaturated) treatment.
-     * @param pulse  True to breathe the alpha (used by the Deadly threat slot).
+     * @fn void push(std::string_view icon, Settings::Color3 color, bool muted, bool pulse = false)
+     * @brief Append a status badge with optional muted tint and alpha pulse.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void push(std::string_view icon, Settings::Color3 color, bool muted, bool pulse = false)
     {
@@ -855,14 +797,10 @@ struct BadgeComposition
     }
 
     /**
-     * @brief Append the rank identity slot as an icon.
-     *
-     * Ignored when the set is full or @p icon is empty.
-     *
-     * @param icon   Duotone icon name for the rank band (low / mid / high).
-     * @param color  Tint for the rank band.
-     * @param muted  True to draw the resting treatment.
-     * @param pulse  True to breathe the alpha.
+     * @fn void pushRank(std::string_view icon, Settings::Color3 color, bool muted, bool pulse =
+     *     false)
+     * @brief Append an icon as the rank identity slot.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void pushRank(std::string_view icon, Settings::Color3 color, bool muted, bool pulse = false)
     {
@@ -873,13 +811,11 @@ struct BadgeComposition
     }
 
     /**
-     * @brief Append the rank identity slot as a full-color emblem image.
+     * @fn void pushTierImage(bool enabled, int imageIndex)
+     * @brief Append a full-color rank emblem.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Ignored when @p enabled is false, the set is full, or @p imageIndex is
-     * negative.
-     *
-     * @param enabled     Rank badge gate (`IconTokens::tierEnabled`).
-     * @param imageIndex  Emblem image index; negative means no emblem resolved.
+     * Ignored when disabled, full, or `imageIndex` is negative.
      */
     void pushTierImage(bool enabled, int imageIndex)
     {
@@ -892,117 +828,93 @@ struct BadgeComposition
 
 /**
  * @struct OcclusionCacheEntry
- * @brief Cached line-of-sight result for one actor, keyed by formID.
+ * @brief Game-thread line-of-sight cache keyed by FormID.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * A fresh check runs only after `Settings::Occlusion().CheckInterval` snapshot updates (at
- * least 1) have passed; every snapshot in between reuses the cached result.  Entries are
- * created only while occlusion culling is enabled, and every snapshot prunes the map down to
- * the actors it just saw.  Game-thread state, held in `GetOcclusionCache()`.
+ * Checks are separated by at least one snapshot and `Settings::Occlusion().CheckInterval`.
+ * Each snapshot prunes unseen actors. Entries exist only while culling is enabled.
  */
 struct OcclusionCacheEntry
 {
-    /// SnapshotState::frame (game thread - not RendererState::frame) at the last
-    /// line-of-sight check.  0 means never checked, and forces a fresh check.
+    /// Last game-thread SnapshotState::frame checked; zero forces a fresh check.
     uint32_t lastCheckFrame{0};
     bool cachedOccluded{false};  ///< Result of that check; reused until the interval expires
 };
 
 /**
  * @struct RendererState
- * @brief Aggregates the renderer's mutable state behind GetState().
+ * @brief Mutable renderer state behind GetState().
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Members are render-thread-only unless noted; game-thread writes go through `snapshotLock`
- * or through atomics.  Three further mutable stores are declared in this header, each behind
- * its own accessor: `GetOcclusionCache()` (game thread), `OverlapOffsets()` (render thread)
- * and `GetSnapshotState()` (game thread).  RendererSnapshot.cpp adds one more, a file-local
- * honorific cache behind `GetHonorificRuntime()`, also game thread.
+ * Render-thread only unless noted. Game-thread writes require `snapshotLock` or atomics.
+ * Draw gates and the active register are published independently of the actor snapshot;
+ * they can describe a newer collection pass. Only snapshot and target form one locked pair.
  */
 struct RendererState
 {
-    // ---- Cache ----
     std::unordered_map<uint32_t, ActorCache> cache;  ///< Per-actor animation cache, keyed by formID
     std::unordered_map<uint32_t, ActorDrawData>
         lastDrawData;    ///< Last live draw data; the death fade and exit animation replay it
     uint32_t frame = 0;  ///< Render-thread frame counter
 
-    // ---- Snapshot and thread safety ----
     std::vector<ActorDrawData> snapshot;  ///< Current actor draw data; guarded by snapshotLock
-    /// FormID of the aimed reference, guarded by snapshotLock.  The game thread resolves it
-    /// only when moreHUD level-yield or Deck is enabled, so it is 0 otherwise.
+    /// snapshotLock guards this FormID. Zero unless moreHUD level-yield or Deck resolves it.
     uint32_t crosshairTarget = 0;
     std::mutex snapshotLock;                        ///< Publishes snapshot and target together
     std::atomic<bool> updateQueued{false};          ///< True while a game-thread update is pending
     std::atomic<bool> pauseSnapshotUpdates{false};  ///< Suppress updates during reload
-    /// RaceMenu rename: the next drawn frame drops the player cache entry so the new name
-    /// re-reveals through the typewriter.  The player plate skips the entrance, so only the
-    /// reveal replays.
+    /// Next draw drops the player cache entry and restarts name reveal.
     std::atomic<bool> pendingIdentityRefresh{false};
     std::atomic<bool> snapshotUpdateRunning{false};         ///< Game-thread update is active
     std::atomic<bool> clearOcclusionCacheRequested{false};  ///< Request to clear occlusion cache
 
-    // ---- Frame state ----
     bool wasInInvalidState = true;  ///< True if previous frame was in an invalid game state
     int postLoadCooldown = 0;       ///< Frames remaining in post-load cooldown
 
-    // ---- Overlay wake - staggered re-entry ----
-    /// Set when the overlay resumes after suppression (combat, menus, loads).  The next
-    /// drawn frame re-arms every visible plate's entrance and typewriter reveal.  The
-    /// entrance block then hands out stagger slots in snapshot order, not by distance.
+    /// Rearm visible entrances/typewriters on wake; assign stagger slots in snapshot order.
     bool wakeReplayPending = false;
-    /// Entrances that began this frame; each new start claims the next stagger slot.  Reset
-    /// at the top of every drawn frame.
+    /// Stagger slots claimed this frame; reset before drawing.
     int entrancesStartedThisFrame = 0;
 
-    // ---- Camera-motion quieting ----
     // Smoothed quiet factors in [0,1] driven by camera angular speed: 0 = settled, 1 = fully
     // quiet.  The envelope is asymmetric (Quiet().AttackTime rising, the per-row release time
     // falling), so a pan quiets fast and resolves back slowly.
     RE::NiPoint3 prevCamForward{};  ///< Camera forward on the previous frame
     bool prevCamValid = false;      ///< prevCamForward holds a real sample
-    /// Name-row quiet factor.  Advanced every frame, but no draw path reads it yet; it exists
-    /// so the name row can opt into thinning (Quiet().NameFloor is likewise unreferenced).
+    /// Advanced each frame but unused by drawing, as is Quiet().NameFloor.
     float quietName = .0f;
-    /// Sub-line quiet factor, and the only one consumed.  A live or exiting plate scales the
-    /// title row and the badge strip by 1 - quietSub; the dying plate scales the info row and
-    /// the badge strip.  Name, level and particles stay at full alpha on every path.
+    /// Folds title/badges on live and exit plates, info/badges during death rites.
     float quietSub = .0f;
 
-    // ---- Context-conditional setting profiles ----
     // The game thread publishes the active register index each snapshot; the render thread
     // eases its effective values toward that register's values (or the 1/1/1/0 base state)
     // so transitions ramp instead of snapping.
     std::atomic<int> activeRegister{-1};  ///< Index into snapshot registers, -1 = none
     float regAlphaMul = 1.0f;             ///< Smoothed overlay-wide alpha multiplier
-    /// Smoothed alpha-fade distance multiplier.  Scales `fadeStartDistance` and
-    /// `fadeEndDistance` only; the font-scale distances are not affected.
+    /// Multiplies fadeStartDistance/fadeEndDistance, excluding font-scale distances.
     float regFadeMul = 1.0f;
     float regSubLineMul = 1.0f;  ///< Smoothed sub-line alpha multiplier
     float regHideNeutral = .0f;  ///< Smoothed neutral/ally plate hide factor
 
-    /// True while this frame's draws are depth-clipped (depth SRV located, polarity
-    /// resolved).  Render-thread only.
+    /// True when depth SRV and polarity resolve for this render frame.
     bool depthClipFrame = false;
 
-    // ---- Debug stats ----
     DebugOverlay::Stats debugStats;   ///< Debug overlay performance metrics
     float lastDebugUpdateTime = .0f;  ///< Time of last debug stats refresh
     int updateCounter = 0;            ///< Total snapshot updates since startup
     int lastUpdateCount = 0;          ///< Update counter at last debug refresh
 
-    // ---- Hot reload ----
     bool reloadKeyWasDown = false;             ///< Previous frame's reload key state
     float lastReloadTime = -10.0f;             ///< Time of last settings reload
     std::atomic<bool> reloadRequested{false};  ///< Render thread requests reload
     std::atomic<bool> reloadCompleted{false};  ///< Set by game thread when async Load() finishes
 
-    // ---- Overlay gates ----
     // allowOverlay and allowDeck are published by UpdateSnapshot_GameThread.
     std::atomic<bool> allowOverlay{false};  ///< True when game state allows overlay
     std::atomic<bool> allowDeck{false};     ///< World is safe for an explicit card capture
-    /// User master switch.  Written only by ToggleEnabled() and SetEnabled(), which are
-    /// reachable from the console command handler only.
+    /// Manual gate written by ToggleEnabled and SetEnabled.
     std::atomic<bool> manualEnabled{true};
 
     /// Cached settings snapshot (re-captured only when Settings::Generation() changes).
@@ -1013,6 +925,7 @@ struct RendererState
 /**
  * @struct RenderSeg
  * @brief One formatted text segment on the main or info nameplate line.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  */
 struct RenderSeg
@@ -1029,16 +942,15 @@ struct RenderSeg
 };
 
 /**
- * @brief Scale newly emitted vertices horizontally around a text anchor.
+ * @fn inline void ScaleNewVerticesX(ImDrawList* drawList, int firstVertex, float anchorX, float
+ *     horizontalScale)
+ * @brief Scale emitted vertices horizontally around the text anchor.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ImGui has no horizontal scale for one draw call. This operation keeps a fitted name fill,
- * outline, glow, shadow, and animated effect coincident. A null draw list or a scale of
- * 0.9999 or more causes no change. A negative first vertex is clamped to zero.
+ * Keeps fitted text aligned across all draw passes. Null lists and scales >= 0.9999
+ * cause no change. Negative `firstVertex` clamps to zero.
  *
- * @param drawList         Draw list that owns the vertices.
- * @param firstVertex      First vertex to scale.
- * @param anchorX          Horizontal scaling origin, in screen pixels.
- * @param horizontalScale  Horizontal scale factor.
+ * @param anchorX Horizontal origin, in screen pixels.
  */
 inline void ScaleNewVerticesX(ImDrawList* drawList,
                               int firstVertex,
@@ -1061,11 +973,11 @@ inline void ScaleNewVerticesX(ImDrawList* drawList,
 
 /**
  * @struct BadgeDrawItem
- * @brief One resolved status badge icon, fully positioned during layout.
+ * @brief Loaded badge texture and screen-pixel layout.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Color carries no alpha: DrawBadges packs it with the per-frame style alpha (plus the
- * Deadly pulse) at draw time.
+ * Color has no alpha; DrawBadges applies frame alpha and the Deadly pulse.
  */
 struct BadgeDrawItem
 {
@@ -1081,14 +993,12 @@ struct BadgeDrawItem
 
 /**
  * @struct ActorLabelContext
- * @brief Resolved actor-fact values passed to FormatString for one expansion.
+ * @brief Frame-local views for FormatString.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * The views have two different owners.  `relationship`, `levelDelta` and `creatureKind`
- * point into `RenderSettingsSnapshot::labels`, which is stable until `Settings::Generation()`
- * advances.  `name` points into the caller's `ActorDrawData`, which lives in the render
- * thread's frame-local copy of the snapshot, or at a static " " literal when the actor name
- * is empty.  The whole context is therefore valid only inside the frame that built it.
+ * Relationship, delta and creature views alias the settings snapshot. `name` aliases
+ * the frame's ActorDrawData or a static space for an empty name. Owners must outlive use.
  */
 struct ActorLabelContext
 {
@@ -1098,19 +1008,17 @@ struct ActorLabelContext
     std::string_view relationship;  ///< Resolved %r label
     std::string_view levelDelta;    ///< Resolved %d label
     std::string_view creatureKind;  ///< Resolved %c label
-    std::uint32_t formID = 0;       ///< For deterministic per-actor effects in future tokens
+    std::uint32_t formID = 0;       ///< Actor identity; current token expansion does not use it.
 };
 
 /**
  * @struct LabelStyle
- * @brief All color, tier, and effect data computed once per label.
+ * @brief Colors and effects resolved once per label.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Colors resolve once per label into per-role values (name, level, title) plus per-role text
- * effects.  The player uses the tier palette exactly as authored in the INI.  NPC names stay
- * white while their title and level reuse the matched tier's level colors, and the NPC
- * colors supply the relationship and support tints.  Draw code applies the resolved style
- * uniformly and has no per-actor color branches.
+ * Player colors use the tier palette. NPC names stay white; title and level use tier
+ * level colors. NPC colors supply relationship and support tints.
  */
 struct LabelStyle
 {
@@ -1118,7 +1026,6 @@ struct LabelStyle
     const Settings::TierDefinition* tier;  ///< Matched tier, or GetFallbackTier(); never null
     const Settings::SpecialTitleDefinition* specialTitle;  ///< Matched special title, or null
 
-    // ---- Resolved per-role text effects (tier effects, or None for NPCs) ----
     const Settings::EffectParams* nameEffect;
     const Settings::EffectParams* levelEffect;
     const Settings::EffectParams* titleEffect;
@@ -1138,8 +1045,8 @@ struct LabelStyle
     ImVec4 specialGlowColor;  ///< Special title glow color.
 
     float alpha;        ///< Plate alpha for the main line, after distance fade and dimming
-    float titleAlpha;   ///< alpha * Visual().TitleAlphaMultiplier
-    float levelAlpha;   ///< alpha * Visual().LevelAlphaMultiplier
+    float titleAlpha;   ///< Alpha * Visual().TitleAlphaMultiplier
+    float levelAlpha;   ///< Alpha * Visual().LevelAlphaMultiplier
     float effectAlpha;  ///< Alpha for the effect layers: alpha scaled by the tier level band
     float strength;     ///< Effect strength multiplier from tier intensity and level position
     float phase01;      ///< Animation phase in [0,1]; seeded per formID so plates desynchronize
@@ -1160,26 +1067,22 @@ struct LabelStyle
     float baseOutlineWidth;  ///< OutlineWidthMin + OutlineWidthMax, before per-row scaling
     float distToPlayer;      ///< Distance to the player in game units (~70 per metre)
 
-    /// Extra alpha multiplier for the info row and only the info row, so it can be hidden on
-    /// ambient actors and faded in on focus changes.  1.0 = no effect, 0.0 = fully hidden.
+    /// Info-row opacity from 0 to 1; focus hides it on ambient actors.
     float infoAlphaMul = 1.0f;
 
-    /// Extra alpha multiplier for the status badge strip.  Camera-motion quieting folds the
-    /// strip away with the title during fast pans; the name and level stay at full alpha.
+    /// Badge opacity multiplier; folds the strip during camera pans.
     float badgeAlphaMul = 1.0f;
 
     /**
-     * @brief Scale the base outline width for one row's font size.
+     * @fn float CalcOutlineWidth(float fontSize, const RenderSettingsSnapshot& snap) const
+     * @brief Scale outline width for a row's font size.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The font-size ratio is floored at `RenderConstants::OUTLINE_MIN_SCALE`, so a very
-     * small row keeps a visible outline.  Applies the optional distance ramp between
-     * `fadeStartDistance` and `fadeEndDistance` when `Visual().EnableDistanceOutlineScale`
-     * is set.  The ramp uses the unscaled snapshot distances, so the active register's fade
-     * multiplier does not move it.
+     * The size ratio floors at `RenderConstants::OUTLINE_MIN_SCALE`. The optional distance
+     * ramp uses snapshot fade distances; register multipliers do not change it.
      *
-     * @param fontSize  Scaled font size of the row, in pixels.
-     * @param snap      Active render settings snapshot.
-     * @return Outline width in pixels.
+     * @param fontSize Row font size, in pixels.
+     * @return Outline width, in pixels.
      */
     float CalcOutlineWidth(float fontSize, const RenderSettingsSnapshot& snap) const
     {
@@ -1200,18 +1103,12 @@ struct LabelStyle
 
 /**
  * @struct LabelLayout
- * @brief Text measurement, font selection, and position data for one label.
+ * @brief Measured text and positions in screen pixels, with y downward.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Coordinates are in screen pixels (Y increases downward).  `startPos` is the plate anchor
- * and every other position derives from it.  It is seeded from `ActorCache::smooth` (the
- * smoothed projection, not a raw `WorldToScreen` result), then shifted in X by the configured
- * horizontal optical-centering correction scaled by the plate's text scale, then shifted in Y
- * by this actor's `OverlapOffsets()` entry when `Visual().EnableOverlapPrevention` is set.
- *
- * Two conventions coexist: the row offsets (titleY, mainLineY, infoLineY) are relative to
- * `startPos`, while the nameplate bounds (nameplateTop, nameplateLeft, nameplateCenter, ...)
- * are absolute screen pixels.
+ * `startPos` is the smoothed anchor plus scaled optical centering and overlap offsets.
+ * Row offsets are relative to it; nameplate bounds are absolute.
  */
 struct LabelLayout
 {
@@ -1246,7 +1143,7 @@ struct LabelLayout
     ImVec2 titleSize;             ///< Measured size of titleDisplayStr
 
     ImVec2 startPos;  ///< Plate anchor in screen pixels (see the struct doc)
-    // The three row offsets below are relative to startPos.y, not absolute screen Y: a draw
+    // the three row offsets below are relative to startPos.y, not absolute screen y: a draw
     // site adds startPos.y.  mainLineY and titleY are negative (rows sit above the anchor)
     // and infoLineY is positive.
     float titleY;           ///< Y offset of the title line top
@@ -1255,17 +1152,15 @@ struct LabelLayout
     float totalWidth;       ///< Width of the widest of title/main/info line
 
     ImVec2 nameplateCenter;  ///< Center of the nameplate bounding box
-    float nameplateTop;      ///< Top edge of nameplate (screen Y)
-    float nameplateBottom;   ///< Bottom edge of nameplate (screen Y)
-    float nameplateLeft;     ///< Left edge of nameplate (screen X)
-    float nameplateRight;    ///< Right edge of nameplate (screen X)
+    float nameplateTop;      ///< Top edge of nameplate (screen y)
+    float nameplateBottom;   ///< Bottom edge of nameplate (screen y)
+    float nameplateLeft;     ///< Left edge of nameplate (screen x)
+    float nameplateRight;    ///< Right edge of nameplate (screen x)
     float nameplateWidth;    ///< Total nameplate width in pixels
     float nameplateHeight;   ///< Total nameplate height in pixels
     float mainLineCenterY;   ///< Vertical center of main line (for ornament anchoring)
 
-    /// Text-only bounds, captured before badges and emblems expand the nameplate* fields.
-    /// Stored relative to startPos, so later world anchoring and animation move them with no
-    /// extra bookkeeping.
+    /// Text bounds before badge expansion, relative to startPos for later transforms.
     ImVec2 textBoundsMin{};
     ImVec2 textBoundsMax{};
 };
@@ -1273,6 +1168,7 @@ struct LabelLayout
 /**
  * @struct DistanceFactors
  * @brief Distance-based fade, LOD, and scale factors for one label.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  */
 struct DistanceFactors
@@ -1283,226 +1179,189 @@ struct DistanceFactors
     float lodEffectsFactor;  ///< LOD multiplier for particles/ornaments [0,1]
 };
 
-// ============================================================================
-// Snapshot state (game-thread only)
-// ============================================================================
-
 /**
  * @struct SnapshotState
- * @brief Mutable state used only while collecting a snapshot on the game thread.
+ * @brief Game-thread collection state behind GetSnapshotState().
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
- *
- * Held behind `GetSnapshotState()` rather than at namespace scope, per the CONTRIBUTING rule
- * "avoid non-trivial global state".
  */
 struct SnapshotState
 {
-    /// Game-thread snapshot counter, incremented once per published snapshot.  This is the
-    /// counter OcclusionCacheEntry::lastCheckFrame stores, not the render-thread
-    /// RendererState::frame.  Reset to 0 when the occlusion cache is cleared.
+    /// Game-thread counter stored by OcclusionCacheEntry; resets on cache clear.
     uint32_t frame = 0;
     RE::BGSKeyword* npcKeyword = nullptr;    ///< Cached ActorTypeNPC keyword for creature filtering
     bool npcKeywordLookupAttempted = false;  ///< True after first keyword lookup attempt
     bool npcKeywordMissingLogged = false;    ///< True after logging keyword-not-found warning
 };
-/// @brief Return the game-thread snapshot-state singleton.
+/**
+ * @fn SnapshotState& GetSnapshotState()
+ * @brief Return the game-thread snapshot-state singleton.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 SnapshotState& GetSnapshotState();
 
-/**
- * @brief Alias of the reload-notification duration in the Renderer namespace.
- *
- * No renderer translation unit reads this value. `DebugOverlay` uses the value from
- * `RenderConstants` directly.
- */
+/// Unused alias; DebugOverlay reads RenderConstants directly.
 inline constexpr float RELOAD_NOTIFICATION_DURATION = RenderConstants::RELOAD_NOTIFICATION_DURATION;
 
-// ============================================================================
-// Accessors
-// ============================================================================
-
-/// @brief Return the renderer-state singleton.
+/**
+ * @fn RendererState& GetState()
+ * @brief Return the renderer-state singleton.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 RendererState& GetState();
 
-/// @brief Return the game-thread per-actor occlusion cache.
+/**
+ * @fn std::unordered_map<uint32_t, OcclusionCacheEntry>& GetOcclusionCache()
+ * @brief Return the game-thread per-actor occlusion cache.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::unordered_map<uint32_t, OcclusionCacheEntry>& GetOcclusionCache();
 
-/// @brief Return render-thread overlap offsets keyed by FormID.
+/**
+ * @fn std::unordered_map<uint32_t, float>& OverlapOffsets()
+ * @brief Return render-thread overlap offsets keyed by FormID.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::unordered_map<uint32_t, float>& OverlapOffsets();
 
-// ============================================================================
-// Shared helpers
-// ============================================================================
-
 /**
- * @brief Project a world position to screen coordinates.
+ * @fn bool WorldToScreen(const RE::NiPoint3& worldPos, RE::NiPoint3& screenPos, RE::NiPoint3*
+ *     cameraPosOut = nullptr)
+ * @brief Project world coordinates to screen pixels.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Render-thread helper.  It reads `RE::Main::WorldRootCamera()` and
- * `RE::BSGraphics::Renderer::GetSingleton()` directly, which makes it one of the few
- * render-thread functions that touches `RE::*` state.  Both reads are null-guarded, so the
- * function fails closed.
+ * Render-thread exception: reads the world camera and BSGraphics renderer singletons.
+ * Missing singletons or a point on/behind the camera plane return false.
  *
- * @param worldPos  World-space position.
- * @param[out] screenPos  Projection result: x and y in screen pixels with y increasing
- *        downward, z as viewport depth in [0,1].  Left untouched when the function returns
- *        false.
- * @param[out] cameraPosOut  Optional camera world position.  It is written as soon as the
- *        world camera resolves, so it can be filled even on a false return.
- * @return true when the point could be projected.  False when the world camera is missing,
- *         when `RE::NiCamera::WorldPtToScreenPt3` rejects the point (behind or on the camera
- *         plane), or when the BSGraphics renderer is missing.  A true result is not
- *         bounds-checked: the caller must reject z outside [0,1] and x/y outside the viewport.
+ * @param[out] screenPos x/y pixels with y downward; viewport depth z. Unchanged on failure.
+ * @param[out] cameraPosOut Optional camera position; may be written even on failure.
+ * @return Projection success. Callers must reject depth outside [0,1] and offscreen x/y.
  */
 bool WorldToScreen(const RE::NiPoint3& worldPos,
                    RE::NiPoint3& screenPos,
                    RE::NiPoint3* cameraPosOut = nullptr);
 
-// ============================================================================
-// Snapshot functions (RendererSnapshot.cpp)
-// ============================================================================
-
 /**
- * @brief Convert ASCII words to title case and preserve UTF-8 byte sequences.
+ * @fn std::string Capitalize(const char* text)
+ * @brief Title-case ASCII words without changing UTF-8 sequences.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Multi-byte codepoints remain unchanged. A character after a multi-byte codepoint does not
- * start a new word. The function trims leading and trailing spaces, tabs, carriage returns,
- * and line feeds.
+ * A multibyte codepoint does not start a new word. Trims outer spaces, tabs, CR and LF.
  *
- * @param text  Null-terminated UTF-8 text. The pointer can be null.
- * @return      The converted text, or an empty string for null, empty, or whitespace-only
- *              input.
+ * @param text Null-terminated UTF-8; null yields an empty string.
  */
 std::string Capitalize(const char* text);
 
 /**
- * @brief Collect and publish visible actor data on the game thread.
+ * @fn void UpdateSnapshot_GameThread()
+ * @brief Collect actor facts and publish draw gates on the game thread.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Two passes: a cheap distance filter over every high-process actor, then full derivation
- * (name, relationship, badges, honorific, occlusion) for the kept plates only.  The kept set
- * is ordered by distance, except that the Graffito camera-ray target sorts first and the
- * Deck crosshair target sorts second when it needs the extra private slot.  The player
- * entry, when one is published, precedes that whole set.
+ * Distance filtering precedes full derivation. Priority is player, camera-ray target,
+ * private Deck target, then distance. Publishes `crosshairTarget` under `snapshotLock`
+ * and `activeRegister`; prunes occlusion and honorific caches.
  *
- * Also publishes the `allowOverlay` and `allowDeck` gate atomics - the overlay cannot
- * bootstrap until this function runs - plus `crosshairTarget` under the same lock and
- * `activeRegister`.  It services `clearOcclusionCacheRequested` and prunes the occlusion and
- * honorific per-actor caches down to the actors it just saw. When `pauseSnapshotUpdates` is
- * set, or when the game state allows neither the overlay nor a Deck capture, it clears the
- * gates and the snapshot, then returns without scanning.
+ * A pause clears both gates and the snapshot. Closed draw gates clear the snapshot
+ * without scanning. A missing player or process list also clears the snapshot and Deck gate.
+ * Gate publication precedes actor collection; it does not certify a completed snapshot.
  */
 void UpdateSnapshot_GameThread();
 
 /**
- * @brief Schedule a game-thread snapshot update.
+ * @fn void QueueSnapshotUpdate_RenderThread()
+ * @brief Queue at most one game-thread snapshot task.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The render thread calls this function through the SKSE task interface. Requests coalesce
- * through `updateQueued`, so at most one game-thread task is active. The function clears the
- * flag when `UpdateSnapshot_GameThread` finishes. It does nothing while
- * `pauseSnapshotUpdates` is set. If the task interface is unavailable, it clears the queued
- * flag so a later frame can retry.
+ * Render-thread only. `updateQueued` clears on completion or a missing SKSE interface.
+ * Does nothing while `pauseSnapshotUpdates` is set.
  */
 void QueueSnapshotUpdate_RenderThread();
 
-// ============================================================================
-// Focus selection (Renderer.cpp)
-// ============================================================================
-
 /**
- * @brief Select the actor nearest the center of the configured focus cone.
+ * @fn uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap, const
+ *     RenderSettingsSnapshot& snapSettings)
+ * @brief Select the eligible actor nearest the focus-cone center.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * This render-thread function reads the camera pose through `Occlusion::GetCameraInfo`. It
- * returns zero when focus is disabled, the snapshot is empty, the camera pose is unavailable,
- * or no actor qualifies.
+ * Render-thread camera read uses `Occlusion::GetCameraInfo`. Skips players, dead actors,
+ * Deck-only entries and disallowed occlusion. Camera distance must be >= 1 world unit;
+ * a configured maximum <= 0 adds no limit. Ties use dot product, player distance, FormID.
  *
- * The function skips the player, dead actors, Deck-only entries, and disallowed occluded
- * actors. It also skips actors closer than one world unit to the camera or farther than the
- * configured maximum. A maximum of zero or less applies no additional distance limit. The
- * cone and distance tests use the camera position. The tie-break uses player distance.
- *
- * Ties are resolved by the higher dot product, then the smaller player distance, then the
- * lower FormID.
- *
- * @param snap          Actor snapshot to search.
- * @param snapSettings  Render settings that contain the focus configuration.
- * @return              The selected actor FormID, or zero when no actor qualifies.
+ * @return FormID, or zero if disabled, camera unavailable, or no actor qualifies.
  */
 uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
                             const RenderSettingsSnapshot& snapSettings);
 
-// ============================================================================
-// Layout functions (RendererLayout.cpp)
-// ============================================================================
-
 /**
- * @brief Measure the tightest vertical glyph bounds for text.
+ * @fn void CalcTightYBoundsFromTop( ImFont* font, float fontSize, const char* text, float& outTop,
+ *     float& outBottom)
+ * @brief Measure tight vertical glyph bounds.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param font       Font used for measurement.
- * @param fontSize   Font size, in pixels.
- * @param text       Null-terminated UTF-8 text.
- * @param outTop     Receives the topmost glyph offset, in pixels.
- * @param outBottom  Receives the bottommost glyph offset, in pixels.
+ * @param fontSize Font size, in pixels.
+ * @param text Null-terminated UTF-8.
+ * @param outTop Top glyph offset, in pixels.
+ * @param outBottom Bottom glyph offset, in pixels.
  */
 void CalcTightYBoundsFromTop(
     ImFont* font, float fontSize, const char* text, float& outTop, float& outBottom);
 
 /**
- * @brief Expand nameplate placeholders in one format string.
+ * @fn std::string FormatString(const std::string& fmt, const ActorLabelContext& ctx)
+ * @brief Expand nameplate placeholders once.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function replaces `%n`, `%l`, `%t`, `%r`, `%d`, and `%c` with values from the supplied
- * `ActorLabelContext`. Replacement is single-pass, so placeholders
- * embedded in substitution values are not expanded.
- *
- * `%t` expands only when `ctx.title` is non-null; otherwise the literal text `%t` stays in
- * the output.  Every other token always substitutes.  An unrecognised `%` sequence and a
- * trailing `%` are copied through unchanged.
- *
- * @param fmt  Format string to expand.
- * @param ctx  Actor values used for substitution.
- * @return     The expanded string.
+ * Substitutes `%n`, `%l`, `%t`, `%r`, `%d`, `%c` without expanding replacement text.
+ * Null `ctx.title` preserves `%t`. Unknown sequences and a trailing `%` stay literal.
  */
 std::string FormatString(const std::string& fmt, const ActorLabelContext& ctx);
 
 /**
- * @brief Return the fallback tier definition.
- *
- * The function initializes the value on the first call. Callers use it when no tiers are
- * configured.
- *
- * @return The shared fallback tier definition.
+ * @fn const Settings::TierDefinition& GetFallbackTier()
+ * @brief Shared fallback used when no tiers are configured.
+ * @author Alex (<https://github.com/lextpf>)
  */
 const Settings::TierDefinition& GetFallbackTier();
 
 /**
- * @brief Compose the ordered status-badge set for one actor.
+ * @fn BadgeComposition ComposeBadges(const ActorDrawData& d, const
+ *     RenderSettingsSnapshot::IconTokens& cfg, int tierIdx, int tierCount, bool includeRank = true,
+ *     int explicitBadge = 0)
+ * @brief Compose ordered status badges for nameplates or cards.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Slot order is rank, relationship, creature, role, protection, threat, engagement for an
- * NPC (7 slots, the MAX_BADGE_SLOTS budget) and rank, sneak, engagement, encumbered, bounty
- * for the player (5).  Every enabled slot is emitted: a resting fact is marked muted rather
- * than dropped. Returns an empty set when `IconTokens::enabled` is false.
+ * | Actor  | Slot order                                                         |
+ * |--------|--------------------------------------------------------------------|
+ * | NPC    | Rank, relationship, creature, role, protection, threat, engagement |
+ * | Player | Rank, sneak, engagement, encumbered, bounty                        |
  *
- * @param d            Actor facts to classify.
- * @param cfg          Resolved icon configuration.
- * @param tierIdx      Matched tier index used for the rank band.
- * @param tierCount    Configured tier count. One or less selects the lowest rank band.
- * @param includeRank  Whether to include the rank slot.
- * @return             The ordered fixed-capacity badge set.
+ * Resting slots are muted. Empty icons are dropped. Overrides can hide, force, replace,
+ * or append `RenderConstants::MAX_EXTRA_BADGES` lit extras. Forced states obey INI gates.
+ * Disabled icons yield an empty set.
+ *
+ * Render-thread only: views alias `cfg` or `*d.overrides`; both must outlive the result. Settings
+ * views expire on snapshot refresh. Do not call ActorOverrides::Get or build views from temporary
+ * strings.
+ *
+ * @param tierCount <= 1 selects the lowest rank band.
+ * @param explicitBadge One-based manifest emblem from the tier Badge key. Zero or an entry past
+ *     the loaded emblems selects the TierBadgeGamma curve.
  */
 BadgeComposition ComposeBadges(const ActorDrawData& d,
                                const RenderSettingsSnapshot::IconTokens& cfg,
                                int tierIdx,
                                int tierCount,
-                               bool includeRank = true);
+                               bool includeRank = true,
+                               int explicitBadge = 0);
 
 /**
- * @brief Compute all resolved style data for one actor label.
+ * @fn LabelStyle ComputeLabelStyle(const ActorDrawData& d, const std::string& nameLower, float
+ *     alpha, float time, const RenderSettingsSnapshot& snap)
+ * @brief Resolve tier, colors, effect gates and phase for one label.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The result includes tier matching, color adjustment, effect gating, and animation phase.
- *
- * @param d          Actor facts.
- * @param nameLower  Lowercase actor name for special-title matching.
- * @param alpha      Current plate alpha.
- * @param time       Animation clock, in seconds.
- * @param snap       Immutable render settings.
- * @return           The resolved label style.
+ * @param nameLower Lowercase name for special-title matching.
+ * @param time Animation clock, in seconds.
  */
 LabelStyle ComputeLabelStyle(const ActorDrawData& d,
                              const std::string& nameLower,
@@ -1511,22 +1370,14 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
                              const RenderSettingsSnapshot& snap);
 
 /**
- * @brief Measure text and compute all positions for one actor label.
+ * @fn LabelLayout ComputeLabelLayout(const ActorDrawData& d, ActorCache& entry, const LabelStyle&
+ *     style, float textSizeScale, const RenderSettingsSnapshot& snap, int forcedCharsToShow = -1)
+ * @brief Measure text and position a label after typewriter truncation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function builds segments, applies typewriter truncation, measures the title and main
- * line, and computes the nameplate bounding box.
- * Returns a default-constructed layout when any of the three plate fonts is missing, which
- * happens before the font atlas is built.  A null `fontName` in the result therefore means
- * there is nothing to draw, and the rest of the layout carries no meaning.
+ * Missing plate fonts return an empty layout with null `fontName`; no other field is valid.
  *
- * @param d                  Actor facts.
- * @param entry              Mutable per-actor animation cache.
- * @param style              Resolved label style.
- * @param textSizeScale      Distance-based text scale.
- * @param snap               Immutable render settings.
- * @param forcedCharsToShow  Character budget override. A negative value uses the cache-driven
- *                           typewriter state.
- * @return                   The measured label layout.
+ * @param forcedCharsToShow Negative uses the cache-driven typewriter budget.
  */
 LabelLayout ComputeLabelLayout(const ActorDrawData& d,
                                ActorCache& entry,
@@ -1536,15 +1387,12 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
                                int forcedCharsToShow = -1);
 
 /**
- * @brief Apply one stage of the death-rite color transition.
+ * @fn void ApplyDeathRiteTint(LabelStyle& style, const ImVec4& target, float mixT, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Blend resolved colors toward target and reduce effect strength.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function moves each resolved style color toward `target` by `mixT`, reduces effect
- * strength, and repacks draw-ready colors. Repeated calls can create a multi-stop ramp.
- *
- * @param style   Label style to modify.
- * @param target  Target transition color.
- * @param mixT    Blend factor.
- * @param snap    Immutable render settings.
+ * Repacks draw colors. Repeated calls form a multi-stop death-rite ramp.
  */
 void ApplyDeathRiteTint(LabelStyle& style,
                         const ImVec4& target,
@@ -1552,36 +1400,23 @@ void ApplyDeathRiteTint(LabelStyle& style,
                         const RenderSettingsSnapshot& snap);
 
 /**
- * @brief Adapt resolved text colors to the sampled scene.
+ * @fn void ApplyCandlelight(LabelStyle& style, float bgLum, const float bgRGB[3], const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Dim text over bright scenes and lift/warm it over dark scenes.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function dims text over bright backgrounds and lifts and warms it over dark backgrounds.
- * It then repacks the draw-ready colors.
- * `bgLum` and `bgRGB` are the smoothed per-actor scene sample; adjustments are capped by
- * `snap.candleStrength`.  Pure color math, mirrored in tests/test_utils.cpp (CandleAdjust);
- * keep the mapping in sync.
- *
- * @param style  Label style to modify.
- * @param bgLum  Smoothed background luminance.
- * @param bgRGB  Smoothed background RGB channels.
- * @param snap   Immutable render settings.
+ * Uses smoothed `bgLum` and `bgRGB`; adjustment is capped by `snap.candleStrength`.
+ * Repacks draw colors. Keep CandleAdjust in tests/test_utils.cpp synchronized.
  */
 void ApplyCandlelight(LabelStyle& style,
                       float bgLum,
                       const float bgRGB[3],
                       const RenderSettingsSnapshot& snap);
 
-// ============================================================================
-// Effects functions (RendererEffects.cpp)
-// ============================================================================
-
 /**
- * @brief Resolve an optional positive effect parameter.
- *
- * An unconfigured effect parameter is zero and selects the fallback.
- *
- * @param p         Configured effect parameter.
- * @param fallback  Value to use when `p` is not positive.
- * @return          `p` when positive, or `fallback` otherwise.
+ * @fn constexpr float ParamOr(float p, float fallback)
+ * @brief Use fallback when the configured effect parameter is not positive.
+ * @author Alex (<https://github.com/lextpf>)
  */
 constexpr float ParamOr(float p, float fallback)
 {
@@ -1589,28 +1424,25 @@ constexpr float ParamOr(float p, float fallback)
 }
 
 /**
- * @brief Select and apply one configured text effect.
+ * @fn void ApplyTextEffect(ImDrawList* drawList, ImFont* font, float fontSize, ImVec2 pos, const
+ *     char* text, const Settings::EffectParams& effect, ImU32 colL, ImU32 colR, ImU32 highlight,
+ *     ImU32 outlineColor, float outlineWidth, float phase01, float strength, float textSizeScale,
+ *     float alpha, bool fastOutlines, const TextEffects::OutlineGlowParams* outlineGlow = nullptr,
+ *     const TextEffects::DualOutlineParams* dualOutline = nullptr, const TextEffects::WaveParams*
+ *     wave = nullptr, const TextEffects::ShineParams* shine = nullptr)
+ * @brief Dispatch one configured text effect.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param drawList      Target draw list.
- * @param font          Font for the text.
- * @param fontSize      Scaled font size in pixels.
- * @param pos           Screen-space draw position.
- * @param text          Null-terminated UTF-8 string.
- * @param effect        Effect parameters (type, speed, etc.).
- * @param colL          Left gradient color (packed).
- * @param colR          Right gradient color (packed).
- * @param highlight     Shimmer/sparkle highlight color (packed).
- * @param outlineColor  Outline color (packed, alpha-scaled).
- * @param outlineWidth  Outline thickness in pixels.
- * @param phase01       Animation phase in [0,1].
- * @param strength      Effect strength multiplier.
- * @param textSizeScale Distance-based text scale factor.
- * @param alpha         Overall alpha multiplier.
- * @param fastOutlines  Use 4-dir outlines instead of 8-dir.
- * @param outlineGlow   Optional outline-glow configuration.
- * @param dualOutline   Optional dual-outline configuration.
- * @param wave          Optional wave-displacement configuration.
- * @param shine         Optional top-edge shine configuration.
+ * @param fontSize Font size, in pixels.
+ * @param pos Screen-pixel anchor.
+ * @param text Null-terminated UTF-8.
+ * @param outlineWidth Outline thickness, in pixels.
+ * @param phase01 Animation phase in [0,1].
+ * @param fastOutlines Selects four directions instead of eight.
+ * @param outlineGlow Optional outline glow.
+ * @param dualOutline Optional dual outline.
+ * @param wave Optional wave displacement.
+ * @param shine Optional top-edge shine.
  */
 void ApplyTextEffect(ImDrawList* drawList,
                      ImFont* font,
@@ -1634,16 +1466,10 @@ void ApplyTextEffect(ImDrawList* drawList,
                      const TextEffects::ShineParams* shine = nullptr);
 
 /**
- * @brief Draw the soft halo behind a complete nameplate.
- *
- * The function uses the glow layer, so the halo remains behind particles, outlines, and text.
- *
- * @param dl              ImGui draw list.
- * @param style           Resolved label style.
- * @param layout          Resolved label layout.
- * @param lodTitleFactor  Distance-based title visibility factor.
- * @param splitter        Draw-list channel splitter.
- * @param snap            Immutable render settings.
+ * @fn void DrawBackgroundGlow(ImDrawList* dl, const LabelStyle& style, const LabelLayout& layout,
+ *     float lodTitleFactor, ImDrawListSplitter* splitter, const RenderSettingsSnapshot& snap)
+ * @brief Draw the halo on the glow layer, behind particles, outlines and text.
+ * @author Alex (<https://github.com/lextpf>)
  */
 void DrawBackgroundGlow(ImDrawList* dl,
                         const LabelStyle& style,
@@ -1653,21 +1479,15 @@ void DrawBackgroundGlow(ImDrawList* dl,
                         const RenderSettingsSnapshot& snap);
 
 /**
- * @brief Draw the particle aura and ornament glyphs for one nameplate.
+ * @fn void DrawParticlesAndOrnaments(ImDrawList* dl, const ActorDrawData& d, const LabelStyle&
+ *     style, const LabelLayout& layout, float lodEffectsFactor, float time, ImDrawListSplitter*
+ *     splitter, bool fastOutlines, const RenderSettingsSnapshot& snap)
+ * @brief Draw aura and ornaments with shared geometry.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function computes the shared ornament geometry once, so the aura sizing and ornament
- * draw pass use the same result. The effect applies only to the player unless a special title
- * forces it.
+ * Player only unless a special title forces the effect.
  *
- * @param dl                ImGui draw list.
- * @param d                 Actor facts.
- * @param style             Resolved label style.
- * @param layout            Resolved label layout.
- * @param lodEffectsFactor  Distance-based effect visibility factor.
- * @param time              Animation clock, in seconds.
- * @param splitter          Draw-list channel splitter.
- * @param fastOutlines      Whether to use four-direction outlines.
- * @param snap              Immutable render settings.
+ * @param time Animation clock, in seconds.
  */
 void DrawParticlesAndOrnaments(ImDrawList* dl,
                                const ActorDrawData& d,
@@ -1680,15 +1500,11 @@ void DrawParticlesAndOrnaments(ImDrawList* dl,
                                const RenderSettingsSnapshot& snap);
 
 /**
- * @brief Draw the title line above the main nameplate line.
- *
- * @param dl              ImGui draw list.
- * @param style           Resolved label style.
- * @param layout          Resolved label layout.
- * @param lodTitleFactor  Distance-based title visibility factor.
- * @param splitter        Draw-list channel splitter.
- * @param fastOutlines    Whether to use four-direction outlines.
- * @param snap            Immutable render settings.
+ * @fn void DrawTitleText(ImDrawList* dl, const LabelStyle& style, const LabelLayout& layout, float
+ *     lodTitleFactor, ImDrawListSplitter* splitter, bool fastOutlines, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Draw the title above the main line.
+ * @author Alex (<https://github.com/lextpf>)
  */
 void DrawTitleText(ImDrawList* dl,
                    const LabelStyle& style,
@@ -1699,14 +1515,10 @@ void DrawTitleText(ImDrawList* dl,
                    const RenderSettingsSnapshot& snap);
 
 /**
- * @brief Draw each segment of the main nameplate line.
- *
- * @param dl            ImGui draw list.
- * @param style         Resolved label style.
- * @param layout        Resolved label layout.
- * @param splitter      Draw-list channel splitter.
- * @param fastOutlines  Whether to use four-direction outlines.
- * @param snap          Immutable render settings.
+ * @fn void DrawMainLineSegments(ImDrawList* dl, const LabelStyle& style, const LabelLayout& layout,
+ *     ImDrawListSplitter* splitter, bool fastOutlines, const RenderSettingsSnapshot& snap)
+ * @brief Draw the main line's formatted segments.
+ * @author Alex (<https://github.com/lextpf>)
  */
 void DrawMainLineSegments(ImDrawList* dl,
                           const LabelStyle& style,
@@ -1716,16 +1528,10 @@ void DrawMainLineSegments(ImDrawList* dl,
                           const RenderSettingsSnapshot& snap);
 
 /**
- * @brief Draw the contextual information row below the main line.
- *
- * The function does nothing when no segment remains after drop-if-blank trimming.
- *
- * @param dl            ImGui draw list.
- * @param style         Resolved label style.
- * @param layout        Resolved label layout.
- * @param splitter      Draw-list channel splitter.
- * @param fastOutlines  Whether to use four-direction outlines.
- * @param snap          Immutable render settings.
+ * @fn void DrawInfoLineSegments(ImDrawList* dl, const LabelStyle& style, const LabelLayout& layout,
+ *     ImDrawListSplitter* splitter, bool fastOutlines, const RenderSettingsSnapshot& snap)
+ * @brief Draw the info row when segments remain after drop-if-blank trimming.
+ * @author Alex (<https://github.com/lextpf>)
  */
 void DrawInfoLineSegments(ImDrawList* dl,
                           const LabelStyle& style,
@@ -1735,23 +1541,14 @@ void DrawInfoLineSegments(ImDrawList* dl,
                           const RenderSettingsSnapshot& snap);
 
 /**
- * @brief Draw resolved status-badge textures around the main line.
+ * @fn void DrawBadges(ImDrawList* dl, const LabelStyle& style, const LabelLayout& layout,
+ *     ImDrawListSplitter* splitter, bool fastOutlines, const RenderSettingsSnapshot& snap, bool
+ *     restrainedWorld = false)
+ * @brief Draw badges whose textures were resolved during layout.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function does nothing when layout
- * produced no badge items; icons whose `BadgeTextures` lookup failed are already dropped
- * during `ComputeLabelLayout`, so no font or texture check happens here.
- *
- * `restrainedWorld` is set for Graffito world planes: it suppresses the player lighting
- * block, the player rim light, and the badge glow geometry, and leaves only the crisp icon
- * quads.
- *
- * @param dl                ImGui draw list.
- * @param style             Resolved label style.
- * @param layout            Resolved label layout.
- * @param splitter          Draw-list channel splitter.
- * @param fastOutlines      Whether to use four-direction outlines.
- * @param snap              Immutable render settings.
- * @param restrainedWorld  Whether to suppress screen-space badge lighting.
+ * `restrainedWorld` suppresses player lighting, rim light and glow for Graffito planes.
+ * Only crisp icon quads remain.
  */
 void DrawBadges(ImDrawList* dl,
                 const LabelStyle& style,
@@ -1762,18 +1559,20 @@ void DrawBadges(ImDrawList* dl,
                 bool restrainedWorld = false);
 
 /**
- * @brief Draw the rank emblem above the status-icon strip.
+ * @fn void DrawTierEmblem(ImDrawList* dl, const LabelStyle& style, const LabelLayout& layout, float
+ *     time, ImDrawListSplitter* splitter, const RenderSettingsSnapshot& snap, bool restrainedWorld
+ *     = false)
+ * @brief Draw the rank emblem above the status strip.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Screen-space plates receive a soft bloom. Restrained world planes draw only the crisp
- * emblem.
+ * `restrainedWorld` suppresses screen-space bloom.
  *
- * @param dl                ImGui draw list.
- * @param style             Resolved label style.
- * @param layout            Resolved label layout.
- * @param time              Animation clock, in seconds.
- * @param splitter          Draw-list channel splitter.
- * @param snap              Immutable render settings.
- * @param restrainedWorld  Whether to suppress screen-space emblem lighting.
+ * The emblem alpha is the style alpha times `badgeAlphaMul` times IconOpacity, clamped to 1,
+ * which matches the status-icon row. The crisp mark then scales that alpha by EmblemCrispAlpha.
+ * With EmblemBacklightEnabled and a soft-glow texture available, the backlight, key and fill
+ * alphas scale the glow; otherwise three enlarged copies of the mark stand in at fixed factors.
+ *
+ * @param time Animation clock, in seconds.
  */
 void DrawTierEmblem(ImDrawList* dl,
                     const LabelStyle& style,
@@ -1783,45 +1582,37 @@ void DrawTierEmblem(ImDrawList* dl,
                     const RenderSettingsSnapshot& snap,
                     bool restrainedWorld = false);
 
-// ============================================================================
-// Coordinator functions (Renderer.cpp)
-// ============================================================================
-
 /**
- * @brief Get a loaded ImGui font by index.
+ * @fn ImFont* GetFontAt(int index)
+ * @brief Resolve a font slot with the first loaded font as fallback.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param index  Font index.
- * @return       The indexed font, or the default font when the index is invalid.
+ * @return A font borrowed from the current ImGui atlas, or null when no font is loaded.
+ * @pre An initialized ImGui context on the render thread.
  */
 ImFont* GetFontAt(int index);
 
 /**
- * @brief Remove stale actor entries from the render cache.
+ * @fn void PruneCacheToSnapshot(const std::vector<ActorDrawData>& snap)
+ * @brief Prune unseen cache and lastDrawData entries.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The grace period is `RenderConstants::CACHE_GRACE_FRAMES` (60 frames, about 1 s at 60
- * fps), extended to three times that while an entry is mid-exit (0 < exitPhase < 1) so a
- * dying plate finishes.  The extended ceiling stops a mid-exit entry from leaking if exit
- * animations are switched off.  Removing an entry also erases the actor's `lastDrawData`
- * replay entry.
- *
- * @param snap  Current actor snapshot.
+ * Grace is `CACHE_GRACE_FRAMES`, tripled during exit (0 < exitPhase < 1).
+ * The finite ceiling also removes entries when exit animations are disabled.
  */
 void PruneCacheToSnapshot(const std::vector<ActorDrawData>& snap);
 
 /**
+ * @fn float ExpApproachAlpha(float dt, float settleTime, float epsilon = .01f)
  * @brief Compute a frame-rate-independent exponential smoothing factor.
- *
- * Returns alpha in [0,1] for use as `current = lerp(current, target, alpha)`:
+ * @author Alex (<https://github.com/lextpf>)
  *
  * $$\alpha = 1 - \epsilon^{\,dt / settleTime}$$
  *
- * @param dt          Frame delta in seconds; a negative value is clamped to 0.
- * @param settleTime  Seconds for the residual to fall to @p epsilon of the initial delta;
- *                    floored at 1e-5, so 0 snaps in one frame.  Passing milliseconds
- *                    saturates alpha at 1.0 and silently disables the smoothing.
- * @param epsilon     Convergence threshold (default 0.01 = settle to 1% of the initial
- *                    delta).
- * @return Smoothing factor in [0,1].
+ * @param dt Frame delta, in seconds; negatives clamp to zero.
+ * @param settleTime Seconds to reach the residual threshold; floored at 1e-5.
+ * @param epsilon Finite residual fraction in (0, 1); 0.01 leaves 1% of the initial delta.
+ * @return Factor in [0,1] for `current = lerp(current, target, alpha)`.
  */
 float ExpApproachAlpha(float dt, float settleTime, float epsilon = .01f);
 
