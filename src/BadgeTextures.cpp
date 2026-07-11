@@ -24,46 +24,73 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
+/**
+ * @fn std::mutex& Mutex()
+ * @brief Access the mutex for badge texture maps.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::mutex& Mutex()
 {
     static std::mutex m;
     return m;
 }
 
+/**
+ * @fn std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>>& Map()
+ * @brief Access owned status icon resources by filename stem.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>>& Map()
 {
     static std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>> m;
     return m;
 }
 
+/**
+ * @fn std::atomic<bool>& Initialized()
+ * @brief Access the atomic status icon initialization flag.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::atomic<bool>& Initialized()
 {
     static std::atomic<bool> b{false};
     return b;
 }
 
-// Full-color prestige emblem textures for the tier badge (index 0..N-1),
-// separate from the tinted SVG mask Map() above.
+/**
+ * @fn std::vector<ComPtr<ID3D11ShaderResourceView>>& TierImages()
+ * @brief Access owned rank textures in ladder order.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::vector<ComPtr<ID3D11ShaderResourceView>>& TierImages()
 {
     static std::vector<ComPtr<ID3D11ShaderResourceView>> v;
     return v;
 }
 
+/**
+ * @fn std::atomic<int>& TierImageCountAtomic()
+ * @brief Access the rank-slot count published for lock-free queries.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::atomic<int>& TierImageCountAtomic()
 {
     static std::atomic<int> n{0};
     return n;
 }
 
-// Fraction of the canvas the trimmed emblem fills, so every emblem reads at the
-// same on-screen size regardless of its own transparent margin.
+// Trimmed content fraction; transparent margins must not change apparent emblem size.
 constexpr float TIER_IMG_FILL = .92f;
 
-// Rasterize <path> into a centered square float-alpha mask.
-// The SVG's own layer opacities (duotone secondary .4, primary 1.0) land in the
-// alpha; an icon whose strongest layer is translucent is normalized so its peak
-// alpha is 1.0. Returns false when the file does not parse or the mask is empty.
+/**
+ * @fn bool RasterizeIcon(NSVGrasterizer* rast, const std::string& path, std::vector<float>&
+ *     outAlpha)
+ * @brief Rasterize a centered SVG mask and normalize its peak opacity.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Center the SVG alpha mask and normalize peak alpha to 1.0. False on parse failure
+ * or an empty mask.
+ */
 bool RasterizeIcon(NSVGrasterizer* rast, const std::string& path, std::vector<float>& outAlpha)
 {
     NSVGimage* img = nsvgParseFromFile(path.c_str(), "px", 96.0f);
@@ -77,10 +104,7 @@ bool RasterizeIcon(NSVGrasterizer* rast, const std::string& path, std::vector<fl
         return false;
     }
 
-    // The duotone secondary layer ships at opacity .4, so half of every icon
-    // rasterizes at 40% and reads faint. Lift any translucent shape to the floor
-    // before rasterizing; the primary layer (1.0) is untouched, and the peak
-    // normalization below keeps the strongest layer at 1.0.
+    // Lift faint secondary layers to the floor; preserve opaque primary layers.
     constexpr float kSecondaryOpacityFloor = .80f;
     for (NSVGshape* shape = img->shapes; shape != nullptr; shape = shape->next)
     {
@@ -122,9 +146,14 @@ bool RasterizeIcon(NSVGrasterizer* rast, const std::string& path, std::vector<fl
     return true;
 }
 
-// Create a mipmapped white-RGBA texture from a float alpha mask (same
-// pipeline as the procedural particle sprites: 2x2 box reduction in float,
-// black RGB on fully transparent texels).
+/**
+ * @fn ComPtr<ID3D11ShaderResourceView> CreateBadgeTexture(ID3D11Device* device, std::vector<float>
+ *     levelAlpha)
+ * @brief Create white icon textures with alpha mip levels and black empty texels.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * 2x2 float box mips; transparent texels use black RGB for screen blending.
+ */
 ComPtr<ID3D11ShaderResourceView> CreateBadgeTexture(ID3D11Device* device,
                                                     std::vector<float> levelAlpha)
 {
@@ -208,8 +237,14 @@ ComPtr<ID3D11ShaderResourceView> CreateBadgeTexture(ID3D11Device* device,
     return srv;
 }
 
-// Decode a PNG into tightly-packed 32bpp RGBA via WIC.  RGB on fully
-// transparent texels is zeroed so downscales cannot bleed hidden color.
+/**
+ * @fn bool LoadPngRGBA(IWICImagingFactory* wic, const std::string& path, std::vector<uint8_t>&
+ *     outPixels, int& outW, int& outH)
+ * @brief Decode packed RGBA pixels and clear color in transparent texels.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * WIC decodes packed RGBA; clear hidden RGB to prevent color bleed during downscaling.
+ */
 bool LoadPngRGBA(IWICImagingFactory* wic,
                  const std::string& path,
                  std::vector<uint8_t>& outPixels,
@@ -255,7 +290,7 @@ bool LoadPngRGBA(IWICImagingFactory* wic,
     {
         return false;
     }
-    // Sanity cap (~64 MP) so a bad file cannot request an enormous buffer.
+    // Cap decoded images at about 64 MP to bound allocation.
     if (static_cast<uint64_t>(w) * static_cast<uint64_t>(h) > (1ull << 26))
     {
         return false;
@@ -281,9 +316,15 @@ bool LoadPngRGBA(IWICImagingFactory* wic,
     return true;
 }
 
-// Trim the emblem to its opaque bounding box and area-resample it (alpha-
-// weighted, so transparent margins never darken edges) into a centered NxN
-// straight-alpha float RGBA canvas filling TIER_IMG_FILL of the square.
+/**
+ * @fn bool BuildTierBase(const std::vector<uint8_t>& src, int sw, int sh, std::vector<float>& out,
+ *     int N)
+ * @brief Crop opaque bounds and resample a centered rank emblem.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Trim opaque bounds and area-resample into an NxN straight-alpha canvas.
+ * Alpha weighting prevents transparent margins from darkening edges.
+ */
 bool BuildTierBase(const std::vector<uint8_t>& src, int sw, int sh, std::vector<float>& out, int N)
 {
     if (sw <= 0 || sh <= 0)
@@ -365,8 +406,14 @@ bool BuildTierBase(const std::vector<uint8_t>& src, int sw, int sh, std::vector<
     return true;
 }
 
-// Create a mipmapped full-color RGBA texture from a straight-alpha float base
-// (alpha-weighted 2x2 reduction; RGB zeroed on empty texels).
+/**
+ * @fn ComPtr<ID3D11ShaderResourceView> CreateRGBATexture(ID3D11Device* device, std::vector<float>
+ *     base, int size)
+ * @brief Create rank textures with alpha-weighted mip levels.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Alpha-weighted 2x2 mips; clear RGB on empty texels.
+ */
 ComPtr<ID3D11ShaderResourceView> CreateRGBATexture(ID3D11Device* device,
                                                    std::vector<float> base,
                                                    int size)
@@ -463,30 +510,31 @@ ComPtr<ID3D11ShaderResourceView> CreateRGBATexture(ID3D11Device* device,
     }
     return srv;
 }
-}  // namespace
 
-bool Initialize(ID3D11Device* device,
-                const std::string& folder,
-                const std::vector<std::string>& names)
+/**
+ * @fn int LoadIconsLocked(ID3D11Device* device, const std::string& folder, const
+ *     std::vector<std::string>& names, int& requested)
+ * @brief Load missing icon names while retaining existing resources.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Add unloaded, nonempty names; requested counts attempts. Caller holds Mutex().
+ * Returns the number loaded.
+ *
+ * @pre Hold Mutex for the complete call.
+ */
+int LoadIconsLocked(ID3D11Device* device,
+                    const std::string& folder,
+                    const std::vector<std::string>& names,
+                    int& requested)
 {
-    const std::lock_guard<std::mutex> lock(Mutex());
-    Map().clear();
-
-    if (!device || folder.empty())
-    {
-        Initialized().store(true, std::memory_order_release);
-        return false;
-    }
-
+    requested = 0;
     NSVGrasterizer* rast = nsvgCreateRasterizer();
     if (!rast)
     {
-        Initialized().store(true, std::memory_order_release);
-        return false;
+        return 0;
     }
 
     int loaded = 0;
-    int requested = 0;
     for (const auto& name : names)
     {
         if (name.empty() || Map().contains(name))
@@ -512,10 +560,45 @@ bool Initialize(ID3D11Device* device,
         ++loaded;
     }
     nsvgDeleteRasterizer(rast);
+    return loaded;
+}
+}  // namespace
 
+bool Initialize(ID3D11Device* device,
+                const std::string& folder,
+                const std::vector<std::string>& names)
+{
+    const std::lock_guard<std::mutex> lock(Mutex());
+    Map().clear();
+
+    if (!device || folder.empty())
+    {
+        Initialized().store(true, std::memory_order_release);
+        return false;
+    }
+
+    int requested = 0;
+    const int loaded = LoadIconsLocked(device, folder, names, requested);
     SKSE::log::info("BadgeTextures: loaded {}/{} badge icons from '{}'", loaded, requested, folder);
     Initialized().store(true, std::memory_order_release);
     return loaded > 0;
+}
+
+int AddIcons(ID3D11Device* device, const std::string& folder, const std::vector<std::string>& names)
+{
+    if (!device || folder.empty() || names.empty())
+    {
+        return 0;
+    }
+    const std::lock_guard<std::mutex> lock(Mutex());
+    int requested = 0;
+    const int loaded = LoadIconsLocked(device, folder, names, requested);
+    if (requested > 0)
+    {
+        SKSE::log::info(
+            "BadgeTextures: added {}/{} override icons from '{}'", loaded, requested, folder);
+    }
+    return loaded;
 }
 
 bool IsInitialized()
@@ -563,9 +646,7 @@ int InitializeTierImages(ID3D11Device* device, const std::vector<std::string>& p
         return 0;
     }
 
-    // Push one entry per rank (nullptr on failure) so emblem-to-rank alignment
-    // survives a bad file; a fully-empty set is cleared below to trigger the FA
-    // fallback.
+    // Retain failed rank slots; clear an entirely failed set to enable fa fallback.
     int loaded = 0;
     for (const std::string& path : paths)
     {
@@ -593,7 +674,7 @@ int InitializeTierImages(ID3D11Device* device, const std::vector<std::string>& p
 
     if (loaded == 0)
     {
-        TierImages().clear();  // nothing usable -> fall back to the FA tier icons
+        TierImages().clear();  // nothing usable -> fall back to the fa tier icons
     }
     TierImageCountAtomic().store(static_cast<int>(TierImages().size()), std::memory_order_release);
     SKSE::log::info(
