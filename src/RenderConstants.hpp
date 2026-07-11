@@ -7,40 +7,40 @@
 /**
  * @namespace RenderConstants
  * @brief Compile-time constants for the rendering pipeline.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup RenderConstants
  *
  * Actor processing limits, cache management, and the smoothing parameters used by
  * the render thread.
  *
- * ## :material-ruler: Distance Units
+ * ### :material-ruler: Distance units
  *
  * Skyrim uses game units where $\approx 70$ units $= 1$ meter:
  *
  * $$d_{meters} = \frac{d_{units}}{70}$$
  *
- * ## :material-account-group-outline: Actor Processing
+ * ### :material-account-group-outline: Actor processing
  *
  * - `MaxPlates`: default 16, range 1-128; maximum visible nameplates.
  * - `MaxScanActors`: default 128, range 1-4096; cheap actor-scan runaway guard.
  *   `ClampActorLimits` then raises it to at least the clamped `MaxPlates`, so the
  *   effective lower bound is `MaxPlates`, not `MIN_SCAN_ACTORS`.
  *
- * ## :material-chart-bell-curve-cumulative: Exponential Settling
+ * ### :material-chart-bell-curve-cumulative: Exponential settling
  *
  * Alpha, text scale and the occlusion factor settle exponentially. For a settle time
  * $T$ and a frame delta $\Delta t$:
  *
  * $$\alpha = 1 - \epsilon^{\,\Delta t \,/\, T}$$
  *
- * where $\epsilon = 0.01$ (1% residual). Each quantity updates as:
+ * Where $\epsilon = 0.01$ (1% residual). Each quantity updates as:
  *
  * $$v_{smooth} = v_{old} + \alpha \cdot (v_{new} - v_{old})$$
  *
  * $T$ comes from `Settings::AnimColor().AlphaSettleTime` and `ScaleSettleTime`,
  * and from `Settings::Occlusion().SettleTime` for the occlusion factor.
  *
- * ## :material-chart-bell-curve-cumulative: Position Smoothing
+ * ### :material-chart-bell-curve-cumulative: Position smoothing
  *
  * Position is **not** plain exponential decay. It runs in three stages per frame
  * (Renderer.cpp, `UpdateCacheSmoothing`):
@@ -115,11 +115,12 @@ inline constexpr int MAX_SCAN_ACTORS = 4096;
 /**
  * @struct ActorLimits
  * @brief Validated pair of actor-processing limits.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup RenderConstants
  *
- * Only ClampActorLimits produces this type, so both fields are already inside their
- * compile-time bounds and satisfy maxScanActors >= maxPlates.  The default member values
- * are the values used when the INI omits both keys.
+ * ClampActorLimits enforces the bounds and ensures maxScanActors >= maxPlates.
+ * Callers that construct this aggregate directly must preserve those constraints.
+ * The member defaults apply when the INI omits both keys.
  */
 struct ActorLimits
 {
@@ -128,7 +129,9 @@ struct ActorLimits
 };
 
 /**
+ * @fn ActorLimits ClampActorLimits(int maxPlates, int maxScanActors) noexcept
  * @brief Clamp user-provided actor limits and ensure the scan can fill every plate slot.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param maxPlates      Requested nameplate cap, clamped to MIN_PLATES..MAX_PLATES.
  * @param maxScanActors  Requested scan cap, clamped to MIN_SCAN_ACTORS..MAX_SCAN_ACTORS, then
@@ -146,7 +149,6 @@ struct ActorLimits
     return {maxPlates, maxScanActors};
 }
 
-// Cache Management
 /**
  * @brief Base retention period for actor cache entries.
  *
@@ -160,33 +162,26 @@ inline constexpr uint32_t CACHE_GRACE_FRAMES =
 inline constexpr int POSITION_HISTORY_SIZE =
     8;  ///< Position history buffer size for moving average smoothing
 
-// Debug Overlay
 inline constexpr float RELOAD_NOTIFICATION_DURATION =
-    2.f;  ///< Duration to show "Reloaded!" notification (seconds)
+    2.f;  ///< Duration to show "reloaded!" notification (seconds)
 inline constexpr int FRAME_TIME_SAMPLES = 60;  ///< Number of frame time samples for averaging
 
-// Font Indices
 inline constexpr int FONT_INDEX_NAME = 0;      ///< Name font (loaded first)
 inline constexpr int FONT_INDEX_LEVEL = 1;     ///< Level font
 inline constexpr int FONT_INDEX_TITLE = 2;     ///< Title font
-inline constexpr int FONT_INDEX_ORNAMENT = 3;  ///< Ornament/flourish font
+inline constexpr int FONT_INDEX_ORNAMENT = 3;  ///< ornament/flourish font
 
-// INI Parsing Limits
 inline constexpr int MAX_TIER_INDEX =
     100;  ///< Maximum tier index in INI (prevents unbounded allocation)
 inline constexpr int MAX_SPECIAL_TITLE_INDEX = 50;  ///< Maximum special title index in INI
 inline constexpr int MAX_HONORIFIC_INDEX = 63;      ///< Maximum honorific index in INI
 inline constexpr int MAX_REGISTER_INDEX = 31;       ///< Maximum register index in INI
 
-// ----------------------------------------------------------------------------
-// Layout and animation tuning. These are compile-time constants, not INI keys,
-// because tuning them is rare. Add an INI key for a value that has to change
-// without a rebuild.
-//
-// The gaps and paddings below are pixels at the reference font size.
-// RendererLayout multiplies each one by the plate's text-size scale, so a plate
-// keeps its proportions as it shrinks with distance.
-// ----------------------------------------------------------------------------
+inline constexpr int MAX_EXTRA_BADGES = 4;           ///< Extra badges per actor
+inline constexpr int MAX_OVERRIDE_TITLE_CHARS = 64;  ///< Longest console title, in characters
+inline constexpr int MAX_OVERRIDE_ICON_NAMES = 32;   ///< Distinct override icon names per session
+
+// layout gaps use reference-font pixels and scale with plate text size.
 
 inline constexpr float TITLE_MAIN_GAP =
     8.0f;  ///< Vertical gap between title and main line (pixels)
@@ -205,42 +200,22 @@ inline constexpr float OUTLINE_MIN_SCALE =
 inline constexpr bool PROPORTIONAL_SPACING =
     true;  ///< Marker only, read nowhere: spacing always scales with text size
 
-// Effect intensity range. Both bands interpolate on the actor's level position
-// inside its own tier band (minLevel to maxLevel), not on the tier index: an
-// actor at its tier minimum gets MIN, one at the tier maximum gets MAX, and a
-// level below 100 scales both bands by a further 0.85 (RendererLayout.cpp). A
-// tier whose maxLevel is not above its minLevel pins that position at 0, so every
-// actor in it gets MIN.
-// EFFECT_ALPHA_* sets the alpha of the packed highlight color the effect layers
-// draw with; EFFECT_STRENGTH_* is the amplitude multiplier handed to the animated
-// effects that accept one - the gradient effects, Aurora and Enchant ignore it
-// (RendererEffects.cpp). The strength band multiplies into the effect's amplitude and
-// stacks with per-effect caps and INI intensities, so a low band collapses to a
-// net modulation of a few percent and reads as no effect at all. The band must
-// stay visible at its minimum: an actor at the bottom of its tier should still
-// read at a glance, with level progression adding weight rather than gating
-// visibility.
+// interpolate on level position within the tier; degenerate ranges use the minimum.
+// Below level 100, multiply both bands by .85. Alpha controls packed highlights;
+// strength controls amplitude, except gradients, Aurora and Enchant.
+// Keep the minimum visible after per-effect caps and INI intensity multiply it.
 inline constexpr float EFFECT_ALPHA_MIN = .32f;
 inline constexpr float EFFECT_ALPHA_MAX = .78f;
 inline constexpr float EFFECT_STRENGTH_MIN = .78f;
 inline constexpr float EFFECT_STRENGTH_MAX = 1.0f;
 
-// Animation speed bands by tier, in phase cycles per second: the effect phase
-// advances as frac(time * speed + per-actor seed), so smaller = slower. High
-// tiers are the slowest, and no band drops below the point where the motion stops
-// registering at a glance. The band is selected by the normalized tier ratio
-// tierIdx / (tierCount - 1), not by absolute tier index, so the bands move with
-// the number of [TierN] sections the INI defines. The shipped 20-tier INI maps
-// HIGH to tiers 18-19, MID to 16-17 and LOW to 0-15. A sub-level-100 actor
-// multiplies the selected band by a further 0.85 (RendererLayout.cpp).
+// Phase cycles/s: frac(time * speed + per-actor seed). Select by
+// tierIdx / (tierCount - 1); below level 100, multiply speed by .85.
 inline constexpr float ANIM_SPEED_LOW_TIER = .24f;   ///< Ratio below .8, and single-tier setups
 inline constexpr float ANIM_SPEED_MID_TIER = .17f;   ///< Ratio in [.8, .9)
 inline constexpr float ANIM_SPEED_HIGH_TIER = .12f;  ///< Ratio >= .9 (top 10% of tiers)
 
-// Entrance and exit motion offsets, in raw screen pixels: unlike the layout gaps
-// above, they are not multiplied by the plate's text-size scale. Renderer.cpp
-// translates the whole laid-out box by the current offset, so the label rises into
-// place on entry and sinks as it leaves.
+// motion offsets are raw screen pixels, independent of text-size scaling.
 inline constexpr float ENTRANCE_RISE_PX = 10.0f;  ///< Upward settle distance on entrance
 inline constexpr float EXIT_SINK_PX = 8.0f;       ///< Downward recede distance on exit
 
