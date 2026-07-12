@@ -38,7 +38,7 @@ REM STEP 2: Build Tests
 REM ============================================================================
 echo [2/3] Building test executables...
 echo ----------------------------------------------------------------------------
-cmake --build build --config Release --target glyph_test_utils glyph_test_settings
+cmake --build build --config Release --target glyph_test_utils glyph_test_settings glyph_test_label_format
 if errorlevel 1 (
     echo ERROR: Build failed!
     pause
@@ -79,6 +79,20 @@ if exist "build\Release\glyph_test_settings.exe" (
     if errorlevel 1 set ALL_PASSED=0
 ) else (
     echo ERROR: glyph_test_settings.exe not found!
+    set ALL_PASSED=0
+)
+echo.
+
+REM Run label/format tests
+echo === glyph_test_label_format ===
+if exist "build\Release\glyph_test_label_format.exe" (
+    build\Release\glyph_test_label_format.exe --gtest_color=yes
+    if errorlevel 1 set ALL_PASSED=0
+) else if exist "build\glyph_test_label_format.exe" (
+    build\glyph_test_label_format.exe --gtest_color=yes
+    if errorlevel 1 set ALL_PASSED=0
+) else (
+    echo ERROR: glyph_test_label_format.exe not found!
     set ALL_PASSED=0
 )
 echo.
