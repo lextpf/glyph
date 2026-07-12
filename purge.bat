@@ -97,4 +97,3 @@ echo.
 
 :end
 endlocal
-pause
