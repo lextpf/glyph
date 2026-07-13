@@ -1015,7 +1015,6 @@ struct ParticleAuraParams
  * | Spark         | Tilted orbit + periodic outward ember flare, tangent trail   |
  * | Leaf          | Tilted orbit + in/out radius drift, fluttering tumble        |
  * | CherryBlossom | Tilted orbit + gentle bob, slow continuous spin              |
- * | Rain          | Suspended streaks on a slow tilted orbit                     |
  * | Snow |
  * Broad, slow orbit with gentle flake bob                      |
  * | Smoke         | Rises,
@@ -1041,7 +1040,7 @@ struct ParticleAuraParams
  * | Orbit     | Arcane, Enchant, Gem, Hex, Curse, Void, Vortex, Fairy, Runes |
  * | Orbit     | Bat (swoops), Butterfly (bob), Constellation + Moon, Planet  |
  * | Orbit     | Pollen (wide sway), Pixiedust (sprinkle), Ash (flutter),     |
- * | Orbit     | Zap, Rain, Snow, Coin (spinning), Ink                        |
+ * | Orbit     | Zap, Snow, Coin (spinning), Ink                              |
  * | Rise      |
  * Bubble (pops at top), Heart, Soul, Steam, Zzz, Ember         | | Fall      | Confetti |
  * | Flow
