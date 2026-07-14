@@ -134,14 +134,6 @@ add_library(glyph SHARED
     src/DebugOverlay.hpp
     src/DebugOverlay.cpp
     src/RenderConstants.hpp
-    src/AppearanceTemplate.hpp
-    src/AppearanceTemplateInternal.hpp
-    src/AppearanceTemplate.cpp
-    src/AppearanceCopy.cpp
-    src/AppearanceFaceGen.cpp
-    src/AppearanceFormID.cpp
-    src/OutfitCopy.hpp
-    src/OutfitCopy.cpp
     src/ParticleTextures.hpp
     src/ParticleTextures.cpp
     src/BadgeTextures.hpp
@@ -163,8 +155,6 @@ add_library(glyph SHARED
 
 target_include_directories(glyph PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/skse64
     ${RAPIDCSV_INCLUDE_DIRS}
 )
 
