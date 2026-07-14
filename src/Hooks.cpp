@@ -1,5 +1,6 @@
 #include "Hooks.hpp"
 
+#include "ActorOverrides.hpp"
 #include "BadgeTextures.hpp"
 #include "Deck.hpp"
 #include "DepthClip.hpp"
@@ -30,20 +31,17 @@
 namespace Hooks
 {
 
-// State lives in four function-local statics:
-//   Init()  - initialization lifecycle. Clearing one of the "loaded" flags
-//             (mipmapsGenerated, particleTexturesLoaded, badgeTexturesLoaded,
-//             postProcessInitialized) forces that resource to rebuild on the
-//             next frame. backendReinitRequested is the opposite polarity:
-//             setting it requests the rebuild, and the next frame clears it.
-//   Frame() - per-frame flags, reset at the start of each PostDisplay thunk.
-//   Diag()  - exception counters and one-shot log gates.
-//   D3D()   - cached device, context, swapchain, the glyph-owned font atlas
-//             SRV, and the original Present pointer. StateMutex() guards the
-//             device, context and swapchain pointers. originalPresent is an
-//             atomic, which the Present fast path reads without the lock;
-//             fontAtlasSRV is written only by the render thread.
+// State accessors: Init owns resource/reinit flags; Frame owns draw markers;
+// Diag owns log counters; D3D owns cached pointers and the mipmapped atlas.
+// StateMutex guards device/context/swapchain, originalPresent is atomic, and
+// fontAtlasSRV is render-thread only. Clear loaded flags or set
+// backendReinitRequested to rebuild on the next frame.
 
+/**
+ * @struct InitFlags
+ * @brief Atomic initialization gates and pending GPU resource refreshes.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct InitFlags
 {
     std::atomic<bool> initialized{false};
@@ -53,23 +51,30 @@ struct InitFlags
     std::atomic<bool> particleTexturesLoaded{false};
     std::atomic<bool> badgeTexturesLoaded{false};
     std::atomic<uint32_t> badgeTexturesGen{0};
+    std::atomic<uint32_t> badgeOverrideIconVersion{0};
     std::atomic<bool> postProcessInitialized{false};
     std::atomic<std::uint64_t> nextGraffitoRetryAtMs{0};
     std::atomic<bool> backendReinitRequested{false};
 };
 
+/**
+ * @struct FrameFlags
+ * @brief Frame markers shared by PostDisplay and Present fallback drawing.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct FrameFlags
 {
-    // Records the gate decision of the current frame. Nothing in src/ reads it
-    // back; the draw sites re-evaluate the gate through their own local copy.
+    // Recorded gate decision; no reader currently consumes it.
     std::atomic<bool> shouldRenderOverlay{false};
-    // Set by RenderOverlayNow. PresentHook reads it to tell "PostDisplay
-    // already drew this frame" from "PostDisplay was skipped". PostDisplay
-    // reads it again after the original HUD draw and skips its own draw when
-    // the overlay already went out this frame.
+    // Marks a completed overlay frame so PostDisplay and Present cannot draw twice.
     std::atomic<bool> overlayRenderedThisFrame{false};
 };
 
+/**
+ * @struct DiagFlags
+ * @brief Counters and one-shot flags that bound repeated hook diagnostics.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct DiagFlags
 {
     std::atomic<uint32_t> renderExceptionCount{0};
@@ -80,57 +85,94 @@ struct DiagFlags
     std::atomic<bool> presentBootstrapLogged{false};
 };
 
+/**
+ * @fn static InitFlags& Init()
+ * @brief Access initialization and GPU rebuild flags with process lifetime.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static InitFlags& Init()
 {
     static InitFlags f;
     return f;
 }
+/**
+ * @fn static FrameFlags& Frame()
+ * @brief Access markers that coordinate the two overlay frame hooks.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static FrameFlags& Frame()
 {
     static FrameFlags f;
     return f;
 }
+/**
+ * @fn static DiagFlags& Diag()
+ * @brief Access counters that limit repeated hook diagnostics.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static DiagFlags& Diag()
 {
     static DiagFlags f;
     return f;
 }
+/**
+ * @fn static std::mutex& StateMutex()
+ * @brief Access the mutex that guards cached D3D interfaces and Present installation.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static std::mutex& StateMutex()
 {
     static std::mutex instance;
     return instance;
 }
 
-// Signature of IDXGISwapChain::Present.
 using PresentFn = HRESULT(WINAPI*)(IDXGISwapChain*, UINT, UINT);
 
-// D3D11 device, context, swap chain, and original Present pointer. Reached
-// through a function-local static so no non-trivially destructible object sits
-// at namespace scope, where destruction order on DLL unload is unsafe.
+/**
+ * @struct D3DState
+ * @brief Retained device interfaces and the independently owned font texture.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct D3DState
 {
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain;
     std::atomic<PresentFn> originalPresent{nullptr};
-    // glyph-owned mipmapped font atlas SRV bound into io.Fonts->TexID. Kept
-    // separate from the ImGui backend's own font texture, which the backend
-    // creates and frees in InvalidateDeviceObjects.
+    // The plugin owns this atlas; ImGui owns and frees its separate backend texture.
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> fontAtlasSRV;
 };
 
+/**
+ * @fn static D3DState& D3D()
+ * @brief Access retained D3D interfaces and the owned mipmapped font atlas.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static D3DState& D3D()
 {
     static D3DState s;
     return s;
 }
 
+/**
+ * @fn HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
+ * @brief Draw a fallback overlay frame before forwarding Present.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
 
-// Draws one overlay frame. Called by PresentHook and by PostDisplay::thunk.
+/**
+ * @fn void RenderOverlayNow()
+ * @brief Refresh GPU resources and submit one ImGui overlay frame.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void RenderOverlayNow();
 
-// Installs the Present hook on one swapchain and stores the original Present.
+/**
+ * @fn bool TryInstallPresentHook(IDXGISwapChain* swapChain)
+ * @brief Patch the swap-chain Present slot while retaining its current target.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 bool TryInstallPresentHook(IDXGISwapChain* swapChain);
 
 bool TryInstallPresentHook(IDXGISwapChain* swapChain)
@@ -149,8 +191,7 @@ bool TryInstallPresentHook(IDXGISwapChain* swapChain)
     const auto currentPresent = reinterpret_cast<PresentFn>(vtable[8]);
     const auto ourPresent = reinterpret_cast<PresentFn>(&PresentHook);
 
-    // Hold the lock across both the original-pointer store and the vtable write,
-    // so a concurrent Present call never sees one without the other.
+    // Publish originalPresent and the vtable patch under one lock.
     const std::lock_guard<std::mutex> lock(StateMutex());
     if (currentPresent == ourPresent)
     {
@@ -169,13 +210,14 @@ bool TryInstallPresentHook(IDXGISwapChain* swapChain)
     return true;
 }
 
-// Detects a device/context/swapchain change, refreshes the cached pointers,
-// re-installs the Present hook on the new swapchain, and schedules every
-// GPU-owning subsystem for rebuild. Rebuilding itself happens lazily on the
-// next RenderOverlayNow.
-//
-// Only the CreateD3DAndSwapChain thunk calls this, so a device or swapchain
-// swap that does not re-enter that call is not detected.
+/**
+ * @fn static void HandleDeviceChange()
+ * @brief Release device resources and schedule their recreation when D3D changes.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Schedule GPU rebuilds and rehook Present when cached D3D pointers change.
+ * Only the creation thunk detects changes; swaps that bypass it remain unseen.
+ */
 static void HandleDeviceChange()
 {
     auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -230,26 +272,28 @@ static void HandleDeviceChange()
     }
 }
 
-// Populate all four fixed font slots at one raster density. The configured font
-// size remains unchanged because RasterizerDensity changes source sampling only.
-// The caller holds Settings::Mutex() for shared access.
+/**
+ * @fn static bool BuildFontAtlas(float density)
+ * @brief Build fixed font slots at the requested raster density.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Caller holds a shared Settings::Mutex lock. RasterizerDensity changes sampling,
+ * not the configured font size.
+ */
 static bool BuildFontAtlas(float density)
 {
     auto& atlas = *ImGui::GetIO().Fonts;
     atlas.Clear();
     atlas.TexGlyphPadding = RasterQuality::FONT_GLYPH_PADDING;
 
-    // Glyph range: Basic Latin plus Latin-1 Supplement (0x0020-0x00FF), that is
-    // Western European only. Cyrillic (0x0400+) and CJK (0x4E00+) fall back to
-    // ImGui's default glyph.
-    // TODO: configurable glyph ranges for broader locale support.
+    // Only U+0020-U+00FF are loaded; Cyrillic/CJK use the fallback glyph.
+    // TODO: allow configured glyph ranges for broader locale support.
     static const ImWchar ranges[] = {
         0x0020,
         0x00FF,
         0,
     };
 
-    // FreeType with light hinting keeps scaled text smooth.
     ImFontConfig config;
     config.FontBuilderFlags = ImGuiFreeTypeBuilderFlags_LightHinting;
     config.OversampleH = 2;  // FreeType plus mipmaps make 4x unnecessary
@@ -258,8 +302,7 @@ static bool BuildFontAtlas(float density)
     config.RasterizerDensity = density;
     config.RasterizerMultiply = 1.15f;  // Give title, name, and level strokes more weight
 
-    // Font paths come from the obfuscated asset manifest, falling back to the
-    // INI path when the manifest has no entry. Both are already GUID-named.
+    // Manifest font paths take precedence over INI paths.
     const auto fontPath = [](const std::string& mapped,
                              const std::string& ini) -> const std::string&
     { return mapped.empty() ? ini : mapped; };
@@ -274,8 +317,7 @@ static bool BuildFontAtlas(float density)
         return atlas.AddFontDefault(&config) != nullptr;
     };
 
-    // The load order fixes the font indices that the renderer uses. Each slot
-    // adds one fallback font when its configured asset is unavailable.
+    // Load order fixes renderer font indices; missing assets use one fallback per slot.
     const auto& font = Settings::Font();
     bool slotsReady =
         addFontSlot(fontPath(ProjectManifest::FontName(), font.NameFontPath), font.NameFontSize);
@@ -295,6 +337,11 @@ static bool BuildFontAtlas(float density)
     return slotsReady && atlas.Build();
 }
 
+/**
+ * @fn static bool FontAtlasFitsD3D11()
+ * @brief Check that the built font atlas fits D3D11 texture limits.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static bool FontAtlasFitsD3D11()
 {
     const auto& atlas = *ImGui::GetIO().Fonts;
@@ -303,10 +350,13 @@ static bool FontAtlasFitsD3D11()
            atlas.TexHeight <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 }
 
-// First-time ImGui init: create the context, load fonts, init the Win32 and
-// DX11 backends, install the Present hook. Returns false while the swapchain is
-// not ready yet; the caller may retry later. A failure part-way through undoes
-// everything it created, so a retry starts clean.
+/**
+ * @fn static bool InitializeImGui()
+ * @brief Create the ImGui backends and install the Present fallback.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Failed initialization unwinds created resources so later frames can retry.
+ */
 static bool InitializeImGui()
 {
     auto renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -341,7 +391,6 @@ static bool InitializeImGui()
         return false;
     }
 
-    // Cache for the later mipmap generation pass.
     {
         const std::lock_guard<std::mutex> lock(StateMutex());
         D3D().device = device;
@@ -437,7 +486,6 @@ static bool InitializeImGui()
     }
     dx11Initialized = true;
 
-    // Cache the swap chain, then hook Present for the post-upscaler path.
     {
         const std::lock_guard<std::mutex> lock(StateMutex());
         D3D().swapChain = swapChain;
@@ -459,22 +507,16 @@ static bool InitializeImGui()
     return true;
 }
 
-// Late-bootstrap path: the D3D creation hook can fire before glyph is loaded,
-// so ImGui init must also be reachable from the per-frame hooks. The two
-// callers are CreateD3DAndSwapChain::thunk and PostDisplay::thunk. PresentHook
-// never calls this, so it cannot bootstrap the overlay on its own.
-// Three guards make concurrent calls from those two thunks safe:
-//   1. initialized       - acquire-load early-out. It stays true for the rest
-//                          of the session unless RenderOverlayNow clears it
-//                          after a failed DX11 backend reinit, which lets this
-//                          function run again.
-//   2. nextInitRetryAtMs - after a failed attempt, wait
-//                          INIT_RETRY_INTERVAL_MS (5 s); retrying every frame
-//                          floods the log.
-//   3. initializing      - CAS re-entry guard. InitializeImGui touches the
-//                          ImGui and D3D singletons, so concurrent entry races.
-// CAS plus RAII, not a mutex: a mutex would hold render-thread frames behind an
-// in-flight init, while the CAS lets a non-winner return immediately.
+/**
+ * @fn static void EnsureOverlayInitialized()
+ * @brief Attempt initialization with a shared guard and retry delay.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Bootstrap from creation or PostDisplay; Present never initializes.
+ * Initialized uses acquire-load; failed attempts wait 5 s. A CAS guard lets competing
+ * calls return without blocking on ImGui/D3D initialization. Failed DX11 backend
+ * reinit clears initialized so bootstrap can retry.
+ */
 static void EnsureOverlayInitialized()
 {
     static constexpr std::uint64_t INIT_RETRY_INTERVAL_MS = 5000;
@@ -501,6 +543,11 @@ static void EnsureOverlayInitialized()
     }
     struct InitScope
     {
+        /**
+         * @fn ~InitScope()
+         * @brief Release the initialization guard on every exit.
+         * @author Alex (<https://github.com/lextpf>)
+         */
         ~InitScope() { Init().initializing.store(false, std::memory_order_release); }
     } _;
 
@@ -510,10 +557,20 @@ static void EnsureOverlayInitialized()
     }
 }
 
-// Thunk-call hook on D3D11 device and swap chain creation. Runs the original
-// call first, then either initializes ImGui or handles a device change.
+/**
+ * @struct CreateD3DAndSwapChain
+ * @brief Device-creation hook that initializes or refreshes overlay resources.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Run original creation first, then initialize or detect a device change.
+ */
 struct CreateD3DAndSwapChain
 {
+    /**
+     * @fn static void thunk()
+     * @brief Forward device creation and initialize or refresh overlay resources.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     static void thunk()
     {
         func();
@@ -529,8 +586,13 @@ struct CreateD3DAndSwapChain
     static inline REL::Relocation<decltype(thunk)> func;
 };
 
-// Builds a mipmapped copy of the ImGui font atlas and binds it as io.Fonts->TexID
-// so text stays clean as plates scale down with distance. Runs once per device.
+/**
+ * @fn static void GenerateMipmappedFontAtlas(ID3D11Device* device, ID3D11DeviceContext* context)
+ * @brief Replace the font texture with an owned mipmapped atlas.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * One mipmapped atlas per device keeps downscaled text clean.
+ */
 static void GenerateMipmappedFontAtlas(ID3D11Device* device, ID3D11DeviceContext* context)
 {
     if (Init().mipmapsGenerated.load(std::memory_order_acquire) || !device || !context)
@@ -580,13 +642,8 @@ static void GenerateMipmappedFontAtlas(ID3D11Device* device, ID3D11DeviceContext
                     fontTexture.Get(), &srvDesc, fontSRV.GetAddressOf())))
             {
                 context->GenerateMips(fontSRV.Get());
-                // The SRV already in io.Fonts->TexID belongs to the ImGui DX11
-                // backend (bd->pFontTextureView). Releasing it here would dangle
-                // that pointer, and the backend would double-free it in
-                // InvalidateDeviceObjects on the next device rebuild. Keep the
-                // mipmapped SRV in a glyph-owned ComPtr instead: reassigning it
-                // releases the previous glyph atlas, and the backend keeps
-                // owning and freeing its own non-mipmapped texture.
+                // ImGui still owns bd->pFontTextureView. Releasing it here would cause a
+                // double-free at backend invalidation. The plugin owns the replacement ComPtr.
                 D3D().fontAtlasSRV = fontSRV;
                 io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(fontSRV.Get()));
                 mipmapsReady = true;
@@ -599,10 +656,14 @@ static void GenerateMipmappedFontAtlas(ID3D11Device* device, ID3D11DeviceContext
     }
 }
 
-// Load particle textures if enabled and not yet loaded. Turning the setting off
-// does not unload them; a device change (HandleDeviceChange) or a failed ImGui
-// init (cleanupFailedInit) releases them. A failed Initialize leaves the flag
-// clear, so the next frame retries.
+/**
+ * @fn static void EnsureParticleTexturesLoaded(ID3D11Device* device, bool useParticleTextures)
+ * @brief Load enabled particle textures before recording draw commands.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Disabling particles retains textures. Device changes or failed ImGui init
+ * release them; failed texture creation retries on the next frame.
+ */
 static void EnsureParticleTexturesLoaded(ID3D11Device* device, bool useParticleTextures)
 {
     if (useParticleTextures && !Init().particleTexturesLoaded.load(std::memory_order_acquire) &&
@@ -615,9 +676,15 @@ static void EnsureParticleTexturesLoaded(ID3D11Device* device, bool useParticleT
     }
 }
 
-// Rasterizes the status badge SVGs. A settings hot reload bumps the generation
-// counter, which drops the cache, so a renamed icon or a new folder takes effect
-// without a restart.
+/**
+ * @fn static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
+ * @brief Refresh badge resources before recording texture IDs in draw lists.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Settings generation changes rebuild the SVG cache; icon override versions only
+ * add names. Run before any BadgeTextures::Get: rebuilding releases texture IDs
+ * that pending draws may reference.
+ */
 static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
 {
     if (!device)
@@ -625,8 +692,11 @@ static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
         return;
     }
     const uint32_t gen = Settings::Generation().load(std::memory_order_acquire);
-    if (Init().badgeTexturesLoaded.load(std::memory_order_acquire) &&
-        Init().badgeTexturesGen.load(std::memory_order_acquire) == gen)
+    const uint32_t iconVersion = ActorOverrides::IconSetVersion();
+    const bool fullRebuild = !Init().badgeTexturesLoaded.load(std::memory_order_acquire) ||
+                             Init().badgeTexturesGen.load(std::memory_order_acquire) != gen;
+    if (!fullRebuild &&
+        Init().badgeOverrideIconVersion.load(std::memory_order_acquire) == iconVersion)
     {
         return;
     }
@@ -641,62 +711,60 @@ static void EnsureBadgeTexturesLoaded(ID3D11Device* device)
         enabled = ic.Enabled && !ic.Folder.empty();
         folder = ic.Folder;
         tierImages = ic.TierBadgeImages;
-        names = {ic.FollowerIcon,
-                 ic.AllyIcon,
-                 ic.HostileIcon,
-                 ic.WeakIcon,
-                 ic.StrongIcon,
-                 ic.DeadlyIcon,
-                 ic.BeastIcon,
-                 ic.UndeadIcon,
-                 ic.DaedraIcon,
-                 ic.DragonIcon,
-                 // Always-on slots: further NPC and player indicators.
-                 ic.NeutralIcon,
-                 ic.HumanoidIcon,
-                 ic.EvenIcon,
-                 ic.GuardIcon,
-                 ic.MerchantIcon,
-                 ic.CommonerIcon,
-                 ic.EssentialIcon,
-                 ic.ProtectedIcon,
-                 ic.MortalIcon,
-                 ic.CombatIcon,
-                 ic.AlertIcon,
-                 ic.IdleIcon,
-                 ic.SneakHiddenIcon,
-                 ic.SneakDetectedIcon,
-                 ic.SneakOffIcon,
-                 ic.EncumberedIcon,
-                 ic.NormalWeightIcon,
-                 ic.WantedIcon,
-                 ic.BountyClearIcon,
-                 ic.TierLowIcon,
-                 ic.TierMidIcon,
-                 ic.TierHighIcon};
+        names = {ic.FollowerIcon,    ic.AllyIcon,       ic.HostileIcon,      ic.WeakIcon,
+                 ic.StrongIcon,      ic.DeadlyIcon,     ic.BeastIcon,        ic.UndeadIcon,
+                 ic.DaedraIcon,      ic.DragonIcon,     ic.NeutralIcon,      ic.HumanoidIcon,
+                 ic.EvenIcon,        ic.GuardIcon,      ic.MerchantIcon,     ic.CommonerIcon,
+                 ic.EssentialIcon,   ic.ProtectedIcon,  ic.MortalIcon,       ic.CombatIcon,
+                 ic.AlertIcon,       ic.IdleIcon,       ic.SneakHiddenIcon,  ic.SneakDetectedIcon,
+                 ic.SneakOffIcon,    ic.EncumberedIcon, ic.NormalWeightIcon, ic.WantedIcon,
+                 ic.BountyClearIcon, ic.TierLowIcon,    ic.TierMidIcon,      ic.TierHighIcon};
     }
 
+    // Take the leaf override lock after releasing Settings::Mutex. Sample version
+    // before copying names so concurrent additions force another refresh.
+    const std::vector<std::string> overrideNames = ActorOverrides::IconNames();
+
+    if (fullRebuild)
+    {
+        if (enabled)
+        {
+            names.insert(names.end(), overrideNames.begin(), overrideNames.end());
+            BadgeTextures::Initialize(device, folder, names);
+        }
+        else
+        {
+            BadgeTextures::Shutdown();
+        }
+        // Manifest rank order selects emblems; an empty list clears them.
+        static const std::vector<std::string> kNoBadges{};
+        BadgeTextures::InitializeTierImages(
+            device, (enabled && tierImages) ? ProjectManifest::TierBadges() : kNoBadges);
+    }
+    else if (enabled)
+    {
+        BadgeTextures::AddIcons(device, folder, overrideNames);
+    }
+
+    // Folder changes can invalidate accepted override names; log each dropped icon.
     if (enabled)
     {
-        BadgeTextures::Initialize(device, folder, names);
+        for (const auto& name : overrideNames)
+        {
+            if (BadgeTextures::Get(name) == 0)
+            {
+                logger::warn(
+                    "Badges: console override icon '{}' did not load from '{}'", name, folder);
+            }
+        }
     }
-    else
-    {
-        BadgeTextures::Shutdown();
-    }
-    // Full-color tier emblem PNGs come from the obfuscated manifest, in rank
-    // order. An empty list clears them (icons disabled, or the feature is off).
-    static const std::vector<std::string> kNoBadges{};
-    BadgeTextures::InitializeTierImages(
-        device, (enabled && tierImages) ? ProjectManifest::TierBadges() : kNoBadges);
     Init().badgeTexturesGen.store(gen, std::memory_order_release);
+    Init().badgeOverrideIconVersion.store(iconVersion, std::memory_order_release);
     Init().badgeTexturesLoaded.store(true, std::memory_order_release);
 }
 
-// Builds and submits one overlay frame: first-use resource setup, ImGui frame,
-// Deck compose, draw-data submit. Returns without drawing when ImGui is not
-// initialized yet or the context is gone. All exceptions are caught and logged
-// at a decaying rate: the first 5, then every 120th.
+// Skip without ImGui context. Log caught exceptions for the first five failures,
+// then every 120th.
 void RenderOverlayNow()
 {
     if (!Init().initialized.load(std::memory_order_acquire))
@@ -742,14 +810,12 @@ void RenderOverlayNow()
             logger::info("Hooks: Reinitialized ImGui DX11 backend after device change");
         }
 
-        // A device change releases the old sampler states. Initialize attempts
-        // creation once for each device and leaves ImGui sampling unchanged on failure.
+        // Sampler initialization is once per device; failure preserves ImGui sampling.
         RenderSampling::Initialize(device.Get(), context.Get());
 
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
 
-        // First frame after a device change rebuilds the mipmapped font atlas.
         GenerateMipmappedFontAtlas(device.Get(), context.Get());
 
         bool useParticleTextures = false;
@@ -758,16 +824,11 @@ void RenderOverlayNow()
             useParticleTextures = Settings::Particle().UseParticleTextures;
         }
 
-        // Load particle textures on first frame
         EnsureParticleTexturesLoaded(device.Get(), useParticleTextures);
 
-        // Rasterize status badge SVGs (re-runs after settings hot reload)
         EnsureBadgeTexturesLoaded(device.Get());
 
-        // Initialize GPU post-processing on first frame. SceneMeter and
-        // DepthClip share the TextPostProcess gate, so while
-        // TextPostProcess::Initialize keeps failing all three are retried every
-        // frame. Each one degrades to a no-op when its own init fails.
+        // SceneMeter and DepthClip retry with the TextPostProcess gate; each failure is a no-op.
         if (!Init().postProcessInitialized.load(std::memory_order_acquire) && device && context)
         {
             if (TextPostProcess::Initialize(device.Get(), context.Get()))
@@ -778,9 +839,7 @@ void RenderOverlayNow()
             DepthClip::Initialize(device.Get(), context.Get());
         }
 
-        // Graffito owns a separate shader pipeline, so a transient failure must
-        // not become permanent just because the other post-process helpers
-        // succeeded. Retry on a slow cadence to keep the log quiet.
+        // Retry Graffito independently on a slow cadence after transient shader failure.
         if (!Graffito::IsInitialized() && device && context)
         {
             static constexpr std::uint64_t GRAFFITO_RETRY_INTERVAL_MS = 5000;
@@ -803,7 +862,6 @@ void RenderOverlayNow()
             }
         }
 
-        // Set display size to actual screen resolution
         {
             const auto screenSize = RE::BSGraphics::Renderer::GetScreenSize();
             auto& io = ImGui::GetIO();
@@ -815,15 +873,13 @@ void RenderOverlayNow()
 
         ImGui::NewFrame();
 
-        // Clear the nav windowing target so the overlay never takes keyboard nav.
+        // The overlay must not take keyboard navigation.
         if (auto g = ImGui::GetCurrentContext())
         {
             g->NavWindowingTarget = nullptr;
         }
 
-        // Deck is independent of the ambient nameplate toggle. Its status
-        // toast still renders while a card is developing, but disabled
-        // nameplates must not reappear merely because Deck requested a frame.
+        // Deck status needs its own frame gate; it must not enable ambient plates.
         if (Renderer::IsOverlayAllowedRT())
         {
             Renderer::Draw();
@@ -832,10 +888,8 @@ void RenderOverlayNow()
 
         ImGui::EndFrame();
         ImGui::Render();
-        // Compose/read back the card before the normal draw data lands on the
-        // game target. The scene texture was copied earlier this frame, pre-HUD
-        // in PostDisplay or in PresentHook on the fallback path. If neither
-        // copy ran, Deck::Process captures here instead, after the HUD.
+        // Compose before frame submission. Earlier hooks supply a pre-HUD scene;
+        // Deck::Process falls back to the current post-HUD target when no copy exists.
         Deck::Process(device.Get(), context.Get(), swapChain.Get());
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
@@ -861,31 +915,18 @@ void RenderOverlayNow()
     }
 }
 
-// Safety net for overlay rendering. Some upscalers (DLSS, FSR) restructure the
-// pipeline so PostDisplay is skipped or deferred; the overlay is drawn here
-// instead, just before the original Present flips the backbuffer.
-//
-// Recovery limitation: when D3D().originalPresent is null, the fallback reads
-// vtable[8] from the swapchain. That slot already holds PresentHook, so the
-// candidate is rejected. Recovery therefore succeeds only when a third-party
-// hook has overwritten vtable[8] with its own function, which is then adopted
-// as "original" - correct for a linear hook chain, but the wrong call order if
-// that third-party hook saved PresentHook as *its* original.
-// TryInstallPresentHook always sets originalPresent before any Present call can
-// occur, so this path is unreachable in practice.
+// Fallback draws before Present when PostDisplay was skipped.
+// If originalPresent is missing, only a third-party vtable replacement can be
+// adopted; it must not chain back to PresentHook. Normal installation stores the
+// original before publishing the hook.
 HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-    // Present is the frame boundary for the fallback path. Consume the marker
-    // left by PostDisplay; when none was published, service a complete fallback
-    // frame. Clearing the marker again after this render keeps a Present-only
-    // pipeline from turning into a one-shot path.
+    // consume/reset the frame marker so Present-only pipelines render every frame.
     const bool renderedByPostDisplay =
         Frame().overlayRenderedThisFrame.exchange(false, std::memory_order_acq_rel);
     if (!renderedByPostDisplay)
     {
-        // Tick unconditionally so the game thread can publish the gate. Do not
-        // call CanDrawOverlay() here: it dereferences cell state off the game
-        // thread.
+        // Tick hidden frames to publish gates; CanDrawOverlay reads game-thread cell state.
         Renderer::TickRT();
         Renderer::PrepareDeckCaptureRT();
 
@@ -918,12 +959,11 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
     }
     Frame().shouldRenderOverlay.store(false, std::memory_order_release);
 
-    // Fast path: the atomic load avoids the mutex in the common case.
     PresentFn originalPresent = D3D().originalPresent.load(std::memory_order_acquire);
 
     if (!originalPresent)
     {
-        // Slow path: lock and re-read in case of a concurrent store.
+        // Recheck under the lock after a concurrent store.
         {
             const std::lock_guard<std::mutex> lock(StateMutex());
             originalPresent = D3D().originalPresent.load(std::memory_order_relaxed);
@@ -931,7 +971,6 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
 
         if (!originalPresent)
         {
-            // Attempt on-the-fly recovery from the swapchain vtable.
             if (swapChain)
             {
                 void** vtable = *reinterpret_cast<void***>(swapChain);
@@ -963,20 +1002,25 @@ HRESULT WINAPI PresentHook(IDXGISwapChain* swapChain, UINT syncInterval, UINT fl
         }
     }
 
-    // Forward to the real IDXGISwapChain::Present we saved during init.
     return originalPresent(swapChain, syncInterval, flags);
 }
 
-// VTable hook for HUDMenu::PostDisplay (vtable index 6), installed with
-// Stl::WriteVfunc<RE::HUDMenu, PostDisplay>(). Runs on the render thread every
-// frame and calls the original PostDisplay first, so the game HUD is drawn
-// before the overlay; the overlay then lands on top and in screenshots.
-// See Renderer::TickRT / IsOverlayAllowedRT / Draw, and PresentHook for the
-// fallback path when upscalers skip PostDisplay.
+/**
+ * @struct PostDisplay
+ * @brief HUD hook that captures the scene before drawing the overlay.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * PostDisplay draws the overlay after the HUD, including screenshot frames.
+ */
 struct PostDisplay
 {
-    // Thunk installed in place of HUDMenu::PostDisplay. a_menu is the HUD menu
-    // instance and may be null.
+    /**
+     * @fn static void thunk(RE::IMenu* a_menu)
+     * @brief Capture the scene before HUD drawing and submit the overlay afterward.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * a_menu may be null.
+     */
     static void thunk(RE::IMenu* a_menu)
     {
         Frame().shouldRenderOverlay.store(false, std::memory_order_release);
@@ -989,32 +1033,23 @@ struct PostDisplay
 
         EnsureOverlayInitialized();
 
-        // Queue the game-thread snapshot unconditionally so it can publish the
-        // allowOverlay gate. The render thread must not call CanDrawOverlay()
-        // itself: it dereferences player->GetParentCell(), which can race with
-        // cell teardown during exterior streaming. QueueSnapshotUpdate is
-        // idempotent per frame and self-clears the snapshot when not allowed.
+        // Queue snapshots even while hidden; game-state reads can race with cell teardown.
         Renderer::TickRT();
 
-        // Backend not up yet: run the original HUD draw and skip the overlay.
         if (!Init().initialized.load(std::memory_order_acquire))
         {
             func(a_menu);
             return;
         }
 
-        // The game hides the HUD movie while it takes a screenshot. Glyph is an
-        // independent overlay and must still render into that capture, so only
-        // require a valid HUD menu and movie here, never their visibility.
+        // Screenshots hide the HUD movie; require its existence, not visibility.
         if (!a_menu || !a_menu->uiMovie)
         {
             func(a_menu);
             return;
         }
 
-        // Resolve the key press from the plain actor snapshot, then copy the
-        // scene before HUDMenu draws the crosshair and meters. If this copy
-        // fails, Deck::Process falls back to the post-HUD target.
+        // Capture before HUD crosshair/meters; failure falls back to post-HUD in Process.
         Renderer::PrepareDeckCaptureRT();
         if (Deck::NeedsSceneCapture())
         {
@@ -1030,12 +1065,9 @@ struct PostDisplay
             Deck::CaptureScene(device.Get(), context.Get(), swapChain.Get());
         }
 
-        // Gate rendering on the game-thread-published atomic, not a direct
-        // game-state read.
         bool shouldRender = Renderer::IsOverlayAllowedRT() || Deck::NeedsFrame();
         Frame().shouldRenderOverlay.store(shouldRender, std::memory_order_release);
 
-        // Original HUD draw, before the overlay.
         func(a_menu);
 
         if (shouldRender && !Frame().overlayRenderedThisFrame.load(std::memory_order_acquire))
@@ -1045,15 +1077,12 @@ struct PostDisplay
     }
 
     static inline REL::Relocation<decltype(thunk)> func;
-    // Virtual function table index for PostDisplay
     static inline std::size_t idx = 0x6;
 };
 
 void Install()
 {
-    // Defense in depth: plugin loading rejects anything except SE/AE. This
-    // protects the patch site if Install() is reached through another path.
-    // GLYPH_OFFSET selects the matching SE or AE/GOG call offset at runtime.
+    // Guard patch sites even when called outside normal SE/AE plugin loading.
     if (!REL::Module::IsSE() && !REL::Module::IsAE())
     {
         SKSE::log::error("Hooks: Unsupported Skyrim runtime; skipping hook installation");
@@ -1065,12 +1094,9 @@ void Install()
 
     try
     {
-        // D3D11 device creation drives ImGui initialization.
         REL::Relocation<std::uintptr_t> target{RELOCATION_ID(75595, 77226),
                                                GLYPH_OFFSET(0x9, 0x275)};
-        // WriteThunkCall (write_call<5>) overwrites a 5-byte relative CALL, so
-        // verify the patch site starts with the CALL rel32 opcode (0xE8). An
-        // offset drift then fails loudly instead of clobbering code.
+        // WriteThunkCall requires CALL rel32 (0xE8); reject offset drift before patching.
         const auto patchOpcode = *reinterpret_cast<const std::uint8_t*>(target.address());
         if (patchOpcode != 0xE8)
         {
@@ -1096,7 +1122,6 @@ void Install()
 
     try
     {
-        // HUD post-display draws the overlay after the game HUD is complete.
         Stl::WriteVfunc<RE::HUDMenu, PostDisplay>();
         hudHookInstalled = true;
     }
