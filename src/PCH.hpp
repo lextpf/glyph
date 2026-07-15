@@ -39,26 +39,16 @@ namespace logger = SKSE::log;
 
 /**
  * @namespace RE
- * @brief Extensions to CommonLibSSE's reverse-engineered types.
- * @author Alex (https://github.com/lextpf)
+ * @brief Handle comparison and hashing for standard and Boost containers.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Utilities
- *
- * Adds comparison and hash support to `BSPointerHandle`, so a handle can be a key in ordered
- * and unordered containers.
  */
 namespace RE
 {
 /**
- * @brief Order two handles by native handle value.
- *
- * Makes `BSPointerHandle` usable in `std::map`, `std::set`, and sorted algorithms.
- *
- * @tparam T Handle target type, for example Actor or TESObjectREFR.
- * @param[in] a_lhs Left-hand operand.
- * @param[in] a_rhs Right-hand operand.
- * @return `true` when the left native handle value is smaller than the right one.
- *
- * @see hash_value
+ * @fn bool operator<(const RE::BSPointerHandle<T>& a_lhs, const RE::BSPointerHandle<T>& a_rhs)
+ * @brief Order handles by their native value.
+ * @author Alex (<https://github.com/lextpf>)
  */
 template <class T>
 bool operator<(const RE::BSPointerHandle<T>& a_lhs, const RE::BSPointerHandle<T>& a_rhs)
@@ -67,13 +57,9 @@ bool operator<(const RE::BSPointerHandle<T>& a_lhs, const RE::BSPointerHandle<T>
 }
 
 /**
- * @brief Boost-compatible hash for a handle.
- *
- * Makes `BSPointerHandle` usable with `boost::hash` and the Boost unordered containers.
- *
- * @tparam T Handle target type.
- * @param[in] a_handle Handle to hash.
- * @return Hash of the native handle value.
+ * @fn std::size_t hash_value(const BSPointerHandle<T>& a_handle)
+ * @brief Hash the native handle value for Boost containers.
+ * @author Alex (<https://github.com/lextpf>)
  */
 template <class T>
 std::size_t hash_value(const BSPointerHandle<T>& a_handle)
@@ -85,39 +71,23 @@ std::size_t hash_value(const BSPointerHandle<T>& a_handle)
 
 /**
  * @namespace Stl
- * @brief Hook utilities and STL extensions for SKSE plugins.
- * @author Alex (https://github.com/lextpf)
+ * @brief Trampoline and vtable hook helpers.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Utilities
  *
- * `WriteThunkCall` and `HookFunctionPrologue` redirect code through SKSE's trampoline.
- * `WriteVfunc` patches a vtable slot in place through `REL::Relocation::write_vfunc` and uses
- * no trampoline memory.
- *
- * @see SKSE::GetTrampoline()
+ * Call and prologue hooks use the SKSE trampoline; `WriteVfunc` patches the vtable directly.
  */
 namespace Stl
 {
 /**
- * @brief Redirect a five-byte call through an SKSE trampoline.
+ * @fn void WriteThunkCall(std::uintptr_t a_src)
+ * @brief Redirect a call to the thunk and retain the original callee.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function redirects the
- * call to `T::thunk` and stores the original callee address in
- * `T::func`.
- *
- * @tparam T Hook
- * descriptor that provides `static decltype(func) func` and
- *              `static thunk(...)`.
- *
- * @param a_src Address of the call instruction to patch.
- * @pre `a_src` points to a five-byte
- * relative call instruction.
- * @warning A CommonLibSSE failure, such as exhausted trampoline space
- * or a missing Address
- *          Library ID, calls `stl::report_and_fail`. That function shows a
- * message box and
- *          terminates the process. A try/catch block around this helper does not
- * intercept
- *          the failure.
+ * @tparam T Provides `thunk` and `func`.
+ * @pre `a_src` points to a five-byte relative call.
+ * @warning Missing address library IDs or exhausted trampoline space terminate through
+ * `stl::report_and_fail`; exceptions cannot intercept that failure.
  */
 template <class T>
 void WriteThunkCall(std::uintptr_t a_src)
@@ -127,28 +97,15 @@ void WriteThunkCall(std::uintptr_t a_src)
 }
 
 /**
- * @brief Replace one vtable entry with a hook thunk.
+ * @fn void WriteVfunc()
+ * @brief Replace a vtable slot and retain its original function in T::func.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function stores the original
- * function pointer in `T::func` and writes `T::thunk` into
- * the selected slot.
- *
- * @tparam F
- * Class whose vtable is patched. The class must provide `VTABLE`.
- * @tparam T Hook descriptor that
- * provides `idx`, `func`, and `thunk`.
- * @pre `T::idx` is a valid slot in `F::VTABLE[0]`. An
- * invalid index writes past the vtable and
- *      corrupts memory.
- * @warning A missing Address
- * Library ID for `F::VTABLE[0]` calls
- *          `stl::report_and_fail`. That function shows a
- * message box and terminates the
- *          process. A try/catch block does not intercept the
- * failure. In Release, a patch
- *          site that cannot be made writable fails silently because
- * `REL::safe_write` only
- *          asserts.
+ * @tparam F Provides `VTABLE`.
+ * @tparam T Provides `idx`, `func`, and `thunk`.
+ * @pre `T::idx` is a valid slot in `F::VTABLE[0]`; invalid indices corrupt memory.
+ * @warning Missing address library IDs terminate through `stl::report_and_fail`.
+ * An unwritable patch site can fail silently in release because `REL::safe_write` asserts.
  */
 template <class F, class T>
 void WriteVfunc()
@@ -158,56 +115,39 @@ void WriteVfunc()
 }
 
 /**
- * @brief Install a hook at a function prologue.
+ * @fn void HookFunctionPrologue(std::uintptr_t a_src)
+ * @brief Redirect a prologue and retain a trampoline for the original call.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Xbyak generates a trampoline that copies
- * the first `BYTES` bytes of the original function
- * and then jumps to `a_src + BYTES`. A
- * five-byte branch at `a_src` redirects to `T::thunk`.
- * The function stores the trampoline
- * address in `T::func`, so the thunk can run the original
- * prologue.
+ * Overwrite five bytes at `a_src`; copy all `BYTES` into the trampoline in `T::func`,
+ * followed by a jump to `a_src + BYTES`.
  *
  * @verbatim
- * Before
- * patching:
+ * Patched entry:
+ *   a_src ------------------------------> T::thunk
  *
- * a_src                                                a_src + BYTES
- *   |
- * [complete original instructions, BYTES bytes]          | [function body ...]
- *
- * After
- * patching:
- *
- * a_src -> [five-byte branch to T::thunk]
- *                              |
- * +--
- * optional original call --> T::func
- * |
- * +--> [copy of BYTES]
- * |
- * +--> a_src + BYTES
- *
+ * Optional original call from the thunk:
+ *   T::func --> [Copied BYTES] --> [Jump to a_src + BYTES] --> Remaining body
  * @endverbatim
  *
- * Only five bytes are overwritten at `a_src`. The relocated block contains all
- * `BYTES`
- * original bytes, including any bytes beyond the branch.
- *
- * @tparam T     Hook
- * descriptor that provides `func` and `thunk`.
- * @tparam BYTES Number of prologue bytes to
- * relocate. The value must be at least five.
- * @param a_src  Address of the function prologue to
- * patch.
- * @pre `BYTES` covers complete instructions at `a_src`. It does not split an
- * instruction.
+ * @tparam T Provides `func` and `thunk`.
+ * @tparam BYTES At least five; must cover complete instructions.
+ * @param a_src Readable function prologue address.
+ * @pre Copied instructions remain valid at the trampoline address. The helper does not
+ * relocate relative branches or RIP-relative operands.
  */
 template <class T, std::size_t BYTES>
 void HookFunctionPrologue(std::uintptr_t a_src)
 {
     struct Patch : Xbyak::CodeGenerator
     {
+        /**
+         * @fn Patch(std::uintptr_t a_originalFuncAddr, std::size_t a_originalByteLength)
+         * @brief Copy prologue bytes and append a jump to the remaining function body.
+         * @author Alex (<https://github.com/lextpf>)
+         *
+         * The caller supplies complete instructions that remain valid at the new address.
+         */
         Patch(std::uintptr_t a_originalFuncAddr, std::size_t a_originalByteLength)
         {
             for (size_t i = 0; i < a_originalByteLength; ++i)
@@ -233,22 +173,14 @@ void HookFunctionPrologue(std::uintptr_t a_src)
 }
 
 /**
- * @brief Create a view over a half-open range of enum values.
+ * @fn constexpr inline auto EnumRange(auto first, auto last)
+ * @brief Iterate a contiguous half-open range of enum values.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The range includes `first`
- * and excludes `last`. The function maps each underlying integer
- * back to the enum type with
- * `static_cast`. The parameters are deduced independently, but the
- * element type comes from
- * `decltype(first)`. Both parameters must have the same enum type. A
- * mismatched `last` can
- * compile and reinterpret the values.
- *
- * @param first  First enumerator in the range.
- * @param
- * last   Past-the-end enumerator.
- * @return       A `views::iota | views::transform` range of enum
- * values.
+ * @param first Included lower bound.
+ * @param last Excluded upper bound; its underlying value must not be less than first.
+ * @return Lazy view of each underlying value cast to the enum type.
+ * @pre Both bounds use the same enum type and delimit a contiguous set of valid values.
  */
 constexpr inline auto EnumRange(auto first, auto last)
 {
@@ -262,6 +194,10 @@ constexpr inline auto EnumRange(auto first, auto last)
 /**
  * @struct EnumStringMap
  * @brief Compile-time bidirectional enum-string mapping.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Names borrow their storage, which must outlive the map and returned views. Matching is exact
+ * and case-sensitive. Duplicate names or values use the first entry.
  *
  * @tparam E Enum type.
  * @tparam N Number of entries.
@@ -272,6 +208,7 @@ struct EnumStringMap
     /**
      * @struct Entry
      * @brief One enum-value and string-name pair.
+     * @author Alex (<https://github.com/lextpf>)
      */
     struct Entry
     {
@@ -282,14 +219,11 @@ struct EnumStringMap
     std::array<Entry, N> entries;  ///< Name/value pairs, scanned linearly; first match wins.
 
     /**
-     * @brief Find an enum value by its string name.
+     * @fn constexpr E fromString(std::string_view s, E fallback) const
+     * @brief Match a name without case folding.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @param s         String
-     * to match exactly against an entry name.
-     * @param fallback  Value to return when no entry
-     * matches.
-     * @return          The matching enum value, or `fallback` when no entry
-     * matches.
+     * @return First matching value, or the supplied fallback.
      */
     constexpr E fromString(std::string_view s, E fallback) const
     {
@@ -304,11 +238,11 @@ struct EnumStringMap
     }
 
     /**
-     * @brief Convert an enum value to its string name.
+     * @fn constexpr std::string_view toString(E v) const
+     * @brief Find the display name for an enum value.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @param v  Enum value
-     * to find.
-     * @return   The matching name, or `"unknown"` when no entry matches.
+     * @return Borrowed name from the first match, or the static literal "unknown".
      */
     constexpr std::string_view toString(E v) const
     {
@@ -326,6 +260,7 @@ struct EnumStringMap
 
 /**
  * @brief Select an address offset for the detected Skyrim edition.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * Used with `REL::ID` or a direct address so one DLL serves Skyrim SE and AE/GOG.
  * CommonLibSSE-NG picks the value that matches the detected runtime.
