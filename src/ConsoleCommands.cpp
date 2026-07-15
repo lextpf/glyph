@@ -2,7 +2,6 @@
 
 #include "ConsoleCommands.hpp"
 
-#include "AppearanceTemplate.hpp"
 #include "Renderer.hpp"
 #include "Settings.hpp"
 
@@ -31,8 +30,8 @@ void Echo(const std::string& msg)
 }
 
 // Split on ASCII whitespace, no quoting support -- Skyrim's console already
-// passes through a single typed line, and our tokens (subcommand, on/off,
-// hex FormID, plugin filename) never contain whitespace.
+// passes through a single typed line, and our subcommands and toggle arguments
+// never contain whitespace.
 std::vector<std::string> Tokenize(std::string_view text)
 {
     std::vector<std::string> tokens;
@@ -124,11 +123,6 @@ void PrintHelp()
     Echo("  glyph nameplates | n [on|off]      enable / disable / toggle nameplates");
     Echo("  glyph plates | p [on|off]          alias for 'nameplates'");
     Echo("  glyph debug | d [on|off]           enable / disable / toggle debug overlay");
-    Echo("  glyph appearance | a               print appearance template state");
-    Echo("  glyph appearance on                apply template using INI target");
-    Echo("  glyph appearance on <id> <plugin>  apply template with explicit target");
-    Echo("                                     (e.g. 'glyph appearance on 0xD62 Inigo.esp')");
-    Echo("  glyph appearance off               clear applied flag (see help on revert)");
 }
 
 void HandleNameplates(const std::vector<std::string>& tokens, size_t argIdx)
@@ -158,111 +152,11 @@ void HandleDebug(const std::vector<std::string>& tokens, size_t argIdx)
     Echo(newState ? "glyph: debug overlay ENABLED" : "glyph: debug overlay DISABLED");
 }
 
-void ReportApplyResult(bool ok)
-{
-    if (ok)
-    {
-        const auto desc = AppearanceTemplate::AppliedTargetDescription();
-        if (desc.empty())
-        {
-            Echo("glyph: appearance applied");
-        }
-        else
-        {
-            Echo("glyph: appearance applied (" + desc + ")");
-        }
-    }
-    else
-    {
-        Echo("glyph: appearance apply failed (see SKSE/glyph.log for details)");
-    }
-}
-
-void HandleAppearanceStatus()
-{
-    if (AppearanceTemplate::IsApplied())
-    {
-        const auto desc = AppearanceTemplate::AppliedTargetDescription();
-        Echo("glyph: appearance template applied" +
-             (desc.empty() ? std::string{} : " (" + desc + ")"));
-    }
-    else
-    {
-        Echo("glyph: no appearance template applied");
-    }
-}
-
-void HandleAppearanceOn(const std::vector<std::string>& tokens, size_t argIdx)
-{
-    // No target args: force-apply the INI-configured FormID/plugin. Uses
-    // ApplyConfiguredNow so it works even with UseTemplateAppearance disabled --
-    // the template is never auto-applied, so the console command is the trigger.
-    if (argIdx >= tokens.size())
-    {
-        ReportApplyResult(AppearanceTemplate::ApplyConfiguredNow());
-        return;
-    }
-
-    // Explicit target requires both FormID and plugin.
-    if (argIdx + 1 >= tokens.size())
-    {
-        Echo("glyph: usage 'glyph appearance on <formid> <plugin>'");
-        Echo("       e.g. 'glyph appearance on 0xD62 Inigo.esp'");
-        return;
-    }
-
-    const std::string& formIdArg = tokens[argIdx];
-    const std::string& pluginArg = tokens[argIdx + 1];
-    ReportApplyResult(AppearanceTemplate::ApplyWithTarget(formIdArg, pluginArg));
-}
-
-void HandleAppearanceOff()
-{
-    if (!AppearanceTemplate::IsApplied())
-    {
-        Echo("glyph: no appearance template applied");
-        return;
-    }
-    AppearanceTemplate::ResetAppliedFlag();
-    Echo("glyph: applied flag cleared.");
-    Echo(
-        "       Reload your save to actually see the original character -- the template's record "
-        "edits and FaceGen mesh remain loaded in memory until the next save/reload.");
-}
-
-void HandleAppearance(const std::vector<std::string>& tokens, size_t argIdx)
-{
-    if (argIdx >= tokens.size())
-    {
-        HandleAppearanceStatus();
-        return;
-    }
-
-    const auto action = ToLowerAscii(tokens[argIdx]);
-    if (action == "on" || action == "apply")
-    {
-        HandleAppearanceOn(tokens, argIdx + 1);
-    }
-    else if (action == "off" || action == "revert")
-    {
-        HandleAppearanceOff();
-    }
-    else if (action == "status")
-    {
-        HandleAppearanceStatus();
-    }
-    else
-    {
-        Echo("glyph: appearance: unknown action '" + action + "' (try on, off, status)");
-    }
-}
-
 void HandleStatus()
 {
     Echo(Renderer::IsEnabled() ? "glyph: nameplates ENABLED" : "glyph: nameplates DISABLED");
     Echo(ReadDebugOverlayEnabled() ? "glyph: debug overlay ENABLED"
                                    : "glyph: debug overlay DISABLED");
-    HandleAppearanceStatus();
 }
 
 bool GlyphExecute(const RE::SCRIPT_PARAMETER*,
@@ -311,10 +205,6 @@ bool GlyphExecute(const RE::SCRIPT_PARAMETER*,
     else if (IsPrefixOf(sub, "debug"))
     {
         HandleDebug(tokens, argIdx);
-    }
-    else if (IsPrefixOf(sub, "appearance"))
-    {
-        HandleAppearance(tokens, argIdx);
     }
     else
     {
