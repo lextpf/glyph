@@ -1,7 +1,7 @@
 <div align="center">
 
 # glyph
-**SKSE overlay for actor info and appearance templates**
+**SKSE overlay for immersive actor nameplates**
 
 📖 [Installation](#installation) | 🎨 [Configuration](#configuration) | 🏗️ [Building](#building) | 🤝 [Contributing](./CONTRIBUTING.md)
 
@@ -82,12 +82,6 @@ glyph/
 |   |-- TextPostProcess.cpp/hpp              # Shared post-process passes
 |   |-- Settings.cpp/hpp                     # INI parsing and configuration
 |   |-- SettingsBinding.hpp                  # Declarative kSettings descriptor table
-|   |-- AppearanceTemplate.cpp/hpp           # Orchestrator: copy NPC look to player
-|   |-- AppearanceTemplateInternal.hpp       # Shared appearance-copy internals
-|   |-- AppearanceCopy.cpp                   # Head parts, tint layers, morphs
-|   |-- AppearanceFaceGen.cpp                # Baked FaceGen NIF/DDS load
-|   |-- AppearanceFormID.cpp                 # Load-order / ESL FormID resolution
-|   |-- OutfitCopy.cpp/hpp                   # Equipped-outfit copy
 |   |-- ParticleTextures.cpp/hpp             # Sprite loading + procedural fallback
 |   |-- BadgeTextures.cpp/hpp                # Duotone SVG rasterization for badges
 |   |-- Occlusion.cpp/hpp                    # Line-of-sight culling
@@ -114,7 +108,6 @@ glyph/
 |   |-- fonts/                               # Default fonts (not redistributed)
 |   |-- particles/                           # Sprite PNGs (not bundled; procedural fallback)
 |   +-- duotone/                             # Badge SVGs (not bundled; Font Awesome Pro)
-|-- external/                                # Third-party sources (NiOverride API, SKSE64)
 |-- CMakeLists.txt                           # Build configuration
 |-- CMakePresets.json                        # CMake presets & toolchain
 |-- vcpkg.json                               # vcpkg dependencies
@@ -198,7 +191,7 @@ simple white-leaning text so the world stays readable (see *NPC Colors*).
 - ⌨️ **Typewriter reveal** - Characters appear one-by-one
 - 🌿 **Side ornaments** - Ornate scrollwork for high tiers
 - ✨ **Particle auras** - 42 families of hand-made pixel-art sprites, assigned by tier:
-  - **Weather** - fireflies, rain, snow, smoke, sparks, wisps, leaves, aurora, cherry blossoms, dust, motes
+  - **Weather** - fireflies, snow, smoke, sparks, wisps, leaves, aurora, cherry blossoms, dust, motes
   - **Arcane** - runes, enchant sparkles, hexes, curses, morphing glyphs, gems, glitter, void swirls, vortices, lightning zaps
   - **Sky & nature** - butterflies, fairies, bats, pollen, fog, gusting sand, wind, a moon, a ringed planet, constellations
   - **Whimsy** - bubbles (they pop), coins, confetti, hearts, ink, pixie dust, souls, steam, rising embers, ash, sleepy Zzz's
@@ -298,6 +291,11 @@ Data/SKSE/Plugins/
 
 Edit `Data/SKSE/Plugins/glyph.ini` — press **F7** in-game to hot reload.
 
+`HorizontalOffset` applies a screen-space optical-centering correction to the
+complete nameplate (`-10` for the bundled cursive fonts, negative = left). The
+offset scales with the nameplate at distance; set it to `0` for fonts that do
+not need compensation.
+
 ```mermaid
 ---
 config:
@@ -313,7 +311,6 @@ graph LR
     classDef effects fill:#3b1f7e,stroke:#a78bfa,color:#e2e8f0
     classDef particles fill:#2e1a6e,stroke:#c084fc,color:#e2e8f0
     classDef tiers fill:#064e3b,stroke:#34d399,color:#e2e8f0
-    classDef template fill:#7c2d12,stroke:#f97316,color:#fef3c7
 
     subgraph Display["📝 Display"]
         FMT["📋 Format"]:::display
@@ -335,7 +332,7 @@ graph LR
 
     subgraph Particles["💫 Particle Aura"]
         FIREFLY["🪰 Firefly"]:::particles
-        RAINSNOW["🌧️ Rain / Snow"]:::particles
+        SNOW["❄️ Snow"]:::particles
         SMOKE["💨 Smoke / Spark"]:::particles
         FLORA["🍃 Leaf / Cherry blossom"]:::particles
         AURORA["🌌 Aurora / Wisp / Mote"]:::particles
@@ -346,10 +343,6 @@ graph LR
         LEVEL["📊 Level Ranges"]:::tiers
     end
 
-    subgraph Template["👤 Appearance"]
-        NPC["🧝 TemplateFormID"]:::template
-        PLUGIN["📦 TemplatePlugin"]:::template
-    end
 ```
 
 ### 🎨 NPC Colors
