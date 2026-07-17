@@ -4,11 +4,10 @@
 
 /**
  * @namespace RasterQuality
- * @brief Fixed source-raster quality values for the crisp render layer.
+ * @brief Source raster quality independent of geometry and backbuffer size.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * These values change source textures only. They do not change nameplate geometry or the
- * backbuffer resolution. Font density is fixed because a density change requires a complete
- * font-atlas rebuild.
+ * Changing font density requires a full atlas rebuild.
  */
 namespace RasterQuality
 {
@@ -20,17 +19,26 @@ inline constexpr int FONT_MIP_LIMIT = 3;              ///< Highest mip level use
 inline constexpr int STATUS_ICON_TEXTURE_SIZE = 256;  ///< Square SVG raster size in pixels.
 inline constexpr int RANK_EMBLEM_TEXTURE_SIZE = 512;  ///< Square emblem raster size in pixels.
 
-/** @brief Return true when a positive integer is a power of two. */
+/**
+ * @fn bool IsPowerOfTwo(std::uint32_t value)
+ * @brief Check whether an integer contains exactly one set bit.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True for positive powers of two; false for zero.
+ */
 constexpr bool IsPowerOfTwo(std::uint32_t value)
 {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
 /**
- * @brief Return true when atlas padding remains at least one texel at the font mip limit.
+ * @fn bool FontPaddingSupportsMipLimit()
+ * @brief Require at least one padding texel at the highest font mip.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Each mip level halves the padding. A limit of three therefore requires eight source
- * pixels of padding.
+ * Each mip halves padding; mip 3 needs eight source pixels.
+ *
+ * @return True when padding leaves at least one texel at the highest permitted font mip.
  */
 constexpr bool FontPaddingSupportsMipLimit()
 {
