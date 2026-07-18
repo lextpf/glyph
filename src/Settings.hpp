@@ -27,16 +27,14 @@
  * | `[TierN]`            | Per-tier colors, effects, ornaments      |
  * | `[SpecialTitleN]`    | Keyword-based title overrides            |
  * | `[Display]`          | Format string for nameplate composition  |
- * | `[Appearance]`       | NPC appearance template settings         |
  * | `[Visual]`           | LOD, overlap, motion trail, wave         |
- * | `[Fonts]`            | Font paths and sizes                     |
- * | `[Particles]`        | Particle aura settings                   |
- * | `[Occlusion]`        | Line-of-sight culling settings           |
- * | `[Debug]`            | Debug overlay toggle                     |
+ * | `[Fonts]`            |
+ * Font paths and sizes                     | | `[Particles]`        | Particle aura settings | |
+ * `[Occlusion]`        | Line-of-sight culling settings           | | `[Debug]`            | Debug
+ * overlay toggle                     |
  *
  * @note Scalar settings are matched by key name regardless of which
- * section they appear in.  `[AppearanceTemplate]` is also accepted
- * as an alias for `[Appearance]`.
+ * section they appear in.
  *
  * @note Runtime defaults are defined in the `kSettings` binding table in
  * `Settings.cpp`.  `Load()` calls `ResetToDefaults()` first, which applies
@@ -513,7 +511,6 @@ OrnamentSettings& Ornament();
 enum class ParticleStyle
 {
     Firefly,        ///< Slow wandering glow that flickers in place
-    Rain,           ///< Suspended streaks orbiting slowly around the aura
     Snow,           ///< Snowflakes drifting around a broad slow orbit
     Smoke,          ///< Rising, expanding, fading puffs
     Spark,          ///< Orbiting embers that periodically flare outward hot
@@ -570,7 +567,6 @@ struct ParticleStyleToken
 };
 inline constexpr ParticleStyleToken kParticleStyleTokens[] = {
     {ParticleStyle::Firefly, "firefly"},
-    {ParticleStyle::Rain, "rain"},
     {ParticleStyle::Snow, "snow"},
     {ParticleStyle::Smoke, "smoke"},
     {ParticleStyle::Spark, "spark"},
@@ -655,7 +651,8 @@ ParticleSettings& Particle();
 /// Display behavior settings.
 struct DisplaySettings
 {
-    float VerticalOffset = 8.0f;      ///< Height above actor's head in units
+    float VerticalOffset = 8.0f;      ///< Height above actor's head in game units
+    float HorizontalOffset = -10.0f;  ///< Screen-space X correction in pixels at full scale
     bool HidePlayer = false;          ///< Hide player's own nameplate
     bool HideCreatures = false;       ///< Hide nameplates for non-NPC actors
     int ReloadKey = 0;                ///< Virtual key code for hot reload (0 = disabled)
@@ -705,23 +702,6 @@ struct TransitionSettings
     float EntranceStaggerMax = .8f;    ///< Ceiling for any single plate's delay (s)
 };
 TransitionSettings& Transition();
-
-/// NPC appearance template settings.
-struct AppearanceSettings
-{
-    std::string TemplateFormID;            ///< FormID of template NPC (hex, e.g., "0x12345")
-    std::string TemplatePlugin;            ///< Plugin file containing template
-    bool UseTemplateAppearance = false;    ///< Whether to apply template appearance to player
-    bool TemplateIncludeRace = false;      ///< Whether to copy race
-    bool TemplateIncludeBody = false;      ///< Whether to copy height/body morphs
-    bool TemplateCopyFaceGen = true;       ///< Whether to load and apply FaceGen NIF/tint
-    bool TemplateCopySkin = false;         ///< Whether to copy skin textures
-    bool TemplateCopyOverlays = false;     ///< Whether to copy RaceMenu overlays
-    bool TemplateCopyOutfit = false;       ///< Whether to copy equipped armor
-    bool TemplateReapplyOnReload = false;  ///< Whether to re-apply on hot reload
-    std::string TemplateFaceGenPlugin;     ///< Optional override for FaceGen plugin path
-};
-AppearanceSettings& Appearance();
 
 /// Visual polish settings, encapsulated to avoid non-const globals.
 struct VisualSettings
@@ -901,6 +881,42 @@ struct IconSettings
     std::string TierBadgeFolder = "Data/SKSE/Plugins/glyph/badges";
     float TierBadgeGamma = 1.8f;  ///< Emblem->tier top-weighting (>1 = high emblems rarer)
     float TierBadgeScale = 1.7f;  ///< Emblem size as a multiple of the status-icon size
+
+    // --- Player "Seat of Light" block elevation (player-only) ---
+    // Strip light bed: a soft breathing pool behind the player's icon strip.
+    bool PlayerStripBedEnabled = true;
+    float PlayerStripBedAlpha = 0.10f;          ///< Per-disc additive alpha (overlap sums)
+    float PlayerStripBedSize = 2.6f;            ///< Disc EDGE as a multiple of row height
+    float PlayerStripBedBreatheHz = 0.14f;      ///< Bed breathe frequency (alpha only)
+    std::string PlayerStripBedColorStr;         ///< Empty => derive near-neutral from Name
+    std::optional<Color3> PlayerStripBedColor;  ///< Empty => derive at draw time
+    // Emblem backlight: one true radial disc replacing the ghosted art copies.
+    bool EmblemBacklightEnabled = true;
+    float EmblemBacklightSize = 2.6f;            ///< Disc EDGE as a multiple of emblem edge
+    float EmblemBacklightAlpha = 0.55f;          ///< Peak backlight alpha (x breathe)
+    float EmblemBacklightBreatheHz = 0.167f;     ///< Backlight breathe freq (=> sin(t*1.05))
+    float EmblemCrispAlpha = 0.92f;              ///< Crisp emblem alpha on the backlight path
+    std::string EmblemBacklightColorStr;         ///< Empty => derive near-neutral tier accent
+    std::optional<Color3> EmblemBacklightColor;  ///< Empty => derive at draw time
+
+    // --- B "Struck Metal" optional layers (default ON, subtle values) ---
+    // Player resting-icon emboss: warm top rim + carved bottom shadow.
+    bool PlayerRimLightEnabled = true;
+    float PlayerRimAlpha = 0.22f;    ///< Top-rim highlight alpha (x muted alpha)
+    float PlayerCarveAlpha = 0.26f;  ///< Bottom carve-shadow alpha (x muted alpha)
+    float PlayerRimOffset = 1.0f;    ///< Emboss offset in px (scaled by text size)
+    std::string PlayerRimColorStr;   ///< Empty => derive warm-white from Name
+    std::optional<Color3> PlayerRimColor;
+    // Emblem directional lights: warm KEY above + cool FILL below the backlight.
+    bool EmblemKeyFillEnabled = true;
+    float EmblemKeyAlpha = 0.35f;   ///< Key (top) light alpha (x breathe)
+    float EmblemFillAlpha = 0.15f;  ///< Fill (bottom) bounce alpha (x breathe)
+    float EmblemKeyRise = 0.18f;    ///< Key offset above center (fraction of emblem edge)
+    float EmblemFillDrop = 0.15f;   ///< Fill offset below center (fraction of emblem edge)
+    std::string EmblemKeyColorStr;  ///< Empty => derive warm from Name
+    std::optional<Color3> EmblemKeyColor;
+    std::string EmblemFillColorStr;  ///< Empty => derive cool from Name
+    std::optional<Color3> EmblemFillColor;
 
     // Lit colors for the active states.
     std::string GuardColorStr = "0.60, 0.68, 0.84";
