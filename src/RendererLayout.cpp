@@ -790,6 +790,11 @@ static void ComputePositionAndBounds(LabelLayout& layout,
     layout.titleY = layout.mainLineY + mainTopDraw - titleBottomDraw - titleGap;
 
     layout.startPos = entry.smooth;
+    // ImGui centers text by advance width, which includes font side bearings
+    // and can differ from the visible ink center.  Apply one shared, scale-aware
+    // correction to the complete plate so title, badges, emblem, text, ornaments,
+    // particles, bounds, and trails remain on the same screen-space axis.
+    layout.startPos.x += snap.horizontalOffset * spacingScale;
     if (snap.visual.EnableOverlapPrevention)
     {
         auto oIt = OverlapOffsets().find(d.formID);
@@ -1124,6 +1129,8 @@ static void BuildBadges(LabelLayout& layout,
                         float textSizeScale,
                         const RenderSettingsSnapshot& snap)
 {
+    layout.isPlayer = d.isPlayer;
+
     // One-shot diagnostic: log the badge pipeline state the first time an
     // actor reaches badge layout, so silent in-game failures are traceable.
     static std::atomic<bool> s_diagLogged{false};
