@@ -7,12 +7,14 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -1555,4 +1557,87 @@ TEST(ParticleTypeWeight, MeanNormalizationIsIdentityForEqualWeights)
     EXPECT_FLOAT_EQ(v[0] * n3, 1.5f);
     EXPECT_FLOAT_EQ(v[1] * n3, 1.0f);
     EXPECT_FLOAT_EQ(v[2] * n3, 0.5f);
+}
+
+// Mirror of the Seat-of-Light optional-color rule added to Settings.cpp
+// ClampAndValidate: empty/whitespace string -> no value (derive at draw time);
+// non-empty -> parsed + clamped. Keep in sync with deriveOptionalColor there.
+static std::string SoL_Trim(const std::string& s)
+{
+    size_t a = 0, b = s.size();
+    while (a < b && std::isspace(static_cast<unsigned char>(s[a])))
+        ++a;
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1])))
+        --b;
+    return s.substr(a, b - a);
+}
+static std::optional<std::array<float, 3>> SoL_DeriveOptionalColor(const std::string& str)
+{
+    if (SoL_Trim(str).empty())
+        return std::nullopt;
+    std::array<float, 3> rgb{1.0f, 1.0f, 1.0f};
+    std::istringstream ss(str);
+    std::string tok;
+    int i = 0;
+    while (std::getline(ss, tok, ',') && i < 3)
+    {
+        try
+        {
+            rgb[i] = std::stof(SoL_Trim(tok));
+        }
+        catch (...)
+        {
+            rgb[i] = 1.0f;
+        }
+        ++i;
+    }
+    for (auto& v : rgb)
+        v = std::clamp(v, 0.0f, 1.0f);
+    return rgb;
+}
+
+TEST(SeatOfLightColor, EmptyStringLeavesOptionalEmpty)
+{
+    EXPECT_FALSE(SoL_DeriveOptionalColor("").has_value());
+    EXPECT_FALSE(SoL_DeriveOptionalColor("   ").has_value());
+}
+TEST(SeatOfLightColor, FilledStringPopulatesAndClamps)
+{
+    auto c = SoL_DeriveOptionalColor("0.9, 0.8, 0.5");
+    ASSERT_TRUE(c.has_value());
+    EXPECT_FLOAT_EQ((*c)[0], 0.9f);
+    EXPECT_FLOAT_EQ((*c)[1], 0.8f);
+    EXPECT_FLOAT_EQ((*c)[2], 0.5f);
+    auto over = SoL_DeriveOptionalColor("2.0, -1.0, 0.5");
+    ASSERT_TRUE(over.has_value());
+    EXPECT_FLOAT_EQ((*over)[0], 1.0f);
+    EXPECT_FLOAT_EQ((*over)[1], 0.0f);
+}
+
+// Mirrors the HorizontalOffset binding and scale-aware application in
+// RendererLayout.cpp. The neutral value must remain an exact opt-out for fonts
+// whose visible ink is already centered within its advance width.
+static float ResolveHorizontalOffset(float configuredPixels, float textSizeScale)
+{
+    configuredPixels = std::clamp(configuredPixels, -200.0f, 200.0f);
+    return configuredPixels * textSizeScale;
+}
+
+TEST(HorizontalOffset, ZeroDisablesCorrection)
+{
+    EXPECT_FLOAT_EQ(ResolveHorizontalOffset(0.0f, 1.0f), 0.0f);
+    EXPECT_FLOAT_EQ(ResolveHorizontalOffset(0.0f, 0.25f), 0.0f);
+}
+
+TEST(HorizontalOffset, PreservesDirectionAndFollowsTextScale)
+{
+    EXPECT_FLOAT_EQ(ResolveHorizontalOffset(-10.0f, 1.0f), -10.0f);
+    EXPECT_FLOAT_EQ(ResolveHorizontalOffset(-10.0f, 0.5f), -5.0f);
+    EXPECT_FLOAT_EQ(ResolveHorizontalOffset(12.0f, 0.5f), 6.0f);
+}
+
+TEST(HorizontalOffset, ClampsExtremeConfiguration)
+{
+    EXPECT_FLOAT_EQ(ResolveHorizontalOffset(-500.0f, 1.0f), -200.0f);
+    EXPECT_FLOAT_EQ(ResolveHorizontalOffset(500.0f, 1.0f), 200.0f);
 }
