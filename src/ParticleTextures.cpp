@@ -32,7 +32,7 @@ namespace ParticleTextures
 static constexpr int NUM_TYPES = Settings::kParticleStyleCount;
 
 // Explicit art compensation in ParticleStyle enum order. A full coin/heart
-// already fills much of its frame; dust, pixiedust, rain, etc. paint only a
+// already fills much of its frame; dust, pixiedust, etc. paint only a
 // handful of pixels and therefore need a much larger crisp quad. The halo
 // scale is independent so increasing a sparse core never increases its
 // background bloom. Values were derived from every active strip frame's
@@ -40,7 +40,6 @@ static constexpr int NUM_TYPES = Settings::kParticleStyleCount;
 // sparks stay pinpoints, solid icons stay compact).
 static constexpr std::array<StyleVisibilityTuning, NUM_TYPES> kStyleVisibilityTuning = {{
     {1.90f, .35f, .70f},  // firefly
-    {2.05f, .40f, .45f},  // rain
     {1.45f, .70f, .55f},  // snow
     {1.05f, .85f, .40f},  // smoke
     {2.35f, .38f, .70f},  // spark
@@ -1270,7 +1269,6 @@ struct GenArray
 // legacy generator set rather than shipping bespoke generators.
 static const GenArray kAllGens[NUM_TYPES] = {
     {kOrbGens, 5},      // Firefly  -> soft glowing orbs
-    {kSparkGens, 6},    // Rain     -> streaky sparks
     {kStarGens, 7},     // Snow     -> star/flake points
     {kOrbGens, 5},      // Smoke    -> soft blobs
     {kSparkGens, 6},    // Spark    -> embers
@@ -1967,6 +1965,11 @@ void DrawSoftGlow(ImDrawList* list, const ImVec2& center, float size, ImU32 colo
         return;
     }
     DrawSpriteQuad(list, center, size, SoftGlowTexture(), 0, color, BlendMode::Additive, .0f);
+}
+
+bool HasSoftGlow()
+{
+    return SoftGlowTexture().srv != nullptr;
 }
 
 void PushAdditiveBlend(ImDrawList* dl)
