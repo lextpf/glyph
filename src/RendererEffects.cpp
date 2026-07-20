@@ -1083,7 +1083,6 @@ struct ParticleTypeSpec
 static constexpr int kParticleTypeCount = Settings::kParticleStyleCount;
 static constexpr ParticleTypeSpec kParticleTypes[kParticleTypeCount] = {
     {Settings::ParticleStyle::Firefly, "firefly", 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-    {Settings::ParticleStyle::Rain, "rain", 1.00f, 1.05f, 0.85f, 1.60f, 1.00f},
     {Settings::ParticleStyle::Snow, "snow", 1.00f, 1.05f, 0.90f, 0.70f, 1.00f},
     {Settings::ParticleStyle::Smoke, "smoke", 0.90f, 1.05f, 1.10f, 0.60f, 0.80f},
     {Settings::ParticleStyle::Spark, "spark", 1.00f, 0.80f, 0.70f, 1.50f, 1.00f},
@@ -2076,6 +2075,65 @@ void DrawBadges(ImDrawList* dl,
     const ImVec2 shadowOff(snap.mainShadowOffsetX * spacingScale * .5f,
                            snap.mainShadowOffsetY * spacingScale * .5f);
 
+    // Seat of Light: a soft breathing light bed behind the PLAYER strip only.
+    // Elevates the player block by register (ambient light) -- it never lights
+    // individual muted icons (their own draws below are unchanged). Additive
+    // Gaussian discs overlap into one pool that decays to zero at every edge
+    // (no plate). Skipped without a live soft-glow disc. Folds with the block
+    // via style.alpha * badgeAlphaMul so a Quiet-Frame pan retires it too.
+    if (layout.isPlayer && snap.icons.playerStripBedEnabled && !layout.badges.empty() &&
+        ParticleTextures::HasSoftGlow())
+    {
+        float minL = FLT_MAX, maxR = -FLT_MAX, rowH = .0f, cy = .0f;
+        for (const auto& b : layout.badges)
+        {
+            minL = std::min(minL, b.pos.x);
+            maxR = std::max(maxR, b.pos.x + b.size.x);
+            rowH = std::max(rowH, b.size.y);
+            cy = b.pos.y + b.size.y * .5f;
+        }
+        const float breathe =
+            .85f + .15f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.2831853f *
+                                   snap.icons.playerStripBedBreatheHz);
+        const float bedA =
+            style.alpha * style.badgeAlphaMul * snap.icons.playerStripBedAlpha * breathe;
+        if (bedA > .002f)
+        {
+            ImVec4 acc;
+            if (snap.icons.playerStripBedColor.has_value())
+            {
+                const auto& col = *snap.icons.playerStripBedColor;
+                acc = ImVec4(col.r, col.g, col.b, 1.0f);
+            }
+            else
+            {
+                const ImVec4& base = style.LcName;
+                const float luma = .299f * base.x + .587f * base.y + .114f * base.z;
+                const float k = .65f;  // near-neutral
+                acc = ImVec4(base.x + (luma - base.x) * k,
+                             base.y + (luma - base.y) * k,
+                             base.z + (luma - base.z) * k,
+                             1.0f);
+            }
+            const ImU32 bedCol = IM_COL32(std::clamp((int)(acc.x * 255.0f), 0, 255),
+                                          std::clamp((int)(acc.y * 255.0f), 0, 255),
+                                          std::clamp((int)(acc.z * 255.0f), 0, 255),
+                                          std::clamp((int)(bedA * 255.0f), 0, 255));
+            const float stripW = maxR - minL;
+            const float edge = rowH * snap.icons.playerStripBedSize;
+            // Space disc centers ~one visible radius (edge/3) apart so the
+            // Gaussian cores overlap into a continuous pool at any bed size.
+            const float spacing = std::max(1.0f, edge / 3.0f);
+            const int count = std::max(2, static_cast<int>(std::ceil(stripW / spacing)) + 1);
+            for (int i = 0; i < count; ++i)
+            {
+                const float t =
+                    (count > 1) ? static_cast<float>(i) / static_cast<float>(count - 1) : .5f;
+                ParticleTextures::DrawSoftGlow(dl, ImVec2(minL + t * stripW, cy), edge, bedCol);
+            }
+        }
+    }
+
     for (const auto& b : layout.badges)
     {
         float a = style.alpha * style.badgeAlphaMul;
@@ -2125,27 +2183,103 @@ void DrawBadges(ImDrawList* dl,
                          ImVec2(1, 1),
                          shadow);
 
-            // Colored glow: two enlarged low-alpha copies of the icon in its
-            // tint color, forming a soft halo. Semantic icons only -- full-color
-            // emblems draw as-authored (the tier emblem carries its own bloom).
+            // Colored glow: ONE featureless soft-glow disc in the badge's own
+            // semantic color -- a clean halo, not enlarged copies of the
+            // pictograph (which read as a doubled/ghosted "layered" glow). Same
+            // clean-light approach as the tier emblem backlight. The legacy
+            // two-copy halo is kept only as a fallback for when the soft-glow
+            // disc is unavailable (total texture failure), so a lit icon never
+            // loses its glow entirely.
             if (!b.fullColor)
             {
                 const ImVec2 gc((b.pos.x + pMax.x) * .5f, (b.pos.y + pMax.y) * .5f);
-                const auto glow = [&](float scale, float ga)
+                if (ParticleTextures::HasSoftGlow())
                 {
-                    const ImVec2 gh(b.size.x * .5f * scale, b.size.y * .5f * scale);
-                    dl->AddImage(b.tex,
-                                 ImVec2(gc.x - gh.x, gc.y - gh.y),
-                                 ImVec2(gc.x + gh.x, gc.y + gh.y),
-                                 ImVec2(0, 0),
-                                 ImVec2(1, 1),
-                                 ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, ga)));
-                };
-                glow(1.65f, a * .22f);
-                glow(1.32f, a * .34f);
+                    // Smooth feathered halo: three featureless soft-light discs
+                    // (the shared Gaussian) at widening scales that sum into one
+                    // soft gradient -- a feather in the badge's own color, never
+                    // copies of the pictograph (which would ghost).
+                    const int gr = std::clamp(static_cast<int>(c.r * 255.0f), 0, 255);
+                    const int gg = std::clamp(static_cast<int>(c.g * 255.0f), 0, 255);
+                    const int gb = std::clamp(static_cast<int>(c.b * 255.0f), 0, 255);
+                    constexpr float kGScale[3] = {1.0f, .64f, .4f};
+                    constexpr float kGWeight[3] = {.34f, .40f, .44f};
+                    for (int gi = 0; gi < 3; ++gi)
+                    {
+                        const int ga =
+                            std::clamp(static_cast<int>(a * .5f * kGWeight[gi] * 255.0f), 0, 255);
+                        if (ga > 2)
+                        {
+                            ParticleTextures::DrawSoftGlow(
+                                dl, gc, b.size.x * 3.0f * kGScale[gi], IM_COL32(gr, gg, gb, ga));
+                        }
+                    }
+                }
+                else
+                {
+                    const auto glow = [&](float scale, float ga)
+                    {
+                        const ImVec2 gh(b.size.x * .5f * scale, b.size.y * .5f * scale);
+                        dl->AddImage(b.tex,
+                                     ImVec2(gc.x - gh.x, gc.y - gh.y),
+                                     ImVec2(gc.x + gh.x, gc.y + gh.y),
+                                     ImVec2(0, 0),
+                                     ImVec2(1, 1),
+                                     ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, ga)));
+                    };
+                    glow(1.65f, a * .22f);
+                    glow(1.32f, a * .34f);
+                }
             }
         }
         dl->AddImage(b.tex, b.pos, pMax, ImVec2(0, 0), ImVec2(1, 1), tint);
+
+        // B (Struck Metal): resting PLAYER icons read as struck studs -- a warm
+        // top rim + a carved bottom shadow overlaid on the muted icon. Player-
+        // only, muted-only (NPCs and lit icons untouched); alpha-blended, subtle.
+        if (b.muted && layout.isPlayer && snap.icons.playerRimLightEnabled)
+        {
+            const float off = (std::max)(.5f, snap.icons.playerRimOffset * spacingScale);
+            ImVec4 rim;
+            if (snap.icons.playerRimColor.has_value())
+            {
+                const auto& rc = *snap.icons.playerRimColor;
+                rim = ImVec4(rc.r, rc.g, rc.b, 1.0f);
+            }
+            else
+            {
+                const ImVec4& base = style.LcName;  // warm-white lift
+                rim = ImVec4((std::min)(1.0f, base.x * .3f + .72f),
+                             (std::min)(1.0f, base.y * .3f + .70f),
+                             (std::min)(1.0f, base.z * .3f + .63f),
+                             1.0f);
+            }
+            const int rimA =
+                std::clamp(static_cast<int>(a * snap.icons.playerRimAlpha * 255.0f), 0, 255);
+            const int carveA =
+                std::clamp(static_cast<int>(a * snap.icons.playerCarveAlpha * 255.0f), 0, 255);
+            if (rimA > 2)
+            {
+                dl->AddImage(b.tex,
+                             ImVec2(b.pos.x, b.pos.y - off),
+                             ImVec2(pMax.x, pMax.y - off),
+                             ImVec2(0, 0),
+                             ImVec2(1, 1),
+                             IM_COL32(static_cast<int>(rim.x * 255.0f),
+                                      static_cast<int>(rim.y * 255.0f),
+                                      static_cast<int>(rim.z * 255.0f),
+                                      rimA));
+            }
+            if (carveA > 2)
+            {
+                dl->AddImage(b.tex,
+                             ImVec2(b.pos.x, b.pos.y + off),
+                             ImVec2(pMax.x, pMax.y + off),
+                             ImVec2(0, 0),
+                             ImVec2(1, 1),
+                             IM_COL32(12, 12, 16, carveA));
+            }
+        }
     }
 }
 
@@ -2180,10 +2314,8 @@ void DrawTierEmblem(ImDrawList* dl,
     const ImVec2 c(layout.tierEmblemPos.x + layout.tierEmblemSize.x * .5f,
                    layout.tierEmblemPos.y + layout.tierEmblemSize.y * .5f);
 
-    // Slow, calm breath (~0.17 Hz) modulating only the bloom -- never the crisp
-    // emblem -- so the shape stays stable while its halo swells and settles.
-    const float breathe = .78f + .22f * std::sin(time * 1.05f);
-
+    // Crisp emblem drawer: white multiply leaves the emblem RGB untouched and
+    // applies only the fade alpha.
     const auto drawScaled = [&](float scale, float alpha)
     {
         if (alpha < .004f)
@@ -2201,16 +2333,126 @@ void DrawTierEmblem(ImDrawList* dl,
                      col);
     };
 
-    // Bloom: three enlarged, low-alpha copies -> a fuller, brighter outward
-    // halo in the emblem's own colors.  Drawn first so the crisp emblem lands
-    // on top.  Boosted from the old two-layer .10/.18 so the rank badge's glow
-    // carries the prestige read.
-    drawScaled(1.62f, a * .14f * breathe);
-    drawScaled(1.34f, a * .24f * breathe);
-    drawScaled(1.16f, a * .32f * breathe);
-    // Crisp emblem, full color -- a touch more translucent (.82) so the halo
-    // shows through and the emblem glows rather than sitting flat and opaque.
-    drawScaled(1.0f, a * .82f);
+    // Near-neutral accent for the backlight: an explicit INI value wins; else
+    // derive from the tier Name color, desaturated toward luma so the light
+    // reads as light (not a saturated wash) and never recolors cool slots.
+    const auto neutralAccent = [&]() -> ImVec4
+    {
+        if (snap.icons.emblemBacklightColor.has_value())
+        {
+            const auto& col = *snap.icons.emblemBacklightColor;
+            return ImVec4(col.r, col.g, col.b, 1.0f);
+        }
+        const ImVec4& base = style.LcName;
+        const float luma = .299f * base.x + .587f * base.y + .114f * base.z;
+        const float k = .65f;  // pull most of the way to grey -> near-neutral
+        return ImVec4(base.x + (luma - base.x) * k,
+                      base.y + (luma - base.y) * k,
+                      base.z + (luma - base.z) * k,
+                      1.0f);
+    };
+
+    if (snap.icons.emblemBacklightEnabled && ParticleTextures::HasSoftGlow())
+    {
+        // One true featureless radial backlight (+ a tighter core), breathing
+        // on alpha only. DrawSoftGlow's `size` is the quad EDGE (visible radius
+        // ~1/3 of it), so the edge is a multiple of the emblem edge.
+        const float breathe =
+            .78f + .22f * std::sin(time * 6.2831853f * snap.icons.emblemBacklightBreatheHz);
+        const ImVec4 acc = neutralAccent();
+        const int ar = std::clamp((int)(acc.x * 255.0f), 0, 255);
+        const int ag = std::clamp((int)(acc.y * 255.0f), 0, 255);
+        const int ab = std::clamp((int)(acc.z * 255.0f), 0, 255);
+        const float edge = layout.tierEmblemSize.x * snap.icons.emblemBacklightSize;
+
+        // Smooth feathered backlight: three featureless discs at widening scales
+        // summing into one soft gradient halo (replaces a single tight disc + core).
+        const float peak = a * snap.icons.emblemBacklightAlpha * breathe;
+        constexpr float kBScale[3] = {1.0f, .64f, .4f};
+        constexpr float kBWeight[3] = {.34f, .40f, .44f};
+        for (int gi = 0; gi < 3; ++gi)
+        {
+            const int ga = std::clamp(static_cast<int>(peak * kBWeight[gi] * 255.0f), 0, 255);
+            if (ga > 2)
+            {
+                ParticleTextures::DrawSoftGlow(dl, c, edge * kBScale[gi], IM_COL32(ar, ag, ab, ga));
+            }
+        }
+        if (snap.icons.emblemKeyFillEnabled)
+        {
+            // Directional model: a warm KEY above-behind + a cooler FILL below,
+            // both featureless, breathing slightly out of phase -> a top-lit read.
+            const float kfBreathe =
+                .82f +
+                .18f * std::sin(time * 6.2831853f * snap.icons.emblemBacklightBreatheHz + 1.3f);
+            ImVec4 key;
+            if (snap.icons.emblemKeyColor.has_value())
+            {
+                const auto& kc = *snap.icons.emblemKeyColor;
+                key = ImVec4(kc.r, kc.g, kc.b, 1.0f);
+            }
+            else
+            {
+                const ImVec4& base = style.LcName;  // warm
+                key = ImVec4((std::min)(1.0f, base.x * .4f + .55f),
+                             (std::min)(1.0f, base.y * .4f + .50f),
+                             (std::min)(1.0f, base.z * .4f + .40f),
+                             1.0f);
+            }
+            ImVec4 fill;
+            if (snap.icons.emblemFillColor.has_value())
+            {
+                const auto& fc = *snap.icons.emblemFillColor;
+                fill = ImVec4(fc.r, fc.g, fc.b, 1.0f);
+            }
+            else
+            {
+                const ImVec4& base = style.LcName;  // cool
+                fill = ImVec4((std::min)(1.0f, base.x * .4f + .35f),
+                              (std::min)(1.0f, base.y * .4f + .42f),
+                              (std::min)(1.0f, base.z * .4f + .50f),
+                              1.0f);
+            }
+            const float keyY = c.y - layout.tierEmblemSize.x * snap.icons.emblemKeyRise;
+            const float fillY = c.y + layout.tierEmblemSize.x * snap.icons.emblemFillDrop;
+            const int keyA = std::clamp(
+                static_cast<int>(a * snap.icons.emblemKeyAlpha * kfBreathe * 255.0f), 0, 255);
+            const int fillA = std::clamp(
+                static_cast<int>(a * snap.icons.emblemFillAlpha * kfBreathe * 255.0f), 0, 255);
+            if (keyA > 2)
+            {
+                ParticleTextures::DrawSoftGlow(dl,
+                                               ImVec2(c.x, keyY),
+                                               edge * .8f,
+                                               IM_COL32(static_cast<int>(key.x * 255.0f),
+                                                        static_cast<int>(key.y * 255.0f),
+                                                        static_cast<int>(key.z * 255.0f),
+                                                        keyA));
+            }
+            if (fillA > 2)
+            {
+                ParticleTextures::DrawSoftGlow(dl,
+                                               ImVec2(c.x, fillY),
+                                               edge * .7f,
+                                               IM_COL32(static_cast<int>(fill.x * 255.0f),
+                                                        static_cast<int>(fill.y * 255.0f),
+                                                        static_cast<int>(fill.z * 255.0f),
+                                                        fillA));
+            }
+        }
+        drawScaled(1.0f, a * snap.icons.emblemCrispAlpha);
+    }
+    else
+    {
+        // Fallback: no soft-glow disc, or backlight disabled -> today's look
+        // EXACTLY (three enlarged art copies + 0.82 crisp). Never a glow-less
+        // emblem.
+        const float breathe = .78f + .22f * std::sin(time * 1.05f);
+        drawScaled(1.62f, a * .14f * breathe);
+        drawScaled(1.34f, a * .24f * breathe);
+        drawScaled(1.16f, a * .32f * breathe);
+        drawScaled(1.0f, a * .82f);
+    }
 }
 
 }  // namespace Renderer
