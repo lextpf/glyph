@@ -26,6 +26,11 @@ struct Data
     std::string bubblePop;
 };
 
+/**
+ * @fn Data& State()
+ * @brief Access mutable subsystem state with process lifetime.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 Data& State()
 {
     static Data d;
@@ -35,8 +40,13 @@ Data& State()
 const std::vector<std::string> kEmptyVec{};
 const std::string kEmptyStr{};
 
-// Resolve a manifest entry to a full path. An absolute path (drive letter or leading slash)
-// passes through unchanged; everything else is taken relative to the manifest's directory.
+/**
+ * @fn std::string Resolve(const std::string& baseDir, const std::string& rel)
+ * @brief Resolve relative asset entries against the manifest directory.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Keep absolute entries; resolve others against the manifest directory.
+ */
 std::string Resolve(const std::string& baseDir, const std::string& rel)
 {
     if (rel.empty())
@@ -72,7 +82,6 @@ bool Load(const std::string& path)
         return false;
     }
 
-    // Paths in the manifest are relative to the manifest's own folder.
     std::string baseDir;
     if (const auto slash = path.find_last_of("/\\"); slash != std::string::npos)
     {
