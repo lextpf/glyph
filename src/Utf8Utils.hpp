@@ -6,61 +6,42 @@
 
 /**
  * @namespace Utf8Utils
- * @brief Validated UTF-8 string utilities.
- * @author Alex (https://github.com/lextpf)
+ * @brief UTF-8 iteration with defined malformed-input recovery.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Utilities
  *
- * Helpers for iterating, counting, and truncating UTF-8 text. No function rejects
- * malformed input: it either substitutes U+FFFD or consumes a single byte.
- *
- * @warning Two resync conventions coexist. `Utf8CharLen` and `Utf8ToChars` are
- *          byte-conservative: an invalid sequence yields length 1 and the raw byte
- *          is
- * kept. `Utf8Next`, `Utf8CharCount` and `Utf8Truncate` consume a whole
- *          structurally
- * valid sequence even when its value is invalid. The two
- *          character counts therefore
- * differ for malformed input, for example 3 and
- *          1 for a surrogate half. Do not mix the
- * two conventions on one string.
+ * Do not mix recovery families on malformed text: a surrogate half counts as three
+ * characters for Utf8CharLen, one for Utf8Next. Counts refer to decoded units, not visible
+ * grapheme clusters; combining marks count separately.
  *
  * ```mermaid
  * ---
  * config:
  *   theme: dark
- *   look:
- * handDrawn
+ *   look: handDrawn
  * ---
  * flowchart TD
  *     I[Read the next input bytes] --> K{Sequence class}
- * K
- * -- Valid scalar value --> V[Both families consume the complete sequence]
- *     V -->
- * VR[Utf8CharLen and Utf8ToChars<br/>keep the encoded bytes]
- *     V --> VN[Utf8Next decodes the
- * scalar;<br/>count and truncate advance with it]
- *     K -- Malformed byte structure --> M[Both
- * families advance one byte]
+ *     K -- Valid scalar value --> V[Both families consume the complete sequence]
+ *     V --> VR[Utf8CharLen and Utf8ToChars<br/>keep the encoded bytes]
+ *     V --> VN[Utf8Next decodes the scalar;<br/>count and truncate advance with it]
+ *     K -- Malformed byte structure --> M[Both families advance one byte]
  *     M --> MR[Utf8CharLen and Utf8ToChars<br/>keep that raw byte]
- *
- * M --> MN[Utf8Next yields U+FFFD;<br/>count and truncate advance one byte]
- *     K -- Invalid
- * scalar value --> C[Utf8CharLen and Utf8ToChars<br/>keep one raw byte]
- *     K -- Invalid scalar
- * value --> N[Next family consumes all bytes;<br/>Utf8Next yields U+FFFD]
- *     MN -.->
- * T[Utf8Truncate copies the original prefix;<br/>it never writes U+FFFD]
+ *     M --> MN[Utf8Next yields U+FFFD;<br/>count and truncate advance one byte]
+ *     K -- Invalid scalar value --> C[Utf8CharLen and Utf8ToChars<br/>keep one raw byte]
+ *     K -- Invalid scalar value --> N[Next family consumes all bytes;<br/>Utf8Next yields U+FFFD]
+ *     MN -.-> T[Utf8Truncate copies the original prefix;<br/>it never writes U+FFFD]
  *     N -.-> T
  * ```
  */
 namespace Utf8Utils
 {
 /**
- * @brief Check whether a byte is a UTF-8 continuation byte.
+ * @fn bool IsUtf8Continuation(unsigned char c)
+ * @brief Test the UTF-8 continuation-byte pattern.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param c  Byte to check.
- *
- * @return   True when the byte has the bit form 10xxxxxx.
+ * Test the UTF-8 continuation-byte pattern 10xxxxxx.
  */
 inline bool IsUtf8Continuation(unsigned char c)
 {
@@ -68,16 +49,14 @@ inline bool IsUtf8Continuation(unsigned char c)
 }
 
 /**
- * @brief Get the byte length of the UTF-8 character at a pointer.
+ * @fn size_t Utf8CharLen(const char* s)
+ * @brief Measure one UTF-8 character with byte-wise error recovery.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Returns 1 for invalid lead bytes, overlong encodings, surrogate halves, and
- * codepoints above U+10FFFF, so the caller keeps the raw byte and resynchronizes
- * at the next one.
+ * Invalid leads, overlong encodings, surrogates and values above U+10FFFF consume one byte.
  *
- * @param s Pointer to the first byte of the character. It may be null.
- *
- * @return Byte length in 1..4, or 0 when @p s is null or points at the
- *         terminator. Callers must treat 0 as a stop condition, not as progress.
+ * @param s Null-terminated input; may be null.
+ * @return 1..4 bytes, or zero at null/terminator. Zero means stop.
  */
 inline size_t Utf8CharLen(const char* s)
 {
@@ -152,28 +131,22 @@ inline size_t Utf8CharLen(const char* s)
 }
 
 /**
- * @brief Decode one UTF-8 character and advance.
+ * @fn const char* Utf8Next(const char* s, unsigned int& out)
+ * @brief Decode one character with sequence-wise scalar-error recovery.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The iterator helper behind the counting and truncation functions.
+ * | Input                       | Output | Advance        |
+ * |-----------------------------|--------|----------------|
+ * | Null or terminator          | 0      | None           |
+ * | Valid scalar                | Scalar | Whole sequence |
+ * | Malformed structure         | U+FFFD | One byte       |
+ * | Invalid scalar in 3/4 bytes | U+FFFD | Whole sequence |
  *
- * Contract:
- * - If @p s is null or points at '\\0', returns @p s unchanged and sets @p out to 0.
- * - For valid UTF-8, @p out is the decoded codepoint and the return value is
- *   @p s + 1/2/3/4.
- * - For malformed byte structure, that is a bad lead byte or a missing or
- *   non-continuation byte, @p out is set to U+FFFD and one byte is consumed
- *   (return @p s + 1).
- * - For a structurally valid sequence whose value is overlong, a surrogate half,
- *   or above U+10FFFF, @p out is set to U+FFFD and the whole sequence is consumed
- *   (return @p s + 3 or @p s + 4). A caller that relies on the one-byte case to
- *   resynchronize skips two or three extra bytes here.
+ * Invalid two-byte leads consume one byte. Every nonterminal path advances.
  *
- * Every path except the terminator case makes forward progress.
- *
- * @param s   Pointer to the first byte of the character. It may be null.
- * @param out Receives the decoded codepoint, or U+FFFD for malformed input.
- *
- * @return Pointer to the next character, or @p s when there is nothing to decode.
+ * @param s Null-terminated input; may be null.
+ * @param out Decoded value or replacement character.
+ * @return Next input pointer; unchanged at null/terminator.
  */
 inline const char* Utf8Next(const char* s, unsigned int& out)
 {
@@ -279,11 +252,9 @@ inline const char* Utf8Next(const char* s, unsigned int& out)
 }
 
 /**
- * @brief Count UTF-8 codepoints in a null-terminated string.
- *
- * @param s  String to count.
- * The pointer can be null.
- * @return   The codepoint count, or zero when `s` is null.
+ * @fn size_t Utf8CharCount(const char* s)
+ * @brief Count with Utf8Next recovery rules; null returns zero.
+ * @author Alex (<https://github.com/lextpf>)
  */
 inline size_t Utf8CharCount(const char* s)
 {
@@ -309,16 +280,14 @@ inline size_t Utf8CharCount(const char* s)
 }
 
 /**
- * @brief Truncate a UTF-8 string to a maximum number of codepoints.
+ * @fn std::string Utf8Truncate(const char* s, size_t maxChars)
+ * @brief Keep at most maxChars codepoints using Utf8Next recovery.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The result is a byte-exact prefix of `s`. A malformed sequence counts as one
- * codepoint, but its bytes are copied through unrepaired: no U+FFFD is written.
+ * Copies the byte-exact prefix without repairing malformed input.
  *
- * @param s        Null-terminated source string. It may be null.
- * @param maxChars Maximum number of codepoints to keep.
- *
- * @return The truncated prefix, or an empty string when @p s is null or
- *         @p maxChars is 0.
+ * @param s Null-terminated input; may be null.
+ * @return Empty when s is null or maxChars is zero.
  */
 inline std::string Utf8Truncate(const char* s, size_t maxChars)
 {
@@ -347,11 +316,11 @@ inline std::string Utf8Truncate(const char* s, size_t maxChars)
 }
 
 /**
- * @brief Split a UTF-8 string into individual encoded characters.
+ * @fn std::vector<std::string> Utf8ToChars(const std::string& str)
+ * @brief Split encoded characters with Utf8CharLen recovery.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param str  String to
- * split.
- * @return     The encoded character strings in input order.
+ * Malformed bytes remain unchanged and separate. Stops at an embedded null.
  */
 inline std::vector<std::string> Utf8ToChars(const std::string& str)
 {
