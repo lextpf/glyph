@@ -4,22 +4,15 @@
 
 /**
  * @namespace Renderer
- * @brief Main rendering system for the nameplate overlay.
- * @author Alex (https://github.com/lextpf)
+ * @brief Render-thread nameplates from game-thread snapshots.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Renderer
  *
- * Multi-threaded floating nameplates for Skyrim SE: world-to-screen projection, actor
- * tracking, smoothing, and visual effects (particles, ornaments, tier text effects).
+ * Actor facts arrive as plain data under `snapshotLock`. The render thread owns
+ * animation caches and must not resolve actor handles. Its engine reads are limited
+ * to camera and renderer singletons for projection, aim, and screen size.
  *
- * ## :material-sitemap-outline: Architecture
- *
- * Producer/consumer split by thread. The game thread collects actor data through
- * `SKSE::GetTaskInterface()->AddTask()`; the render thread draws from the published copy.
- * The render thread never dereferences an actor: every actor fact reaches it as plain data
- * in the snapshot. The only `RE::*` state it reads is the camera and renderer singletons
- * (`RE::Main::WorldRootCamera`, `RE::PlayerCamera`, `RE::BSGraphics::Renderer`): the camera
- * pose for projection, near-camera scaling, pan-speed quieting and the aim ray, and the
- * renderer for the screen size.
+ * ### :material-sitemap-outline: Thread ownership
  *
  * ```mermaid
  * ---
@@ -32,17 +25,16 @@
  *     classDef data fill:#4a3520,stroke:#f59e0b,color:#e2e8f0
  *     classDef render fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
  *
- *     RT[Render Thread]:::thread -->|Schedule update| GT[Game Thread]:::thread
+ *     RT[Render thread]:::thread -->|Schedule update| GT[Game thread]:::thread
  *     GT -->|Publish ActorDrawData| Snap[Snapshot - guarded by snapshotLock]:::data
  *     Snap -->|Copy under snapshotLock| RT
  *     RT -->|Owns smoothing state| Cache[ActorCache - render thread only]:::data
  *     RT -->|Draw nameplates| ImGui[ImGui]:::render
  * ```
  *
- * ## :material-pipe: Render Pipeline
+ * ### :material-pipe: Frame gates
  *
- * Order inside one `Draw()` call. The first three nodes are gates: each one returns without
- * drawing, so a suppressed frame never reaches the snapshot copy.
+ * The first three gates return before copying the snapshot.
  *
  * ```mermaid
  * ---
@@ -64,217 +56,115 @@
  *     G --> H[Composite and prune cache]:::render
  * ```
  *
- * ## :material-chart-bell-curve-cumulative: Exponential Smoothing
- *
- * Alpha, scale, occlusion, focus, yield, the camera-quiet factors, the scene-profile knobs
- * and the per-actor candlelight sample all approach their targets framerate-independently:
+ * ### :material-chart-bell-curve-cumulative: Smoothing
  *
  * $$v_{new} = v_{old} + (v_{target} - v_{old}) \cdot \alpha$$
  *
- * where $\alpha = 1 - \epsilon^{\,\Delta t \,/\, T_{settle}}$, $\epsilon = 0.01$ (a 1%
- * residual threshold, not machine epsilon), and $T_{settle}$ is the time for the value to
- * settle within $\epsilon$ of the target.
+ * $\alpha = 1 - \epsilon^{\,\Delta t \,/\, T_{settle}}$, with $\epsilon = 0.01$
+ * and settle time in seconds. Position also uses an 8-frame average and per-frame
+ * large-movement blending; those terms depend on frame rate.
  *
- * Screen position is the exception. It blends the exponential result with an 8-frame
- * moving average (`Visual().PositionSmoothingBlend`), and above
- * `Visual().LargeMovementThreshold` it applies the raw per-frame
- * `Visual().LargeMovementBlend`. Both of those terms count frames, not time, so they are
- * framerate-dependent.
+ * ### :material-cube-scan: Projection
  *
- * ## :material-cube-scan: World-to-Screen Projection
- *
- * `RE::NiCamera::WorldPtToScreenPt3()` from CommonLibSSE projects a 3D world point into
- * normalized viewport coordinates:
- *
- * | Component | Meaning                                                     |
- * |:---------:|-------------------------------------------------------------|
- * | $x$       | Horizontal screen position $[0, 1]$                         |
- * | $y$       | Vertical screen position $[0, 1]$, measured upward           |
- * | $z$       | Viewport depth $[0, 1]$; outside that range the point is cut |
- *
- * The internal wrapper `Renderer::WorldToScreen` (declared in RendererInternal.hpp, defined
- * in Renderer.cpp) converts them to ImGui pixels ($x_{px} = x \cdot w$,
- * $y_{px} = (1 - y) \cdot h$), so $y$ increases downward in every consumer. The draw path
- * rejects a point when $z < 0$ or $z > 1$. The depth-buffer polarity is not known at compile
- * time; `ComputeDepthPolarity()` resolves it at runtime from two probe points.
- *
- * ## :material-connection: SKSE Integration
- *
- * | System                 | API                                     | Purpose                  |
- * |------------------------|-----------------------------------------|--------------------------|
- * | D3D11 init             | `CreateD3DAndSwapChain` (thunk call)    | Device and swapchain     |
- * | Render hook            | `HUDMenu::PostDisplay` (vtable[6])      | Per-frame draw timing    |
- * | Render hook (fallback) | `IDXGISwapChain::Present` (vtable[8])   | Upscaler fallback path   |
- * | Actor iteration        | `RE::ProcessLists`                      | Find nearby actors       |
- * | Occlusion              | `RE::Actor::HasLineOfSight()`           | Line-of-sight checks     |
- * | Task scheduling        | `SKSE::GetTaskInterface()->AddTask()`   | Game-thread data collect |
- *
- * The Present hook drives the same overlay path as `HUDMenu::PostDisplay`, and renders
- * only when PostDisplay did not render this frame, which happens when an upscaler stack
- * (DLSS, FSR) skips or defers PostDisplay.
- *
- * ## :material-speedometer: Performance
- *
- * | Strategy           | Detail                                                              |
- * |--------------------|---------------------------------------------------------------------|
- * | Occlusion throttle | `Occlusion().CheckInterval` snapshot updates between casts, default 3 |
- * | Cache pruning      | 60 idle render frames, 3x that while a plate is still exiting       |
- * | Actor cap          | `MaxPlates`: default 16, clamped to 1-128                           |
- * | Scan cap           | `MaxScanActors`: default 128, 1-4096, never below `MaxPlates`       |
+ * WorldToScreen converts normalized camera coordinates to ImGui pixels:
+ * $x_{px} = x \cdot w$, $y_{px} = (1 - y) \cdot h$. Callers reject depth outside [0,1].
+ * ComputeDepthPolarity resolves depth polarity from two projected probes.
  *
  * @see Hooks::Install, TextEffects
  */
 namespace Renderer
 {
 /**
- * @brief Draw all floating nameplates for this frame.
+ * @fn void Draw()
+ * @brief Advance and draw the current nameplate frame.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Primary entry point from the render hook. Render-thread only; actor data is read from a
- * mutex-protected snapshot.
+ * Render-thread only. Advances reload handling, animation and cache pruning.
+ * Returns before drawing during reload, a closed overlay gate, or the 300-frame
+ * wake cooldown. The cooldown counts eligible Draw calls, so it is not a fixed time.
+ * A missing renderer or empty snapshot also drops the frame.
+ * TickRT must continue on skipped frames to keep snapshots current.
  *
- * The hook calls `TickRT()` before the original function, then renders through a helper
- * that opens and closes the ImGui frame around this call. The `IDXGISwapChain::Present`
- * fallback hook drives the same helper when an upscaler skips `HUDMenu::PostDisplay`.
- *
- * The call also carries the frame's shared work: it runs the hot-reload key check, advances
- * every animation timer, and prunes the actor cache. A skipped call freezes all of that, not
- * only the pixels. The snapshot request is the exception: the hook calls `TickRT()` on every
- * frame, so the actor data stays current while `Draw()` is skipped.
- *
- * Three gates make the call return early before it draws anything: a hot reload is in flight,
- * the game-thread `allowOverlay` gate is false, or the post-load cooldown is still counting
- * down. The cooldown suppresses 300 rendered frames (about 5 s at 60 fps) after the overlay
- * leaves a suppressed state, and the first frame drawn after it replays every entrance
- * animation as a staggered cascade. The frame is also dropped when the BSGraphics renderer
- * singleton is unavailable or the copied snapshot is empty.
- *
- * ```cpp
- * // Hooks.cpp: HUDMenu::PostDisplay thunk (simplified)
- * static void thunk(RE::IMenu* a_menu) {
- *     Renderer::TickRT();
- *     Renderer::PrepareDeckCaptureRT();
- *     // Deck can request the frame on its own; Draw() itself stays gated below.
- *     const bool shouldRender = Renderer::IsOverlayAllowedRT() || Deck::NeedsFrame();
- *     func(a_menu);  // Call original
- *     if (shouldRender) {
- *         RenderOverlayNow();
- *     }
- * }
- *
- * // Hooks.cpp: RenderOverlayNow (simplified) - Draw() runs inside the frame
- * ImGui::NewFrame();
- * if (Renderer::IsOverlayAllowedRT()) {
- *     Renderer::Draw();
- * }
- * ImGui::EndFrame();
- * ImGui::Render();
- * ```
- *
- * @pre ImGui context must be initialized.
- * @pre Must be called within an ImGui frame (after NewFrame, before EndFrame).
- *
+ * @pre An initialized ImGui context inside NewFrame/EndFrame.
  * @see TickRT, IsOverlayAllowedRT
  */
 void Draw();
 
 /**
- * @brief Schedule the game-thread actor update for this frame.
+ * @fn void TickRT()
+ * @brief Queue actor collection and poll the Deck capture key.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Call once per frame, before `Draw()`, and unconditionally: also on frames where the
- * overlay is not drawn. The game-thread update publishes the `allowOverlay` gate that
- * `IsOverlayAllowedRT()` reports, so the overlay never bootstraps without this call. The
- * data collection itself runs on the game thread through SKSE's task interface. Requests
- * coalesce, so at most one game-thread task is ever in flight.
- *
- * It also polls the Deck capture key, which reads the settings under the shared settings
- * lock. A press is only recorded here; PrepareDeckCaptureRT resolves it into a request.
- *
- * @pre Must be called from the render thread.
- *
- * @see Draw, IsOverlayAllowedRT, PrepareDeckCaptureRT
+ * Render-thread only; call once per frame, including hidden frames, so the published
+ * draw gate can bootstrap. Requests coalesce to one task. Key polling takes a shared
+ * settings lock; PrepareDeckCaptureRT resolves the recorded press.
  */
 void TickRT();
 
 /**
- * @brief Check if overlay rendering is allowed.
+ * @fn bool IsOverlayAllowedRT()
+ * @brief Read the manual switch and last published game-state gate.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The result is the manual-enable flag AND the published game-state flag. It is false when
- * the user disabled rendering with `ToggleEnabled()` or `SetEnabled()`, and false when
- * `GameState::CanDrawOverlay()` returned false (loading, menus, combat, unattached cell,
- * and similar states).
+ * Reads the latest published game-state gate, which can precede the actor snapshot.
+ * Deck has a separate gate and can still request an ImGui frame.
  *
- * `TickRT()` only queues a game-thread snapshot update. That update calls
- * `GameState::CanDrawOverlay()` on the game thread and publishes the result into an atomic
- * flag, so the value reflects the last completed snapshot, not the current frame.
+ * @return True when both the manual switch and the published gate allow plates.
  *
- * A false result stops nameplate drawing only. Deck capture has its own game-thread gate,
- * so the hook can still open an ImGui frame for the Deck status toast while this is false.
- *
- * @return `true` if overlay can be drawn, `false` if it should be hidden.
- *
- * @post Return value is valid for current frame only.
- *
- * @see Draw, TickRT, GameState::CanDrawOverlay
+ * @see TickRT, GameState::CanDrawOverlay
  */
 bool IsOverlayAllowedRT();
 
 /**
- * @brief Toggle the rendering on/off.
+ * @fn bool ToggleEnabled()
+ * @brief Atomically toggle the manual switch from any thread.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Atomic read-modify-write on the manual-enable flag. Callable from any thread; the console
- * command handler calls it from the game thread. The change takes effect on the next frame.
+ * Takes effect on the next frame.
  *
- * @return The new enabled state (true = enabled, false = disabled).
+ * @return New enabled state.
  */
 bool ToggleEnabled();
 
 /**
- * @brief Set the nameplate rendering state to a specific value.
+ * @fn void SetEnabled(bool enabled)
+ * @brief Atomically set the manual switch from any thread.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Absolute-target form of `ToggleEnabled()`, with the same atomic store and the same
- * next-frame effect.
- *
- * @param enabled  New enabled state.
+ * Takes effect on the next frame.
  */
 void SetEnabled(bool enabled);
 
 /**
- * @brief Return the current manual-enabled state.
+ * @fn bool IsEnabled()
+ * @brief Read the manual switch from any thread.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * True if the user has not turned rendering off with the console command
- * (`ToggleEnabled()` or `SetEnabled()`). Independent of game-state gating that may still
- * suppress drawing for other reasons, so a true result does not mean plates are visible.
- * Atomic load, callable from any thread.
+ * Game-state gates still apply when the manual switch is enabled.
  *
- * @return true while manual rendering is enabled.
+ * @return The manual switch state, independent of game readiness.
  */
 bool IsEnabled();
 
 /**
- * @brief Force a one-shot refresh of the player's cached identity.
+ * @fn void RequestIdentityRefresh()
+ * @brief Request a player-name refresh from any thread.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Drops the player's render-thread cache entry, so the name and the typewriter reveal
- * rebuild on the next frame. Called from the RaceMenu-close event sink so a rename is
- * picked up promptly. Thread-safe: sets an atomic consumed on the render thread.
- *
- * The next `Draw()` consumes the flag. It erases the player cache entry and clears the
- * snapshot pause, so the following game-thread update is guaranteed to run and to publish
- * the new name.
+ * The next Draw erases the player cache entry and clears snapshot pause.
+ * The next snapshot publishes the new name and the typewriter restarts.
  */
 void RequestIdentityRefresh();
 
 /**
- * @brief Publish a pending Deck card render request.
+ * @fn void PrepareDeckCaptureRT()
+ * @brief Resolve a pending Deck key press into a plain-data card request.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Resolves a pending Deck key press against the game-thread actor snapshot and publishes a
- * plain-data card render request. Render-thread only; safe to call before the HUD is drawn
- * so Deck can immediately copy a clean scene.
- *
- * Returns without work when no key press is pending or when Deck is disabled. The target is
- * the live crosshair actor, then the live and unoccluded non-player actor whose projected
- * head-to-feet segment is closest to the screen center, within `DeckTargetRadius` pixels of
- * it, then the player when `DeckPlayerFallback` allows it. Every failure path reports
- * through Deck's own status toast instead of raising an error.
+ * Render-thread only; call before HUD drawing for a clean scene copy.
+ * Target order: live crosshair actor, nearest live/unoccluded non-player projected
+ * head-to-feet segment within DeckTargetRadius pixels, then the permitted player
+ * fallback. Disabled Deck or no pending press does no work; failures use Deck's toast.
  */
 void PrepareDeckCaptureRT();
 }  // namespace Renderer
