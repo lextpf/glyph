@@ -24,16 +24,8 @@ namespace Graffito
 {
 namespace
 {
-// ImDrawVert's ordinary POSITION/TEXCOORD/COLOR input remains unchanged, so the
-// ImGui input layout and the bound pixel shader keep working. Two things differ
-// from ImGui's stock orthographic VS: the position becomes a real projective
-// transform, and the color receives the ink material. Homography rows produce
-// (clipX, clipY, clipW). The normalized-screen affine depth plane is converted
-// back to clipZ so the GPU receives a real homogeneous position and
-// perspective-correctly interpolates UV/color.
-//
-// kPlaneVS and GraffitoShaderContract.hpp are hand-maintained mirrors of each
-// other. Nothing in the build cross-checks them, so edit both together.
+// kPlaneVS and GraffitoShaderContract.hpp share an ABI but have no automatic cross-check.
+// Update both when changing shader packing or arithmetic.
 constexpr const char* kPlaneVS = R"(
 cbuffer GraffitoCB : register(b0)
 {
@@ -62,10 +54,7 @@ PS_INPUT main(VS_INPUT input)
 {
     PS_INPUT output;
 
-    // Give every typography row its own lens profile. The cubic horizontal
-    // offset pins both endpoints, expands the middle interval, and compresses
-    // the wings. Height falls from 1.18x at the midpoint to .74x at the ends,
-    // making the fisheye visible even in a head-on view.
+    // pin row endpoints and magnify the midpoint. height ranges from 1.18x to .74x.
     float invHalfWidth = max(fisheyeParams.z, 0.0);
     float fisheyeStrength = invHalfWidth > 0.0 ? saturate(fisheyeParams.w) : 0.0;
     float halfWidth = invHalfWidth > 0.0 ? rcp(invHalfWidth) : 0.0;
@@ -78,9 +67,7 @@ PS_INPUT main(VS_INPUT input)
     warpedPosition.y =
         fisheyeParams.y + (input.pos.y - fisheyeParams.y) * verticalScale;
 
-    // A vertical cylinder is a ruled surface. Adjacent chord planes share an
-    // entire vertical ruling, so hard source-X selection is continuous and
-    // preserves each strip's exact projective mapping.
+    // adjacent chords share a vertical ruling, so source-X selection is continuous.
     float slot = floor((warpedPosition.x - segmentParams.x) * segmentParams.y);
     int base = ((int)clamp(slot, 0.0, segmentParams.z)) << 2;
 
@@ -89,8 +76,7 @@ PS_INPUT main(VS_INPUT input)
                             dot(segments[base + 1].xyz, source),
                             dot(segments[base + 2].xyz, source));
 
-    // Convert homogeneous NDC XY to homogeneous normalized-screen XY.
-    // Screen Y is top-down, unlike NDC Y.
+    // convert homogeneous NDC to normalized screen coordinates; screen Y grows downward.
     float2 screenNumerator =
         0.5 * float2(clipXYW.x + clipXYW.z, clipXYW.z - clipXYW.y);
     float depthNumerator =
@@ -127,9 +113,8 @@ struct SavedVertexState
     bool active = false;
 };
 
-// One camera-projected control point. ndc spans -1 to 1 with y upward, screen01
-// spans 0 to 1 with y downward (the DepthClip convention), and depth is the
-// viewport depth WorldPtToScreenPt3 returns, in the 0 to 1 range.
+// Ndc uses upward Y in [-1, 1]; screen01 uses downward Y in [0, 1].
+// Depth is viewport depth from WorldPtToScreenPt3 in [0, 1].
 struct ProjectedPoint
 {
     Math::Vec2 ndc{};
@@ -145,33 +130,45 @@ std::deque<CallbackParams> s_ParamArena;
 std::vector<SavedVertexState> s_StateStack;
 bool s_Initialized = false;
 
-// Preflight budget for the CPU mirror of kPlaneVS against the camera. The
-// position budget is in NDC units, which span -1 to 1, so it is about a fifth of
-// a pixel on a 1920-wide viewport. The depth budget is in viewport-depth units,
-// which span 0 to 1. Both are tight enough to catch a wrong solve and loose
-// enough to pass float rounding.
+// CPU shader-mirror tolerances: NDC position and viewport depth, respectively.
 constexpr double kProjectionTolerance = 2e-4;
 constexpr double kDepthTolerance = 5e-4;
 
+/**
+ * @fn Math::Vec3 ToMath(const RE::NiPoint3& point)
+ * @brief Widen an engine vector for geometry calculations.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The same component values represented as doubles.
+ */
 Math::Vec3 ToMath(const RE::NiPoint3& point)
 {
     return {
         static_cast<double>(point.x), static_cast<double>(point.y), static_cast<double>(point.z)};
 }
 
+/**
+ * @fn RE::NiPoint3 ToEngine(const Math::Vec3& point)
+ * @brief Narrow a geometry vector for the engine's projection API.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The component values converted to floats.
+ */
 RE::NiPoint3 ToEngine(const Math::Vec3& point)
 {
     return {static_cast<float>(point.x), static_cast<float>(point.y), static_cast<float>(point.z)};
 }
 
-// Admission check for a projection, not only a finiteness test: it also enforces
-// the ranges the shader assumes. A multi-chord plate needs a positive invStride,
-// because slot selection multiplies the source offset by it: a zero value
-// collapses every vertex onto chord 0, and a negative value reverses the chord
-// order. A single-chord plate may leave invStride at 0. Fisheye strength must
-// already lie in 0 to 1 here: the shader and the CPU mirror both saturate it, so
-// an out-of-range value would be corrected silently. Dropping the plate instead
-// keeps a caller bug visible.
+/**
+ * @fn bool IsFinite(const Projection& projection)
+ * @brief Validate plane-shader inputs before allocating callback parameters.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Multiple chords require positive invStride; zero selects chord 0 for every vertex.
+ * Reject out-of-range fisheye strength before the shader can silently saturate it.
+ *
+ * @return True when all checked values are finite and satisfy their ranges.
+ */
 bool IsFinite(const Projection& projection)
 {
     if (!projection.valid || !std::isfinite(projection.sourceAnchor.x) ||
@@ -206,6 +203,13 @@ bool IsFinite(const Projection& projection)
     return true;
 }
 
+/**
+ * @fn bool IsFinite(const InkMaterial& material)
+ * @brief Validate plane-shader inputs before allocating callback parameters.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True when all checked values are finite and satisfy their ranges.
+ */
 bool IsFinite(const InkMaterial& material)
 {
     return std::isfinite(material.desaturation) && std::isfinite(material.brightness) &&
@@ -215,6 +219,13 @@ bool IsFinite(const InkMaterial& material)
            material.edgeSheen >= .0f && material.edgeSheen <= 1.0f;
 }
 
+/**
+ * @fn bool ProjectPoint(RE::NiCamera* camera, const Math::Vec3& world, ProjectedPoint& out)
+ * @brief Project a world point into the coordinate spaces used by plane fitting.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True for finite projections within the camera depth interval; offscreen XY is valid.
+ */
 bool ProjectPoint(RE::NiCamera* camera, const Math::Vec3& world, ProjectedPoint& out)
 {
     if (!camera)
@@ -234,23 +245,25 @@ bool ProjectPoint(RE::NiCamera* camera, const Math::Vec3& world, ProjectedPoint&
         return false;
     }
 
-    // WorldPtToScreenPt3's XY are normalized with Y increasing upward.
-    // NDC uses the same Y direction; DepthClip samples normalized top-down Y.
+    // WorldPtToScreenPt3 and NDC use upward Y; DepthClip uses downward Y.
     out.ndc = {static_cast<double>(x) * 2.0 - 1.0, static_cast<double>(y) * 2.0 - 1.0};
     out.screen01 = {static_cast<double>(x), 1.0 - static_cast<double>(y)};
     out.depth = static_cast<double>(z);
 
-    // A control point outside the viewport is harmless, but one outside the
-    // camera depth interval indicates a near/far-plane crossing. Cull the
-    // whole plate rather than feed a sign-changing W to the rasterizer.
+    // Offscreen XY is valid. Depth outside the camera interval can reverse W; cull the plate.
     constexpr double kDepthSlop = 1e-4;
     return out.depth >= -kDepthSlop && out.depth <= 1.0 + kDepthSlop;
 }
 
-// Scale-free thinness measure of a projected quad: twice its shoelace area
-// divided by the squared bounding-box diagonal. The ratio approaches 0 as the
-// quad degenerates toward a line, whatever its size on screen, so one fixed
-// threshold works at every viewing distance.
+/**
+ * @fn double QuadAreaQuality(const std::array<Math::Vec2, 4>& points)
+ * @brief Measure projected quad thinness independently of its size.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Twice the shoelace area / squared bounding-box diagonal gives scale-free thinness.
+ *
+ * @return Twice the absolute area divided by the squared diagonal, or zero for zero extent.
+ */
 double QuadAreaQuality(const std::array<Math::Vec2, 4>& points)
 {
     double twiceArea = 0.0;
@@ -272,6 +285,13 @@ double QuadAreaQuality(const std::array<Math::Vec2, 4>& points)
     return diagonalSq > 0.0 ? std::abs(twiceArea) / diagonalSq : 0.0;
 }
 
+/**
+ * @fn ShaderConstants MakeConstants(const Projection& projection, const InkMaterial& material)
+ * @brief Pack a validated projection and material for the plane shader.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The constant-buffer payload copied into callback storage.
+ */
 ShaderConstants MakeConstants(const Projection& projection, const InkMaterial& material)
 {
     static_assert(MAX_SEGMENTS == ShaderContract::MAX_SEGMENTS);
@@ -377,8 +397,7 @@ bool IsInitialized()
 
 void BeginFrame()
 {
-    // Rendering of the previous ImDrawData is synchronous on the immediate
-    // context, so none of its callback pointers are still live here.
+    // Immediate-context rendering is synchronous; prior callback pointers are no longer live.
     s_ParamArena.clear();
     s_StateStack.clear();
 }
@@ -472,10 +491,8 @@ bool BuildProjection(const WorldPlane& plane,
         {
             return false;
         }
-        // A homography is defined only up to scale, so a uniform rescale leaves
-        // X/W, Y/W and Z/W untouched. Match this chord's W to the previous
-        // chord's W at the shared ruling, so a glyph quad that straddles the
-        // seam interpolates UV and color between two consistent W values.
+        // Rescaling preserves X/W, Y/W and Z/W. Match W at the shared ruling so glyphs
+        // across the seam interpolate UV and color consistently.
         if (scaleReference)
         {
             const auto& reference = scaleReference->homography;
@@ -514,10 +531,7 @@ bool BuildProjection(const WorldPlane& plane,
         segment.depth.xSlope = static_cast<float>(depthPlane.xSlope);
         segment.depth.ySlope = static_cast<float>(depthPlane.ySlope);
         segment.depth.constant = static_cast<float>(depthPlane.constant);
-        // Re-check W agreement at both ends of the shared ruling, this time on
-        // the float values the shader will use. The rescale above was fitted at
-        // the ruling midpoint only, so a relative disagreement here means the
-        // two chords do not meet after the narrowing to float.
+        // Verify W at both ruling ends after float conversion; the fit used only the midpoint.
         if (scaleReference)
         {
             const auto denominator = [](const std::array<float, 9>& values, const Math::Vec2& point)
@@ -540,10 +554,7 @@ bool BuildProjection(const WorldPlane& plane,
         return true;
     };
 
-    // Accuracy gate. Run the CPU mirror of kPlaneVS over a candidate and compare
-    // it against the camera's own projection of the same world point. A solve
-    // can be finite and well-conditioned and still be wrong, so no candidate is
-    // published without passing this at every probe.
+    // Compare the shader mirror against camera projection; a finite solve can still be wrong.
     const auto preflight = [&](const Projection& candidate,
                                const std::array<float, 2>& absolutePosition,
                                const Math::Vec3& world)
@@ -602,7 +613,7 @@ bool BuildProjection(const WorldPlane& plane,
     // Ruling i is shared by chord i-1 and chord i, so both chords project the
     // same two world points and the seam carries no gap:
     //
-    //   source X   minX       x1        x2        x3       maxX
+    //   Source X   minX       x1        x2        x3       maxX
     //   ruling      R0        R1        R2        R3        R4
     //               |---------|---------|---------|---------|
     //   chord            C0        C1        C2        C3
@@ -643,9 +654,7 @@ bool BuildProjection(const WorldPlane& plane,
             }
         }
 
-        // Every chord must project with the same winding. A sign flip means the
-        // surface folds over inside the bounds, which no per-chord homography
-        // can represent, so reject the whole wrap and let the ladder fall back.
+        // Opposite winding marks a fold; reject the wrap and try the next fallback.
         double windingSign = .0;
         for (int i = 0; i < segmentCount; ++i)
         {
@@ -697,8 +706,7 @@ bool BuildProjection(const WorldPlane& plane,
             static_cast<float>(static_cast<double>(segmentCount) /
                                static_cast<double>(sourceBounds.max.x - sourceBounds.min.x));
         candidate.wingCenterX = plane.wrap.sourceCenterX;
-        // A half-width at or below 1e-3 source pixels cannot carry a sheen ramp.
-        // Disable the sheen instead of dividing by it.
+        // Disable sheen when the half-width cannot support a ramp.
         const float wingHalfWidth = std::max(std::abs(sourceBounds.min.x - candidate.wingCenterX),
                                              std::abs(sourceBounds.max.x - candidate.wingCenterX));
         candidate.wingInvHalfWidth = wingHalfWidth > 1e-3f ? 1.0f / wingHalfWidth : .0f;
@@ -711,12 +719,8 @@ bool BuildProjection(const WorldPlane& plane,
             return false;
         }
 
-        // Probe the first chord, the chord that owns the source anchor, and the
-        // last chord. probeY clamps the anchor row into the bounds, so a plate
-        // whose anchor sits outside its own bounds still probes a real row. The
-        // world reference is the midpoint of the straight chord between the two
-        // rulings, not the arc midpoint, because each strip's homography maps
-        // that chord plane and not the cylinder surface.
+        // Probe first, anchor-owning and last chords on a row inside the bounds. Use straight
+        // chord midpoints as references; the homography does not map the cylinder arc.
         const int anchorSegment =
             std::clamp(static_cast<int>(
                            std::floor((sourceAnchor.x - sourceBounds.min.x) * candidate.invStride)),
@@ -786,15 +790,14 @@ void* MakeCallbackParams(const Projection& projection, const InkMaterial& materi
     return &s_ParamArena.back();
 }
 
-void ApplyCallback(const ImDrawList* /*drawList*/, const ImDrawCmd* command)
+void ApplyCallback(const ImDrawList*, const ImDrawCmd* command)
 {
     if (!s_Context)
     {
         return;
     }
 
-    // Push a marker even on a recoverable failure so RestoreCallback remains
-    // balanced and can never pop a state belonging to an earlier bracket.
+    // Push inactive markers on failure so RestoreCallback keeps its pairing.
     SavedVertexState saved{};
     if (!IsInitialized() || !command || !command->UserCallbackData)
     {
@@ -828,7 +831,7 @@ void ApplyCallback(const ImDrawList* /*drawList*/, const ImDrawCmd* command)
     s_Context->VSSetConstantBuffers(0, 1, &buffer);
 }
 
-void RestoreCallback(const ImDrawList* /*drawList*/, const ImDrawCmd* /*command*/)
+void RestoreCallback(const ImDrawList*, const ImDrawCmd*)
 {
     if (!s_Context || s_StateStack.empty())
     {
