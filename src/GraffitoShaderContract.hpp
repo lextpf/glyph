@@ -9,15 +9,11 @@
 /**
  * @namespace Graffito::ShaderContract
  * @brief Shared CPU/HLSL ABI and reference transform for Graffito vertices.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The field order and arithmetic mirror `kPlaneVS` in Graffito.cpp. The
- * static_asserts below and the unit tests pin the CPU-side packing and struct
- * layout only. `kPlaneVS` is a hand-maintained mirror compiled at runtime: edit
- * both sides together, because nothing in the repo cross-checks them. HLSL drift
- * in row order, the Y flip, the depth dot product, the cbuffer field order, the
- * `float4 segments[48]` size, or the shift by two that hard-codes the
- * SEGMENT_FLOAT4S stride reaches the game unreported.
+ * Packing and arithmetic mirror kPlaneVS in Graffito.cpp. Update both sides together;
+ * static assertions and tests check CPU packing only. HLSL row order, Y flip, depth
+ * product, field order, array size and the hard-coded stride have no cross-check.
  *
  * ```mermaid
  * ---
@@ -54,21 +50,20 @@ namespace Graffito::ShaderContract
 /**
  * @brief Maximum number of chord strips in one plate.
  *
- * This value must equal `Graffito::MAX_SEGMENTS`. A static assertion checks that pair. No
- * assertion checks the HLSL array size.
+ * Must match Graffito::MAX_SEGMENTS and the HLSL array capacity.
  */
 inline constexpr std::size_t MAX_SEGMENTS = 12;
 /**
  * @brief Number of float4 rows stored for each chord.
  *
- * Each chord contains three homography rows and one depth-plane row. `kPlaneVS` hard-codes
- * the same stride as a shift by two. No check validates that shader expression.
+ * Three homography rows plus one depth row. kPlaneVS encodes this stride as a shift by two.
  */
 inline constexpr std::size_t SEGMENT_FLOAT4S = 4;
 
 /**
  * @struct SegmentData
  * @brief Shader payload for one chord strip before float4 packing.
+ * @author Alex (<https://github.com/lextpf>)
  */
 struct SegmentData
 {
@@ -79,6 +74,10 @@ struct SegmentData
 /**
  * @struct Constants
  * @brief CPU image of the GraffitoCB buffer bound at vertex-shader slot b0.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Chord i starts at byte 64 + 64 * i. Unused rows stay zero; float4 groups satisfy
+ * D3D11 constant-buffer alignment.
  *
  * @verbatim
  * byte  0  sourceAnchor    = anchorX, anchorY, wingCenterX, wingInvHalfWidth
@@ -90,24 +89,16 @@ struct SegmentData
  *          segments[4i+2]  = homography row 2 in xyz, w unused
  *          segments[4i+3]  = xSlope, ySlope, constant, w unused
  * @endverbatim
- *
- * Chord i starts at byte 64 + 64 * i, and rows past the packed chord count stay
- * zero. Every field is a float4 lane group, so the total size stays a multiple
- * of 16, which D3D11 requires of a constant buffer.
  */
 struct alignas(16) Constants
 {
-    /// Lanes: anchorX, anchorY, wingCenterX, wingInvHalfWidth. Lanes 2 and 3 are
-    /// the wing band, not part of the anchor.
     std::array<float, 4> sourceAnchor{};
-    /// Lanes: firstBoundaryX, invStride, maxSlot, unused. maxSlot is
-    /// segmentCount - 1, not the count.
+
     std::array<float, 4> segmentParams{};
-    /// Lanes: desaturation, brightness, opacity, edgeSheen.
+
     std::array<float, 4> materialParams{};
     std::array<float, 4> fisheyeParams{};  ///< Lanes: centerX, centerY, invHalfWidth, strength.
-    /// SEGMENT_FLOAT4S rows per segment: three homography rows in xyz, then the
-    /// depth plane as xSlope, ySlope, constant. Lane 3 of each row is unused.
+
     std::array<std::array<float, 4>, SEGMENT_FLOAT4S * MAX_SEGMENTS> segments{};
 };
 
@@ -125,8 +116,7 @@ static_assert(offsetof(Constants, segments) == 64);
 /**
  * @struct ClipPosition
  * @brief Homogeneous clip position before the perspective divide.
- *
- * The vertex shader writes this value to `SV_POSITION`.
+ * @author Alex (<https://github.com/lextpf>)
  */
 struct ClipPosition
 {
@@ -139,8 +129,7 @@ struct ClipPosition
 /**
  * @struct VertexColor
  * @brief Vertex color channels from zero through one.
- *
- * The layout matches the normalized `COLOR0` shader input.
+ * @author Alex (<https://github.com/lextpf>)
  */
 struct VertexColor
 {
@@ -151,23 +140,24 @@ struct VertexColor
 };
 
 /**
- * @brief Pack a segmented projection into the constant-buffer layout `kPlaneVS` reads.
+ * @fn Constants PackSegments(const std::array<SegmentData, MAX_SEGMENTS>& segments, std::size_t
+ *     segmentCount, float firstBoundaryX, float invStride, const std::array<float, 2>&
+ *     sourceAnchor, const std::array<float, 2>& wingBand, const std::array<float, 4>& material,
+ *     const std::array<float, 4>& fisheye = {}) noexcept
+ * @brief Pack a segmented projection into the constant-buffer layout kPlaneVS reads.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * This function establishes the lane assignment named on each Constants field.
- * Two lanes are easy to misread: @p wingBand occupies `sourceAnchor` lanes 2 and
- * 3, and `segmentParams` lane 2 holds @p segmentCount minus 1, because the
- * shader clamps a slot index against it. Rows past @p segmentCount stay zero.
+ * Unused chord rows stay zero; segmentParams lane 2 is the maximum slot, not a count.
  *
  * @param segments       Per-segment homography and depth plane, in slot order.
- * @param segmentCount   Number of valid segments. It is clamped to
- *                       [1, MAX_SEGMENTS] before use.
+ * @param segmentCount   Number of valid segments. It is clamped to [1, MAX_SEGMENTS] before use.
  * @param firstBoundaryX Absolute source X at the first chord boundary.
  * @param invStride      Reciprocal source width of one chord.
  * @param sourceAnchor   Absolute source position treated as plane-local (0, 0).
  * @param wingBand       Wing center X and reciprocal half-width.
  * @param material       Desaturation, brightness, opacity, and edge sheen.
- * @param fisheye        Center X, center Y, reciprocal half-width, and strength.
- *                       The default all-zero value disables the warp.
+ * @param fisheye        Center X, center Y, reciprocal half-width, and strength. The default
+ * all-zero value disables the warp.
  * @return The packed constants.
  */
 inline Constants PackSegments(const std::array<SegmentData, MAX_SEGMENTS>& segments,
@@ -199,21 +189,19 @@ inline Constants PackSegments(const std::array<SegmentData, MAX_SEGMENTS>& segme
 }
 
 /**
- * @brief Mirror of the row-local barrel magnification in `kPlaneVS`.
+ * @fn std::array<float, 2> EvaluateFisheyePosition( const Constants& constants, const
+ *     std::array<float, 2>& absolutePosition) noexcept
+ * @brief Mirror of the row-local barrel magnification in kPlaneVS.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The horizontal polynomial fixes both row endpoints, expands the midpoint, and
- * compresses the wing intervals. Vertical scale independently falls from 1.18 at
- * the midpoint to .74 at either endpoint at full strength.
- *
- * The zero-strength early-out below is a deliberate CPU-only divergence: it
- * returns a bit-exact identity, while `kPlaneVS` always evaluates the vertical
- * recentring `c + (y - c) * 1.0`, which is not bit-exact for a large center. Do
- * not make either side match the other.
+ * Horizontal endpoints stay fixed; vertical scale ranges from 1.18 at the center to .74
+ * at the ends. The CPU zero-strength path returns an exact identity. HLSL evaluates
+ * c + (y - c) * 1.0, which can round for large centers; preserve this difference.
  *
  * @param constants         Packed constants. Only fisheyeParams is read.
  * @param absolutePosition  Unwarped vertex position, in absolute ImDraw pixels.
- * @return The warped position. It feeds EvaluateSegmentSlot and the homography;
- *         the wing weight keeps using the unwarped X, as the shader does.
+ * @return The warped position. It feeds EvaluateSegmentSlot and the homography; the wing weight
+ * keeps using the unwarped X, as the shader does.
  */
 inline std::array<float, 2> EvaluateFisheyePosition(
     const Constants& constants, const std::array<float, 2>& absolutePosition) noexcept
@@ -245,15 +233,14 @@ inline std::array<float, 2> EvaluateFisheyePosition(
 }
 
 /**
+ * @fn Constants Pack(const std::array<float, 9>& homography, const std::array<float, 3>&
+ *     depthPlane, const std::array<float, 2>& sourceAnchor, const std::array<float, 3>& material)
+ *     noexcept
  * @brief Pack a planar projection while retaining the segmented shader ABI.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * It writes one chord, no chord boundary, no wing band and no fisheye, so the
- * shader follows the same path as a flat solve. A zero stride lane pins the slot
- * to chord 0 for every vertex X, which is why the boundary lane may be 0 here
- * while BuildProjection's own flat path writes the bounds left edge into it.
- * The material array holds desaturation, brightness and opacity only; edge sheen
- * is forced to 0, which a flat plate cannot show anyway because its wing band
- * width is zero.
+ * Pack one chord with zero stride, wing band and fisheye. Zero stride selects chord 0
+ * for every X. Force edge sheen to zero.
  *
  * @param homography    Row-major local-pixel to NDC homogeneous map.
  * @param depthPlane    xSlope, ySlope and constant over normalized screen.
@@ -278,12 +265,12 @@ inline Constants Pack(const std::array<float, 9>& homography,
 }
 
 /**
+ * @fn float EvaluateWingWeight(const Constants& constants, const std::array<float, 2>&
+ *     absolutePosition) noexcept
  * @brief Smoothstep weight of the wing sheen at a source position.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `kPlaneVS` evaluates this on the unwarped vertex X, not on the fisheye output,
- * so pass the unwarped position here as well. A zero reciprocal half-width in
- * `sourceAnchor` lane 3 returns 0 and disables the sheen, which is what the flat
- * solve writes.
+ * Use unwarped X. Zero reciprocal half-width disables sheen, including on flat plates.
  *
  * @param constants         Packed constants. Only sourceAnchor lanes 2 and 3 are read.
  * @param absolutePosition  Unwarped vertex position, in absolute ImDraw pixels.
@@ -301,12 +288,13 @@ inline float EvaluateWingWeight(const Constants& constants,
 }
 
 /**
+ * @fn std::size_t EvaluateSegmentSlot(const Constants& constants, const std::array<float, 2>&
+ *     absolutePosition) noexcept
  * @brief Select the chord slot for a source position.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `kPlaneVS` selects the slot from the fisheye-warped X, so pass the output of
- * EvaluateFisheyePosition, not the raw vertex position. The non-finite guard and
- * the extra clamp to MAX_SEGMENTS - 1 are deliberate CPU-only divergences;
- * `kPlaneVS` clamps only against `segmentParams` lane 2.
+ * Use fisheye-warped X. The non-finite guard and MAX_SEGMENTS clamp are CPU-only;
+ * HLSL clamps against segmentParams lane 2.
  *
  * @param constants         Packed constants. Only segmentParams is read.
  * @param absolutePosition  Fisheye-warped position, in absolute ImDraw pixels.
@@ -327,13 +315,17 @@ inline std::size_t EvaluateSegmentSlot(const Constants& constants,
 }
 
 /**
- * @brief Mirror of the position arithmetic in `kPlaneVS`.
+ * @fn ClipPosition EvaluateVertex(const Constants& constants, const std::array<float, 2>&
+ *     absolutePosition) noexcept
+ * @brief Mirror of the position arithmetic in kPlaneVS.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * It is not bit-identical: EvaluateFisheyePosition and EvaluateSegmentSlot each
- * carry one deliberate CPU-only divergence, described on those functions.
+ * EvaluateFisheyePosition and EvaluateSegmentSlot document CPU-only differences.
+ * In the equations, s is the warped source offset, h_0..h_2 are the selected homography
+ * rows, and d_x, d_y, d_c are its depth plane.
  *
- * With warped source offset $(x, y)$, the selected chord's homography rows
- * $h_0, h_1, h_2$ and its depth plane $(d_x, d_y, d_c)$:
+ * X/W and Y/W are NDC; u-tilde/W and v-tilde/W are normalized top-left screen
+ * coordinates; Z/W is viewport depth. Uniform homography scaling preserves all quotients.
  *
  * $$
  * \begin{aligned}
@@ -342,12 +334,6 @@ inline std::size_t EvaluateSegmentSlot(const Constants& constants,
  * Z &= d_x \tilde{u} + d_y \tilde{v} + d_c W
  * \end{aligned}
  * $$
- *
- * The rasterizer divides by $W$. So $X/W$ and $Y/W$ are NDC, $\tilde{u}/W$ and
- * $\tilde{v}/W$ are the normalized top-left screen coordinates the depth plane
- * is fitted over, and $Z/W$ is the viewport depth DepthClip compares against.
- * Scaling a whole homography leaves all three quotients unchanged, which is why
- * BuildProjection may rescale one chord to match its neighbour.
  *
  * @param constants         Packed constants for this plate.
  * @param absolutePosition  Unwarped vertex position, in absolute ImDraw pixels.
@@ -381,16 +367,18 @@ inline ClipPosition EvaluateVertex(const Constants& constants,
 }
 
 /**
- * @brief Reference implementation of the color arithmetic in `kPlaneVS`.
+ * @fn VertexColor EvaluateColor(const Constants& constants, const VertexColor& input, float
+ *     wingWeight = .0f) noexcept
+ * @brief Reference implementation of the color arithmetic in kPlaneVS.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Desaturation, opacity and the sheen lane are clamped to [0, 1], but brightness
- * is only lower-clamped at 0. A brightness above 1 therefore returns RGB above
- * 1. `kPlaneVS` clamps the same way, so the shader keeps the overbright value.
+ * Desaturation, opacity and sheen clamp to [0, 1]. Brightness clamps only below zero,
+ * so RGB can exceed 1, matching HLSL.
  *
  * @param constants   Packed constants. Only materialParams is read.
  * @param input       Vertex color taken from the ImGui draw vertex.
- * @param wingWeight  Band weight from EvaluateWingWeight. The default 0 removes
- *                    the sheen term, which matches every flat plate.
+ * @param wingWeight  Band weight from EvaluateWingWeight. The default 0 removes the sheen term,
+ * which matches every flat plate.
  * @return The treated color. Alpha is scaled by the opacity lane only.
  */
 inline VertexColor EvaluateColor(const Constants& constants,
