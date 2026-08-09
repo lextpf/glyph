@@ -8,137 +8,107 @@
 /**
  * @namespace DepthClip
  * @brief Per-pixel depth occlusion for nameplates.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup TextPostProcess
  *
- * Line-of-sight culling can only show or hide a whole plate, so a plate pops in and
- * out at the moment sight breaks.  This clips each plate against the game's depth
- * buffer instead, so geometry cuts it at the real intersection, with a soft feather
- * at the edge.
+ * Compare plate viewport depth directly with scene depth and feather intersections.
+ * Projected probes determine depth polarity each frame without readback.
  *
- * ## Mechanism
+ * Sample only kPOST_ZPREPASS_COPY. kMAIN can remain bound as a DSV; D3D11 nulls a
+ * conflicting SRV, which would hide every plate. Missing depth, shader failure or
+ * unknown polarity leaves the frame unclipped. Line-of-sight culling remains active.
  *
- * A custom pixel shader (ImGui's shader plus a scene-depth compare) is bound around
- * each plate's draws through ImGui draw callbacks.  The plate depth is the viewport
- * depth that `WorldToScreen` already computes with the game's own projection, so it
- * matches what the rasterizer wrote into the depth buffer by construction.  The
- * shader compares the two values directly, with no remap in either direction.
- * Depth-convention
- * polarity is derived each frame from two projected probe points,
- * with no readback.
- *
+ * All entry points are render-thread only; state has no synchronization. Parameter pointers
+ * remain valid until BeginFrame or Shutdown. Execute queued callbacks before either call.
+ * Brackets share one constant buffer, so use sequential pairs within each splitter channel;
+ * restoring a binding does not restore overwritten constant-buffer contents.
  *
  * ```mermaid
- * ---
- * config:
- *   theme: dark
- *   look: handDrawn
- * ---
  * sequenceDiagram
- *
- * participant R as Renderer - frame build
+ *     participant R as Renderer
  *     participant L as ImDrawList
- *     participant B
- * as ImGui D3D11 backend
  *     participant D as DepthClip
  *     participant G as D3D11 state
- *
- * R->>D: BeginFrame - clear parameter arena and state stack
- *     R->>D: MakePlateParams,
- * MakePlaneParams, or MakeNeutralParams
- *     D-->>R: frame-owned callback parameters
- * R->>L:
- * queue ApplyCallback, plate draws, RestoreCallback
- *     L->>B: execute draw commands later
- *
- * B->>D: ApplyCallback with parameters
- *     D->>G: save pixel shader, CB0, and SRV1
- *     D->>D:
- * push active or inactive marker
- *     opt resources are usable
- *         D->>G: bind depth
- * shader, constants, and scene depth
+ *     R->>D: BeginFrame
+ *     R->>D: Allocate plate parameters
+ *     D-->>R: Frame-owned parameter pointer
+ *     R->>L: Queue ApplyCallback, plate draws, RestoreCallback
+ *     Note over L,G: ImGui executes queued commands after frame construction
+ *     L->>D: ApplyCallback
+ *     D->>D: Push active or inactive state entry
+ *     opt Setup succeeds
+ *         D->>G: Save bindings, then bind depth shader and plate constants
  *     end
- *     B->>G: draw the plate
- *     B->>D:
- * RestoreCallback
- *     D->>D: pop the matching LIFO marker
- *     opt marker is active
- * D->>G:
- * restore pixel shader, CB0, and SRV1
+ *     L->>G: Draw plate geometry
+ *     L->>D: RestoreCallback
+ *     opt Saved entry is active
+ *         D->>G: Restore pixel shader, CB0, and SRV1
  *     end
- *     Note over D: No context makes both
- * callbacks return without a marker
+ *     Note over D: No context makes both callbacks inert
  * ```
- *
- * The scene depth SRV comes from
- * `kPOST_ZPREPASS_COPY` only.  `kMAIN` is not a
- * fallback: the live `kMAIN` depth may still be
- * bound as a DSV while the UI renders, and D3D silently nulls a conflicting SRV binding, which
- * would read as depth 0 and make every plate invisible.  When the copy is absent, the frame goes
- * unclipped and line-of-sight culling stays the only occlusion.
- *
- * ## Fallback contract
- *
- * Any unexpected condition - no depth SRV (some ENB or upscaler stacks), shader
- * compile failure, indeterminate polarity - leaves the frame unclipped, with
- * line-of-sight culling as the only occlusion.  The coarse line-of-sight gate stays
- * on regardless; depth clipping is the finer, sub-plate layer on top of it.
- *
- * ## Threading
- *
- * All module state is plain globals with no synchronization, so every entry point is
- * render-thread only.  Initialize runs from the overlay's first-frame setup, and
- * Shutdown from the device-change and teardown paths in Hooks.cpp.
  */
 namespace DepthClip
 {
 /**
+ * @fn bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
  * @brief Compile the depth-clip shader and create its constant buffer.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param device
- * D3D11 device that creates the resources.
- * @param context  D3D11 immediate context used by draw
- * callbacks.
- * @return         True when initialization succeeds.
+ * Retain device and context references on success. Call Shutdown before reinitializing;
+ * initialization does not clear pending callback parameters or saved states.
+ *
+ * @return True when shader and buffer creation succeeds; false for null arguments or GPU failure.
  */
 bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context);
 
-/// @brief True when the shader and buffers exist.
+/**
+ * @fn bool IsInitialized()
+ * @brief Report whether initialization succeeded.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True after successful Initialize and before Shutdown; BeginFrame may still fail.
+ */
 bool IsInitialized();
 
-/// @brief Release all GPU resources.
+/**
+ * @fn void Shutdown()
+ * @brief Release all GPU resources.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void Shutdown();
 
 /**
+ * @fn bool BeginFrame(float featherPx, float polarity)
  * @brief Per-frame setup: find the scene depth SRV and latch feather and polarity.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Clears the per-frame param arena and the Apply/Restore state stack before any other
- * check, so params made in an earlier frame become invalid even when this call fails.
+ * Clear the parameter arena and saved-state stack first, even when frame setup fails.
  *
  * @param featherPx  Feather radius at the occlusion edge, in pixels.  Clamped to [0, 8].
  * @param polarity   +1 standard z (larger = farther), -1 reversed.
- * @return false when depth clipping cannot run this frame: not initialized, polarity 0
- *         (indeterminate), no renderer singleton, or no depth SRV.
+ * @return False when depth clipping cannot run this frame: not initialized, polarity 0
+ * (indeterminate), no renderer singleton, or no depth SRV.
  */
 bool BeginFrame(float featherPx, float polarity);
 
 /**
- * @brief Allocate per-plate callback params (valid until the next BeginFrame).
+ * @fn void* MakePlateParams(float plateDepthNDC)
+ * @brief Allocate callback parameters for a constant plate depth.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param plateDepthNDC  The plate's viewport depth from WorldToScreen, used unchanged
- *                       as a constant depth over the whole plate.
+ * @param plateDepthNDC  The plate's viewport depth from WorldToScreen, used unchanged as a constant
+ * depth over the whole plate.
  * @return Opaque params pointer for ApplyCallback's user data.
  */
 void* MakePlateParams(float plateDepthNDC);
 
 /**
+ * @fn void* MakePlaneParams(float depthX, float depthY, float depthConstant)
  * @brief Allocate params for a projected world plane.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The coefficients describe viewport depth over normalized screen coordinates:
- * `z = depthX * u + depthY * v + depthConstant`.  This is exact for a
- * perspective-projected plane, so world geometry cuts an angled Graffito at the depth
- * of each individual pixel.
+ * Evaluate depthX * u + depthY * v + depthConstant at normalized screen coordinates (u, v).
+ * This is exact for a perspective-projected plane.
  *
  * @param depthX         Depth gradient along normalized screen x.
  * @param depthY         Depth gradient along normalized screen y.
@@ -148,39 +118,38 @@ void* MakePlateParams(float plateDepthNDC);
 void* MakePlaneParams(float depthX, float depthY, float depthConstant);
 
 /**
+ * @fn void* MakeNeutralParams()
  * @brief Allocate params that disable clipping for the following draws.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Used by exit and death ghosts whose reprojection failed, so the bracket structure
- * stays intact while the depth test is off.
+ * Keeps exit/death ghost brackets balanced when reprojection fails.
  *
  * @return Opaque params pointer for ApplyCallback's user data.
  */
 void* MakeNeutralParams();
 
 /**
+ * @fn void ApplyCallback(const ImDrawList* dl, const ImDrawCmd* cmd)
  * @brief ImDrawCallback: bind the depth-clip shader and this plate's constants.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Applies to the following draws in the current splitter channel.  Saves the previous
- * pixel shader, pixel-shader constant-buffer slot 0 and pixel-shader resource slot 1.
+ * Save PS, PS constant-buffer slot 0 and PS resource slot 1 in the current splitter channel.
  *
- * @param dl   Draw list that owns the command (unused).
- * @param cmd  Draw command whose user data is a Make*Params pointer.
- *
- * @pre The params pointer must come from a Make*Params call of the current frame.
- * @post Pushes one entry on an internal LIFO stack, including on the recoverable
- *       early-out paths (missing shader, buffer, SRV or params; empty viewport; failed
- *       Map).  Exactly one RestoreCallback must match each ApplyCallback, in LIFO
- *       order, on the same splitter channel.
+ * @param cmd  Draw command whose user data comes from a MakePlateParams, MakePlaneParams,
+ *             or MakeNeutralParams call in the current frame.
+ * @post With a context, push one active or inactive state entry even if setup fails.
+ * Without a context, both callbacks return without a state entry. Match every ApplyCallback
+ * with one RestoreCallback in the same splitter channel.
  */
 void ApplyCallback(const ImDrawList* dl, const ImDrawCmd* cmd);
 
 /**
+ * @fn void RestoreCallback(const ImDrawList* dl, const ImDrawCmd* cmd)
  * @brief Restore the pixel-shader state captured by the matching ApplyCallback.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Pops one stack entry.  Does nothing when the stack is empty, and touches no pipeline
- * state when the matching ApplyCallback took a recoverable early-out.
+ * Pop one entry. An empty stack or inactive marker changes no pipeline state.
  *
- * @param dl   Draw list that owns the command (unused).
  * @param cmd  Draw command that carries the callback (unused).
  */
 void RestoreCallback(const ImDrawList* dl, const ImDrawCmd* cmd);
