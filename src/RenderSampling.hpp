@@ -5,35 +5,61 @@
 
 /**
  * @namespace RenderSampling
- * @brief Scoped D3D11 samplers for crisp font and badge textures.
+ * @brief Balanced ImGui callbacks for pixel-shader sampler slot 0.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The helper adds balanced callbacks to ImGui draw lists. A push callback saves pixel-shader
- * sampler slot 0 and binds a quality sampler. A pop callback restores the saved sampler. If
- * sampler creation fails, the add functions do nothing and ImGui keeps its current sampler.
+ * Push and pop enqueue callbacks; sampler state changes when ImGui executes them.
+ * Match each push with one pop in the same draw order. Nested pairs restore in reverse order.
+ * A null draw list or unavailable samplers queues nothing.
+ *
+ * Use all entry points on the render thread. Finish queued callbacks before Shutdown or
+ * device replacement: their user data borrows the sampler pointers.
  */
 namespace RenderSampling
 {
 /**
- * @brief Create the font and badge samplers for one D3D11 device.
+ * @fn bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
+ * @brief Create quality font and badge samplers once per device.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Repeated calls for the same device do not create more resources. Call Shutdown after a
- * device change before this function receives the new device.
+ * Retain device and context references until Shutdown or device replacement. A different
+ * device replaces the resources. Calls with the same device reuse the first result and
+ * context, including a failed result; call Shutdown before retrying that device.
  *
- * @param device D3D11 device that creates the sampler states.
- * @param context Immediate context used by draw callbacks.
- * @return True when both quality samplers are ready.
+ * @param device   Device that owns the samplers; null returns false.
+ * @param context  Immediate context used by draw callbacks; null returns false.
+ * @return True when both samplers are ready. Failure keeps ImGui's sampler in use.
  */
 bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context);
 
-/// @brief Release sampler resources and discard saved callback state.
+/**
+ * @fn void Shutdown()
+ * @brief Release sampler resources and discard saved callback state.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Release retained device and context references. Clear saved states without restoring
+ * the currently bound sampler; call only after all queued push/pop pairs have executed.
+ */
 void Shutdown();
 
-/// @brief Add a callback that pushes the trilinear font sampler with a limited mip range.
+/**
+ * @fn void PushFontSampler(ImDrawList* drawList)
+ * @brief Add a callback that pushes the trilinear font sampler with a limited mip range.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void PushFontSampler(ImDrawList* drawList);
 
-/// @brief Add a callback that pushes the trilinear badge sampler with the full mip range.
+/**
+ * @fn void PushBadgeSampler(ImDrawList* drawList)
+ * @brief Add a callback that pushes the trilinear badge sampler with the full mip range.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void PushBadgeSampler(ImDrawList* drawList);
 
-/// @brief Add a callback that restores the sampler saved by the matching push callback.
+/**
+ * @fn void PopSampler(ImDrawList* drawList)
+ * @brief Add a callback that restores the sampler saved by the matching push callback.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void PopSampler(ImDrawList* drawList);
 }  // namespace RenderSampling
