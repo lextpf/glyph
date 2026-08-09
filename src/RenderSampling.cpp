@@ -32,24 +32,52 @@ struct SamplingState
     bool attempted = false;
 };
 
+/**
+ * @fn SamplingState& State()
+ * @brief Share sampler resources and the callback restoration stack.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The state used only on the render thread.
+ */
 SamplingState& State()
 {
     static SamplingState state;
     return state;
 }
 
+/**
+ * @fn std::atomic<bool>& FailureLogged()
+ * @brief Retain the once-per-process sampler failure log flag.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The atomic flag, which Shutdown does not clear.
+ */
 std::atomic<bool>& FailureLogged()
 {
     static std::atomic<bool> logged{false};
     return logged;
 }
 
+/**
+ * @fn bool IsReady()
+ * @brief Check whether both quality samplers and their context are available.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True when callbacks can bind and restore samplers.
+ */
 bool IsReady()
 {
     const auto& state = State();
     return state.context && state.fontSampler && state.badgeSampler;
 }
 
+/**
+ * @fn D3D11_SAMPLER_DESC MakeSamplerDescription(float maxLod)
+ * @brief Configure trilinear filtering with clamped texture addressing.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The sampler description with the requested maximum mip level.
+ */
 D3D11_SAMPLER_DESC MakeSamplerDescription(float maxLod)
 {
     D3D11_SAMPLER_DESC description{};
@@ -63,6 +91,11 @@ D3D11_SAMPLER_DESC MakeSamplerDescription(float maxLod)
     return description;
 }
 
+/**
+ * @fn void PushSamplerCallback(const ImDrawList*, const ImDrawCmd* command)
+ * @brief Save sampler slot zero and apply the requested quality sampler.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void PushSamplerCallback(const ImDrawList*, const ImDrawCmd* command)
 {
     auto& state = State();
@@ -78,6 +111,11 @@ void PushSamplerCallback(const ImDrawList*, const ImDrawCmd* command)
     state.stack.push_back(std::move(saved));
 }
 
+/**
+ * @fn void PopSamplerCallback(const ImDrawList*, const ImDrawCmd*)
+ * @brief Restore the sampler from the most recent callback state.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void PopSamplerCallback(const ImDrawList*, const ImDrawCmd*)
 {
     auto& state = State();
@@ -95,6 +133,11 @@ void PopSamplerCallback(const ImDrawList*, const ImDrawCmd*)
     }
 }
 
+/**
+ * @fn void AddSamplerPush(ImDrawList* drawList, ID3D11SamplerState* sampler)
+ * @brief Queue a sampler change when the draw list and resources are usable.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void AddSamplerPush(ImDrawList* drawList, ID3D11SamplerState* sampler)
 {
     if (drawList && IsReady() && sampler)
