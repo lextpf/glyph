@@ -23,23 +23,13 @@
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 
-// Lifecycle: Initialize() loads textures once after D3D11 device creation and
-// is a no-op once it has succeeded, so it never notices a new device; a device
-// change must run Shutdown() first (Hooks::HandleDeviceChange does). Shutdown()
-// releases every resource and allows a later re-initialization. Every function
-// here is render-thread only.
 namespace ParticleTextures
 {
-// Number of particle texture types - one slot per Settings::ParticleStyle.
-// The canonical style/token order lives in Settings::kParticleStyleTokens.
+// Slots follow Settings::kParticleStyleTokens.
 static constexpr int NUM_TYPES = Settings::kParticleStyleCount;
 
-// Art compensation in ParticleStyle enum order. A full coin/heart already fills
-// much of its frame; dust, pixiedust and similar paint only a handful of pixels
-// and therefore need a much larger crisp quad. The halo scale is independent, so
-// enlarging a sparse core does not enlarge its background bloom. Values come from
-// the alpha-weighted painted area of every active strip frame, adjusted per
-// silhouette (mist stays mist, sparks stay pinpoints, solid icons stay compact).
+// Compensate for painted area in ParticleStyle order. Sparse art needs larger quads;
+// independent halo scales keep its bloom compact.
 static constexpr std::array<StyleVisibilityTuning, NUM_TYPES> kStyleVisibilityTuning = {{
     {1.90f, .35f, .70f},  // firefly
     {1.45f, .70f, .55f},  // snow
@@ -100,45 +90,59 @@ struct TextureInfo
     ComPtr<ID3D11ShaderResourceView> srv;
     int width = 0;
     int height = 0;
-    // Horizontal flipbook frames: width / height when the width is an exact
-    // multiple of the height and the quotient is above 1; otherwise 1.
+    // Square horizontal frames; non-strips use one frame.
     int frames = 1;
 };
 
-// Loaded variants per particle style; a style may hold several.
+/**
+ * @fn static std::array<std::vector<TextureInfo>, NUM_TYPES>& Textures()
+ * @brief Access loaded particle variants indexed by style.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static std::array<std::vector<TextureInfo>, NUM_TYPES>& Textures()
 {
     static std::array<std::vector<TextureInfo>, NUM_TYPES> instance;
     return instance;
 }
 
-// One optional end-of-life "pop" sprite per style, kept outside the variant
-// rotation: a pop frame inside Textures() would render a fraction of the
-// particles as permanently mid-pop. Initialize fills the Bubble slot only, from
-// the manifest's "bubblePop" entry; every other slot stays empty.
+/**
+ * @fn static std::array<TextureInfo, NUM_TYPES>& PopTextures()
+ * @brief Access pop sprites kept outside live particle variant selection.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * bubblePop stays outside variant rotation so live particles cannot select a death frame.
+ */
 static std::array<TextureInfo, NUM_TYPES>& PopTextures()
 {
     static std::array<TextureInfo, NUM_TYPES> instance;
     return instance;
 }
 
-// Shared soft light disc used for every particle's glow halo and specular
-// glint (see HaloSoftDisc). Procedural, generated once at Initialize.
+/**
+ * @fn static TextureInfo& SoftGlowTexture()
+ * @brief Access the shared procedural light disc.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Shared procedural disc for halo and glint light, created by Initialize.
+ */
 static TextureInfo& SoftGlowTexture()
 {
     static TextureInfo instance;
     return instance;
 }
 static std::atomic<bool> s_Initialized{false};
+/**
+ * @fn static std::mutex& InitMutex()
+ * @brief Access the mutex that serializes particle resource replacement.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static std::mutex& InitMutex()
 {
     static std::mutex instance;
     return instance;
 }
 
-// Point sampler for small sprites
 static ComPtr<ID3D11SamplerState> s_PointSampler;
-// Linear sampler for high-resolution textures
 static ComPtr<ID3D11SamplerState> s_LinearSampler;
 static ComPtr<ID3D11BlendState> s_AdditiveBlend;
 static ComPtr<ID3D11BlendState> s_ScreenBlend;
@@ -159,13 +163,17 @@ struct SavedBlendState
     bool active = false;
 };
 
-// Sprite callbacks execute later, while ImDrawData is rendered. These stacks
-// let a sprite change only sampler/blend state and restore exactly that, instead
-// of invoking ImGui's full render-state reset, which would also discard an
-// enclosing Graffito vertex shader or DepthClip pixel shader.
+// Callbacks save only sampler/blend state; a full ImGui reset would erase enclosing shaders.
 static std::vector<SavedSamplerState> s_SamplerStateStack;
 static std::vector<SavedBlendState> s_BlendStateStack;
 
+/**
+ * @fn static void ReleaseResources_NoLock()
+ * @brief Release particle resources and discard saved callback states.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @pre Hold InitMutex and exclude render-thread queries and draw-list playback.
+ */
 static void ReleaseResources_NoLock()
 {
     for (auto& typeTextures : Textures())
@@ -195,10 +203,15 @@ static void ReleaseResources_NoLock()
     s_Initialized = false;
 }
 
-// Load a PNG file using WIC and create a D3D11 texture. Returns a TextureInfo
-// with dimensions, or a default-constructed one (null srv) on any failure.
-// alphaGamma below 1 lifts partially transparent painted pixels while leaving
-// fully transparent texels transparent.
+/**
+ * @fn static TextureInfo LoadTextureFromFile(ID3D11Device* device, ID3D11DeviceContext* context,
+ *     const std::string& path, IWICImagingFactory* wicFactory, float alphaGamma = 1.0f)
+ * @brief Decode a manifest sprite with optional alpha compensation.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * WIC load with optional alpha lift; returns a null srv on failure.
+ * alphaGamma below 1 lifts partial alpha while preserving transparent texels.
+ */
 static TextureInfo LoadTextureFromFile(ID3D11Device* device,
                                        ID3D11DeviceContext* context,
                                        const std::string& path,
@@ -236,7 +249,6 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
         return info;
     }
 
-    // Decode to 32bpp RGBA.
     ComPtr<IWICFormatConverter> converter;
     hr = wicFactory->CreateFormatConverter(&converter);
     if (FAILED(hr))
@@ -262,7 +274,7 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
         return info;
     }
 
-    // Reject sizes whose RGBA buffer would overflow a UINT byte count.
+    // WIC buffer lengths must fit UINT.
     if (width == 0 || height == 0 || width > ((std::numeric_limits<UINT>::max)() / 4))
     {
         SKSE::log::warn(
@@ -285,8 +297,7 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
         return info;
     }
 
-    // Zero the RGB of fully transparent texels so blend modes (screen-like above
-    // all) cannot lift hidden color into the framebuffer as box artifacts.
+    // Transparent RGB must be black to prevent screen-blend rectangle artifacts.
     {
         const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
         for (size_t i = 0; i < pixelCount; ++i)
@@ -313,12 +324,8 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
         }
     }
 
-    // A source above 64 px gets a full GPU-generated mip chain so minified
-    // sprites stay stable in motion (no shimmer) - same pattern as the mipmapped
-    // font atlas in Hooks.cpp. Smaller pixel-art sprites keep a single level; they
-    // are only ever magnified and use point sampling anyway. This threshold reads
-    // the whole image, while DrawSpriteQuad's point/linear switch reads one strip
-    // frame, so a wide strip of small frames can be mipped and still point-sampled.
+    // Mip sources above 64px to reduce shimmer; small pixel art keeps one level.
+    // This uses sheet dimensions, while sampler choice uses individual frame dimensions.
     const UINT maxDim = (width > height) ? width : height;
     if (context && maxDim > 64)
     {
@@ -364,7 +371,7 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
             }
             info.srv.Reset();
         }
-        // Mipped path failed; fall through to the single-level texture below.
+        // Retry with one mip level.
     }
 
     D3D11_TEXTURE2D_DESC texDesc = {};
@@ -409,15 +416,19 @@ static TextureInfo LoadTextureFromFile(ID3D11Device* device,
     return info;
 }
 
-// RAII wrapper for COM initialization. Calls CoUninitialize only if this scope
-// initialized COM, so the ref count stays balanced when another mod or hook
-// already initialized it. `usable` is also true for RPC_E_CHANGED_MODE, where
-// COM is up under a different apartment model.
+// Balance successful COM initialization; RPC_E_CHANGED_MODE reuses the existing apartment.
 struct ComScope
 {
     bool ownsInit = false;
     bool usable = false;
 
+    /**
+     * @fn ComScope()
+     * @brief Request COM access for texture decoding on the calling thread.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * A different existing apartment remains usable; other failures are logged.
+     */
     ComScope()
     {
         HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -430,6 +441,11 @@ struct ComScope
         }
     }
 
+    /**
+     * @fn ~ComScope()
+     * @brief Balance only the COM initialization owned by this scope.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~ComScope()
     {
         if (ownsInit)
@@ -442,34 +458,42 @@ struct ComScope
     ComScope& operator=(const ComScope&) = delete;
 };
 
-// ============ Procedural Texture Generation ============
-//
-// 256x256 white-on-transparent particle sprites with mathematically defined
-// alpha for clean edges. White base allows tier-color tinting via vertex
-// color multiplication.
-//
-// Quality pipeline applied to every generator:
-//   1. 4x rotated-grid supersampling - anti-aliases thin line work and
-//      star spikes that a single center sample would shimmer on.
-//   2. Interleaved-gradient-noise dithering at 8-bit quantization --
-//      removes banding rings in the smooth Gaussian glow falloffs.
-//   3. Full mip chain (2x2 box reduction in float) - stable minification
-//      when particles render small or rotate on screen.
+// White sprites accept vertex tint; alpha defines each silhouette.
+// Rotated-grid samples -> float 2x2 mip reduction -> dithered 8-bit alpha.
 
 static constexpr int PROC_SIZE = 256;
 static constexpr float PROC_PI = 3.14159265f;
 
+/**
+ * @fn static float PGaussian(float x, float sigma)
+ * @brief Evaluate a Gaussian mask with a positive standard deviation.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @pre sigma is positive.
+ */
 static float PGaussian(float x, float sigma)
 {
     return std::exp(-(x * x) / (2.0f * sigma * sigma));
 }
 
+/**
+ * @fn static float PSmoothstep(float edge0, float edge1, float x)
+ * @brief Interpolate clamped cubic coverage between distinct edges.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @pre edge0 and edge1 differ; reversed edges produce falling coverage.
+ */
 static float PSmoothstep(float edge0, float edge1, float x)
 {
     float t = std::clamp((x - edge0) / (edge1 - edge0), .0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
 }
 
+/**
+ * @fn static float PLineDist(float px, float py, float ax, float ay, float bx, float by)
+ * @brief Measure distance to the nearest point on a bounded line segment.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float PLineDist(float px, float py, float ax, float ay, float bx, float by)
 {
     float dx = bx - ax, dy = by - ay;
@@ -479,18 +503,33 @@ static float PLineDist(float px, float py, float ax, float ay, float bx, float b
     return std::sqrt(ex * ex + ey * ey);
 }
 
+/**
+ * @fn static float PRingDist(float px, float py, float radius)
+ * @brief Measure unsigned distance from a centered ring.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float PRingDist(float px, float py, float radius)
 {
     return std::abs(std::sqrt(px * px + py * py) - radius);
 }
 
+/**
+ * @fn static float PLineAlpha(float dist, float width, float soft)
+ * @brief Soften line coverage across the supplied edge width.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float PLineAlpha(float dist, float width, float soft)
 {
     return PSmoothstep(width + soft, width - soft, dist);
 }
 
-// Interleaved gradient noise (Jimenez 2014), in [0,1). Used as an unbiased
-// stochastic-rounding offset when quantizing float alpha to 8 bits.
+/**
+ * @fn static float PInterleavedGradientNoise(int x, int y)
+ * @brief Generate deterministic noise for alpha quantization.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Interleaved gradient noise (Jimenez 2014), in [0, 1), for unbiased alpha quantization.
+ */
 static float PInterleavedGradientNoise(int x, int y)
 {
     float f = .06711056f * static_cast<float>(x) + .00583715f * static_cast<float>(y);
@@ -501,35 +540,37 @@ static float PInterleavedGradientNoise(int x, int y)
 
 using PPixelFn = float (*)(float, float);
 
-// ---- Stars ----
-
-// 4-pointed starburst with secondary spikes, ring accent, and bright core
+/**
+ * @fn static float Star4Cross(float nx, float ny)
+ * @brief Evaluate alpha for the 4-pointed starburst with secondary spikes, ring accent, and bright
+ * core.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float Star4Cross(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Bright concentrated core with steep falloff
     float core = std::pow(PGaussian(r, .12f), .6f);
     float glow = PGaussian(r, .45f) * .3f;
-    // Main 4-point spikes
     float sH = PGaussian(ny, .035f) * PGaussian(r, .65f);
     float sV = PGaussian(nx, .035f) * PGaussian(r, .65f);
     float mainSpikes = (std::max)(sH, sV);
-    // Secondary spikes at 45 degrees (thinner, shorter)
     float d45a = (nx + ny) * .7071f, d45b = (-nx + ny) * .7071f;
     float secSpikes =
         (std::max)(PGaussian(d45b, .02f), PGaussian(d45a, .02f)) * PGaussian(r, .45f) * .35f;
-    // Subtle ring accent
     float ring = PGaussian(std::abs(r - .45f), .025f) * .1f;
     return std::clamp(core + glow + mainSpikes * .85f + secSpikes + ring, .0f, 1.0f);
 }
 
-// 6-pointed star with bright core, 6 spikes, and ring
+/**
+ * @fn static float Star6Point(float nx, float ny)
+ * @brief Evaluate alpha for the 6-pointed star with bright core, 6 spikes, and ring.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float Star6Point(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float core = std::pow(PGaussian(r, .1f), .6f);
     float glow = PGaussian(r, .4f) * .25f;
-    // 6 spikes at 30-degree intervals
     float ms = .0f;
     for (int i = 0; i < 6; ++i)
     {
@@ -537,12 +578,15 @@ static float Star6Point(float nx, float ny)
         float py = -nx * std::sin(a) + ny * std::cos(a);
         ms = (std::max)(ms, PGaussian(py, .03f) * PGaussian(r, .55f));
     }
-    // Ring accent
     float ring = PGaussian(std::abs(r - .35f), .03f) * .1f;
     return std::clamp(core + glow + ms * .75f + ring, .0f, 1.0f);
 }
 
-// Diamond sparkle with inner cross and faceted edge
+/**
+ * @fn static float StarDiamond(float nx, float ny)
+ * @brief Evaluate alpha for the diamond sparkle with inner cross and faceted edge.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float StarDiamond(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
@@ -551,63 +595,67 @@ static float StarDiamond(float nx, float ny)
     float shape = PSmoothstep(.5f, .2f, diamond);
     float core = std::pow(PGaussian(r, .08f), .5f);
     float glow = PGaussian(r, .35f) * .2f;
-    // Inner cross accent
     float cH = PGaussian(ny, .03f) * PGaussian(r, .35f) * .2f;
     float cV = PGaussian(nx, .03f) * PGaussian(r, .35f) * .2f;
     return std::clamp(shape * .5f + core * .7f + glow + (std::max)(cH, cV), .0f, 1.0f);
 }
 
-// Lens flare with diffraction spikes, secondary spikes, and aperture ring
+/**
+ * @fn static float StarFlare(float nx, float ny)
+ * @brief Evaluate alpha for the lens flare with diffraction spikes, secondary spikes, and aperture
+ * ring.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float StarFlare(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float core = std::pow(PGaussian(r, .05f), .5f);
     float halo = PGaussian(r, .5f) * .3f;
-    // 4 very thin main spikes
     float sH = PGaussian(ny, .012f) * PGaussian(r, .75f);
     float sV = PGaussian(nx, .012f) * PGaussian(r, .75f);
     float spikes = (std::max)(sH, sV) * .5f;
-    // Finer secondary spikes at 45 degrees
     float d1 = (nx + ny) * .7071f, d2 = (-nx + ny) * .7071f;
     float sec = (std::max)(PGaussian(d1, .008f), PGaussian(d2, .008f)) * PGaussian(r, .5f) * .2f;
-    // Aperture ring
     float ring = PGaussian(std::abs(r - .55f), .02f) * .08f;
     return std::clamp(core + halo + spikes + sec + ring, .0f, 1.0f);
 }
 
-// 8-pointed compass rose with tapered main + diagonal spikes
+/**
+ * @fn static float StarCompass(float nx, float ny)
+ * @brief Evaluate alpha for the 8-pointed compass rose with tapered main + diagonal spikes.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float StarCompass(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float core = std::pow(PGaussian(r, .09f), .5f);
     float glow = PGaussian(r, .4f) * .2f;
-    // 4 main cardinal spikes (longer, thicker)
     float sH = PGaussian(ny, .03f) * PGaussian(r, .7f);
     float sV = PGaussian(nx, .03f) * PGaussian(r, .7f);
     float main4 = (std::max)(sH, sV) * .8f;
-    // 4 diagonal spikes (shorter, thinner)
     float d1 = (nx + ny) * .7071f, d2 = (-nx + ny) * .7071f;
     float diag = (std::max)(PGaussian(d1, .02f), PGaussian(d2, .02f)) * PGaussian(r, .5f) * .5f;
-    // Tapered tips: spikes narrow toward ends
     float taper = PSmoothstep(.7f, .2f, r);
     float ring = PGaussian(std::abs(r - .3f), .02f) * .08f;
     return std::clamp(core + glow + main4 * taper + diag * taper + ring, .0f, 1.0f);
 }
 
-// 5-armed spiral pinwheel with curved spikes
+/**
+ * @fn static float StarPinwheel(float nx, float ny)
+ * @brief Evaluate alpha for the 5-armed spiral pinwheel with curved spikes.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float StarPinwheel(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float angle = std::atan2(ny, nx);
     float core = std::pow(PGaussian(r, .1f), .6f);
     float glow = PGaussian(r, .4f) * .2f;
-    // 5 spiraling arms: each arm is a spike whose angle offset increases with radius
     float arms = .0f;
     for (int i = 0; i < 5; ++i)
     {
         float armAngle = static_cast<float>(i) * PROC_PI * .4f;  // 72-degree spacing
         float spiral = angle - armAngle - r * 2.5f;              // spiral twist
-        // Normalize angle to [-pi, pi]
         spiral = spiral - std::floor(spiral / (2.0f * PROC_PI) + .5f) * 2.0f * PROC_PI;
         float arm = PGaussian(spiral, .15f) * PGaussian(r - .3f, .25f);
         arms = (std::max)(arms, arm);
@@ -615,31 +663,34 @@ static float StarPinwheel(float nx, float ny)
     return std::clamp(core + glow + arms * .7f, .0f, 1.0f);
 }
 
-// Nova burst: 12+ thin radiating lines with shockwave ring
+/**
+ * @fn static float StarNova(float nx, float ny)
+ * @brief Evaluate alpha for the nova burst: 12+ thin radiating lines with shockwave ring.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float StarNova(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float core = std::pow(PGaussian(r, .07f), .4f);
     float glow = PGaussian(r, .35f) * .25f;
-    // 12 thin radiating lines of varying length
     float rays = .0f;
     for (int i = 0; i < 12; ++i)
     {
         float a = static_cast<float>(i) * PROC_PI / 6.0f;
         float py = -nx * std::sin(a) + ny * std::cos(a);
-        // Alternating long/short rays
         float len = (i % 2 == 0) ? .7f : .5f;
         rays = (std::max)(rays, PGaussian(py, .01f) * PGaussian(r, len));
     }
-    // Shockwave ring
     float ring = PGaussian(std::abs(r - .4f), .025f) * .3f;
     float innerRing = PGaussian(std::abs(r - .2f), .015f) * .12f;
     return std::clamp(core + glow + rays * .45f + ring + innerRing, .0f, 1.0f);
 }
 
-// ---- Sparks ----
-
-// Round ember with hot core and layered glow
+/**
+ * @fn static float SparkEmber(float nx, float ny)
+ * @brief Evaluate alpha for the round ember with hot core and layered glow.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float SparkEmber(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
@@ -649,20 +700,28 @@ static float SparkEmber(float nx, float ny)
     return std::clamp(core + mid + outer, .0f, 1.0f);
 }
 
-// Intense flash point with micro-spikes and inner ring
+/**
+ * @fn static float SparkFlash(float nx, float ny)
+ * @brief Evaluate alpha for the intense flash point with micro-spikes and inner ring.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float SparkFlash(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float core = std::pow(PGaussian(r, .06f), .4f);
     float glow = PGaussian(r, .3f) * .3f;
-    // 4 micro-spikes
     float sH = PGaussian(ny, .025f) * PGaussian(r, .4f) * .25f;
     float sV = PGaussian(nx, .025f) * PGaussian(r, .4f) * .25f;
     float ring = PGaussian(std::abs(r - .25f), .025f) * .08f;
     return std::clamp(core + glow + (std::max)(sH, sV) + ring, .0f, 1.0f);
 }
 
-// Compact spark glint with faceted edges instead of a needle-like shard
+/**
+ * @fn static float SparkShard(float nx, float ny)
+ * @brief Evaluate alpha for the compact spark glint with faceted edges instead of a needle-like
+ * shard.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float SparkShard(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
@@ -676,26 +735,31 @@ static float SparkShard(float nx, float ny)
     return std::clamp(body + edge + facetA + facetB + core + glow, .0f, 1.0f);
 }
 
-// Teardrop comet with bright head and fading tail
+/**
+ * @fn static float SparkComet(float nx, float ny)
+ * @brief Evaluate alpha for the teardrop comet with bright head and fading tail.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float SparkComet(float nx, float ny)
 {
-    // Asymmetric: bright at top (ny < 0), fading downward
     float ey = ny + .15f;  // shift center upward
     float r = std::sqrt(nx * nx + ey * ey);
     float core = std::pow(PGaussian(r, .1f), .5f);
-    // Tail extends downward
     float tail = PGaussian(nx, .08f) * PSmoothstep(-.3f, .6f, ny) * PGaussian(ny - .2f, .35f);
     float glow = PGaussian(r, .3f) * .25f;
     return std::clamp(core + tail * .6f + glow, .0f, 1.0f);
 }
 
-// Electric crackle: irregular angular bright spikes
+/**
+ * @fn static float SparkCrackle(float nx, float ny)
+ * @brief Evaluate alpha for the electric crackle: irregular angular bright spikes.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float SparkCrackle(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float core = std::pow(PGaussian(r, .08f), .4f);
     float glow = PGaussian(r, .35f) * .2f;
-    // 5 spikes at irregular deterministic angles
     float spikes = .0f;
     float angles[] = {.0f, 1.15f, 2.4f, 3.7f, 5.1f};
     float lengths[] = {.55f, .4f, .6f, .35f, .5f};
@@ -707,7 +771,11 @@ static float SparkCrackle(float nx, float ny)
     return std::clamp(core + glow + spikes * .5f, .0f, 1.0f);
 }
 
-// Soft firefly: tiny bright core with large gentle halo
+/**
+ * @fn static float SparkFirefly(float nx, float ny)
+ * @brief Evaluate alpha for the soft firefly: tiny bright core with large gentle halo.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float SparkFirefly(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
@@ -718,48 +786,46 @@ static float SparkFirefly(float nx, float ny)
     return std::clamp(core + innerGlow + outerGlow + haze, .0f, 1.0f);
 }
 
-// ---- Wisps ----
-
-// Multi-layered crescent arc with bright inner edge
+/**
+ * @fn static float WispCrescent(float nx, float ny)
+ * @brief Evaluate alpha for the multi-layered crescent arc with bright inner edge.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispCrescent(float nx, float ny)
 {
     float d1 = std::sqrt(nx * nx + ny * ny);
-    // Primary crescent
     float ox1 = nx + .25f;
     float d2 = std::sqrt(ox1 * ox1 + ny * ny);
     float shape1 = PSmoothstep(.6f, .4f, d1) * (1.0f - PSmoothstep(.65f, .45f, d2));
-    // Inner highlight crescent (brighter, thinner)
     float ox2 = nx + .2f;
     float d3 = std::sqrt(ox2 * ox2 + ny * ny);
     float shape2 = PSmoothstep(.45f, .35f, d1) * (1.0f - PSmoothstep(.5f, .38f, d3));
-    // Bright inner edge
     float edge = shape1 * PGaussian(d2 - .55f, .08f) * .3f;
     float glow = PGaussian(d1, .55f) * .08f;
     return std::clamp(shape1 * .6f + shape2 * .35f + edge + glow, .0f, 1.0f);
 }
 
-// Curling fern frond with tapering width and secondary frondlet
+/**
+ * @fn static float WispFernCurl(float nx, float ny)
+ * @brief Evaluate alpha for the curling fern frond with tapering width and secondary frondlet.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispFernCurl(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float angle = std::atan2(ny, nx);
-    // Fern spine: tighter logarithmic spiral than WispSpiral
     float spiralAngle = angle - r * 6.0f;
     spiralAngle = spiralAngle - std::floor(spiralAngle / (2.0f * PROC_PI) + .5f) * 2.0f * PROC_PI;
     float spiralDist = std::abs(spiralAngle) * r;
-    // Width tapers: thick near center, thin at tip
     float width = (std::max)(.02f, .12f - r * .1f);
     float spine = PGaussian(spiralDist, width);
-    // Visible from r=0.08 to r=0.65
     float radialFade = PSmoothstep(.05f, .12f, r) * PSmoothstep(.65f, .4f, r);
-    // Secondary frondlet at faster winding rate
     float spiral2Angle = angle - r * 8.0f + 1.2f;
     spiral2Angle =
         spiral2Angle - std::floor(spiral2Angle / (2.0f * PROC_PI) + .5f) * 2.0f * PROC_PI;
     float spiral2Dist = std::abs(spiral2Angle) * r;
     float frondlet = PGaussian(spiral2Dist, .05f) * PSmoothstep(.15f, .25f, r) *
                      PSmoothstep(.45f, .35f, r) * .35f;
-    // Curl tip highlight at center
     float curlTip = PGaussian(r, .06f) * .4f;
     float core = PGaussian(r, .06f) * .25f;
     float glow = PGaussian(r, .35f) * .06f;
@@ -767,63 +833,63 @@ static float WispFernCurl(float nx, float ny)
         spine * radialFade * .85f + frondlet * radialFade + curlTip + core + glow, .0f, 1.0f);
 }
 
-// Flowing S-curve tendril with secondary branch
+/**
+ * @fn static float WispTendril(float nx, float ny)
+ * @brief Evaluate alpha for the flowing S-curve tendril with secondary branch.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispTendril(float nx, float ny)
 {
-    // Primary S-curve
     float curve1 = std::sin(ny * PROC_PI * .9f) * .22f;
     float dist1 = std::abs(nx - curve1);
     float width1 = .1f + .06f * std::cos(ny * PROC_PI * .5f);
     float t1 = PSmoothstep(width1 + .03f, width1 - .015f, dist1);
-    // Secondary curve (branching feel)
     float curve2 = std::sin(ny * PROC_PI * 1.3f + .8f) * .15f + .1f;
     float dist2 = std::abs(nx - curve2);
     float t2 = PSmoothstep(.06f, .02f, dist2) * .4f;
-    // Length fade
     float fade = PSmoothstep(-1.0f, -.55f, ny) * PSmoothstep(1.0f, .55f, ny);
-    // Inner glow along main tendril
     float glow = PGaussian(dist1, .2f) * .12f * fade;
     return std::clamp((t1 * .75f + t2) * fade + glow, .0f, 1.0f);
 }
 
-// Spiral arm wrapping ~270 degrees, fading at tail
+/**
+ * @fn static float WispSpiral(float nx, float ny)
+ * @brief Evaluate alpha for the spiral arm wrapping ~270 degrees, fading at tail.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispSpiral(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float angle = std::atan2(ny, nx);
-    // Spiral: distance from the spiral curve
     float spiralAngle = angle - r * 4.0f;  // tighter spiral
     spiralAngle = spiralAngle - std::floor(spiralAngle / (2.0f * PROC_PI) + .5f) * 2.0f * PROC_PI;
     float spiralDist = std::abs(spiralAngle) * r;  // scale with radius for even width
     float spiral = PGaussian(spiralDist, .08f) * PSmoothstep(.7f, .1f, r);
-    // Fade at center and far edge
     float radialFade = PSmoothstep(.05f, .15f, r) * PSmoothstep(.7f, .5f, r);
     float core = PGaussian(r, .08f) * .3f;
     float glow = PGaussian(r, .4f) * .08f;
     return std::clamp(spiral * radialFade * .8f + core + glow, .0f, 1.0f);
 }
 
-// Moth silhouette with paired wing lobes and thin antennae
+/**
+ * @fn static float WispMoth(float nx, float ny)
+ * @brief Evaluate alpha for the moth silhouette with paired wing lobes and thin antennae.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispMoth(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Left wing: offset and horizontally squeezed ellipse
     float lwx = (nx + .18f) * 1.6f;
     float lwDist = std::sqrt(lwx * lwx + ny * ny);
     float leftWing = PSmoothstep(.35f, .18f, lwDist);
-    // Right wing: mirrored
     float rwx = (nx - .18f) * 1.6f;
     float rwDist = std::sqrt(rwx * rwx + ny * ny);
     float rightWing = PSmoothstep(.35f, .18f, rwDist);
-    // Wing edge glow (bright rim at shape boundary)
     float leftEdge = PGaussian(lwDist - .27f, .04f) * .4f;
     float rightEdge = PGaussian(rwDist - .27f, .04f) * .4f;
-    // Thin vertical body at center
     float body = PGaussian(nx, .04f) * PGaussian(ny, .2f) * .5f;
-    // Diverging antennae from top-center
     float ant1 = PLineAlpha(PLineDist(nx, ny, .0f, -.05f, -.2f, -.4f), .012f, .01f) * .35f;
     float ant2 = PLineAlpha(PLineDist(nx, ny, .0f, -.05f, .2f, -.4f), .012f, .01f) * .35f;
-    // Antenna tip dots
     float tipL =
         PGaussian(std::sqrt((nx + .2f) * (nx + .2f) + (ny + .4f) * (ny + .4f)), .025f) * .3f;
     float tipR =
@@ -833,43 +899,42 @@ static float WispMoth(float nx, float ny)
     return std::clamp(wings + body + ant1 + ant2 + tipL + tipR + core, .0f, 1.0f);
 }
 
-// Water droplet with bright caustic crescent and specular highlight
+/**
+ * @fn static float WispDewdrop(float nx, float ny)
+ * @brief Evaluate alpha for the water droplet with bright caustic crescent and specular highlight.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispDewdrop(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Soft ring outline
     float ring = PGaussian(std::abs(r - .4f), .05f) * .5f;
-    // Caustic crescent inside the droplet (offset subtracted circles)
     float cx = nx + .12f;
     float cy = ny + .12f;
     float cd = std::sqrt(cx * cx + cy * cy);
     float caustic = PSmoothstep(.3f, .18f, r) * (1.0f - PSmoothstep(.35f, .2f, cd));
-    // Soft inner body fill
     float body = PGaussian(r, .3f) * .3f;
-    // Specular highlight dot (upper-left)
     float specX = nx + .12f;
     float specY = ny + .15f;
     float specDist = std::sqrt(specX * specX + specY * specY);
     float specular = PGaussian(specDist, .06f) * .6f;
-    // Subtle downward gravity glow
     float gravity = PGaussian(nx, .2f) * PSmoothstep(-.1f, .3f, ny) * PGaussian(r, .4f) * .15f;
     float core = PGaussian(r, .06f) * .25f;
     float glow = PGaussian(r, .5f) * .06f;
     return std::clamp(ring + caustic * .65f + body + specular + gravity + core + glow, .0f, 1.0f);
 }
 
-// Bright offset core with three diverging trail lines
+/**
+ * @fn static float WispFirefly(float nx, float ny)
+ * @brief Evaluate alpha for the bright offset core with three diverging trail lines.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispFirefly(float nx, float ny)
 {
-    // Off-center core
     float ox = nx + .1f;
     float oy = ny - .05f;
     float offR = std::sqrt(ox * ox + oy * oy);
-    // Bright concentrated core
     float core = std::pow(PGaussian(offR, .05f), .4f) * .7f;
     float innerGlow = PGaussian(offR, .15f) * .35f;
-    // Three trail lines radiating from core at asymmetric angles
-    // Fade trails outward from core center
     float radFade = PSmoothstep(.0f, .15f, offR);
     float radFadeShort = PSmoothstep(.0f, .1f, offR);
     float t1 = PLineAlpha(PLineDist(nx, ny, -.1f, .05f, .35f, -.3f), .018f, .015f);
@@ -881,11 +946,14 @@ static float WispFirefly(float nx, float ny)
     return std::clamp(core + innerGlow + trails + outerGlow, .0f, 1.0f);
 }
 
-// Cluster of 5 pollen motes drifting along a gentle arc
+/**
+ * @fn static float WispPollenDrift(float nx, float ny)
+ * @brief Evaluate alpha for the cluster of 5 pollen motes drifting along a gentle arc.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float WispPollenDrift(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // 5 mote positions along a gentle arc
     const float mx[] = {-.18f, -.08f, .02f, .1f, .06f};
     const float my[] = {-.22f, -.08f, .05f, .18f, .32f};
     const float ms[] = {.06f, .05f, .07f, .045f, .055f};
@@ -899,7 +967,6 @@ static float WispPollenDrift(float nx, float ny)
         float moteHalo = PGaussian(d, ms[i]) * .6f;
         motes = (std::max)(motes, moteCore + moteHalo);
     }
-    // Faint connecting glow between consecutive motes
     float connGlow = .0f;
     for (int i = 0; i < 4; ++i)
     {
@@ -910,20 +977,19 @@ static float WispPollenDrift(float nx, float ny)
     return std::clamp(motes + connGlow + overallGlow, .0f, 1.0f);
 }
 
-// ---- Runes ----
-
-// Double-ring ward with inscribed cross and intersection dots
+/**
+ * @fn static float RuneWard(float nx, float ny)
+ * @brief Evaluate alpha for the double-ring ward with inscribed cross and intersection dots.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float RuneWard(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Double ring
     float ring1 = PLineAlpha(PRingDist(nx, ny, .55f), .035f, .025f);
     float ring2 = PLineAlpha(PRingDist(nx, ny, .48f), .015f, .015f) * .4f;
-    // Cross lines
     float crossH = PLineAlpha(PLineDist(nx, ny, -.42f, .0f, .42f, .0f), .028f, .02f);
     float crossV = PLineAlpha(PLineDist(nx, ny, .0f, -.42f, .0f, .42f), .028f, .02f);
     float cross = (std::max)(crossH, crossV);
-    // Dots at cardinal intersections with ring
     float dots = .0f;
     for (int i = 0; i < 4; ++i)
     {
@@ -931,31 +997,31 @@ static float RuneWard(float nx, float ny)
         float dx = nx - std::cos(a) * .55f, dy = ny - std::sin(a) * .55f;
         dots = (std::max)(dots, PGaussian(std::sqrt(dx * dx + dy * dy), .04f));
     }
-    // Glow along lines
     float lineGlow = (std::max)(PGaussian(std::abs(ny), .08f), PGaussian(std::abs(nx), .08f)) *
                      PGaussian(r, .45f) * .1f;
     float core = PGaussian(r, .1f) * .4f;
     return std::clamp((std::max)(ring1, ring2) + cross + dots * .6f + core + lineGlow, .0f, 1.0f);
 }
 
-// Triangle with inner inverted triangle, vertex dots, and center eye
+/**
+ * @fn static float RuneTriangle(float nx, float ny)
+ * @brief Evaluate alpha for the triangle with inner inverted triangle, vertex dots, and center eye.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float RuneTriangle(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float s = .55f, si = .28f;
-    // Outer triangle
     float e1 = PLineAlpha(PLineDist(nx, ny, .0f, -s, -s * .866f, s * .5f), .028f, .02f);
     float e2 = PLineAlpha(PLineDist(nx, ny, -s * .866f, s * .5f, s * .866f, s * .5f), .028f, .02f);
     float e3 = PLineAlpha(PLineDist(nx, ny, s * .866f, s * .5f, .0f, -s), .028f, .02f);
     float outer = (std::max)(e1, (std::max)(e2, e3));
-    // Inner inverted triangle
     float i1 = PLineAlpha(PLineDist(nx, ny, .0f, si, -si * .866f, -si * .5f), .018f, .015f) * .5f;
     float i2 =
         PLineAlpha(PLineDist(nx, ny, -si * .866f, -si * .5f, si * .866f, -si * .5f), .018f, .015f) *
         .5f;
     float i3 = PLineAlpha(PLineDist(nx, ny, si * .866f, -si * .5f, .0f, si), .018f, .015f) * .5f;
     float inner = (std::max)(i1, (std::max)(i2, i3));
-    // Vertex dots
     float dots = .0f;
     float verts[][2] = {{.0f, -s}, {-s * .866f, s * .5f}, {s * .866f, s * .5f}};
     for (auto& v : verts)
@@ -963,33 +1029,32 @@ static float RuneTriangle(float nx, float ny)
         float dx = nx - v[0], dy = ny - v[1];
         dots = (std::max)(dots, PGaussian(std::sqrt(dx * dx + dy * dy), .035f));
     }
-    // Center eye (ring + dot)
     float eye = PLineAlpha(PRingDist(nx, ny, .12f), .02f, .015f) * .5f;
     float center = PGaussian(r, .05f) * .6f;
     return std::clamp(
         outer + inner + dots * .5f + eye + center + PGaussian(r, .45f) * .06f, .0f, 1.0f);
 }
 
-// Double diamond with internal lattice (protection glyph)
+/**
+ * @fn static float RuneDiamond(float nx, float ny)
+ * @brief Evaluate alpha for the double diamond with internal lattice (protection glyph).
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float RuneDiamond(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float s = .58f, si = .32f;
-    // Outer diamond
     float e1 = PLineAlpha(PLineDist(nx, ny, .0f, -s, s * .6f, .0f), .028f, .02f);
     float e2 = PLineAlpha(PLineDist(nx, ny, s * .6f, .0f, .0f, s), .028f, .02f);
     float e3 = PLineAlpha(PLineDist(nx, ny, .0f, s, -s * .6f, .0f), .028f, .02f);
     float e4 = PLineAlpha(PLineDist(nx, ny, -s * .6f, .0f, .0f, -s), .028f, .02f);
     float outer = (std::max)((std::max)(e1, e2), (std::max)(e3, e4));
-    // Inner diamond
     float j1 = PLineAlpha(PLineDist(nx, ny, .0f, -si, si * .6f, .0f), .018f, .015f) * .45f;
     float j2 = PLineAlpha(PLineDist(nx, ny, si * .6f, .0f, .0f, si), .018f, .015f) * .45f;
     float j3 = PLineAlpha(PLineDist(nx, ny, .0f, si, -si * .6f, .0f), .018f, .015f) * .45f;
     float j4 = PLineAlpha(PLineDist(nx, ny, -si * .6f, .0f, .0f, -si), .018f, .015f) * .45f;
     float inr = (std::max)((std::max)(j1, j2), (std::max)(j3, j4));
-    // Vertical axis line
     float axis = PLineAlpha(PLineDist(nx, ny, .0f, -s * .7f, .0f, s * .7f), .015f, .015f) * .35f;
-    // Corner accent dots
     float dots = .0f;
     float pts[][2] = {{.0f, -s}, {s * .6f, .0f}, {.0f, s}, {-s * .6f, .0f}};
     for (auto& p : pts)
@@ -1001,7 +1066,11 @@ static float RuneDiamond(float nx, float ny)
     return std::clamp(outer + inr + axis + dots + core + PGaussian(r, .45f) * .06f, .0f, 1.0f);
 }
 
-// Triple concentric rings with 8 dots and radial accents
+/**
+ * @fn static float RuneRings(float nx, float ny)
+ * @brief Evaluate alpha for the triple concentric rings with 8 dots and radial accents.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float RuneRings(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
@@ -1009,7 +1078,6 @@ static float RuneRings(float nx, float ny)
     float ring2 = PLineAlpha(PRingDist(nx, ny, .38f), .022f, .018f);
     float ring3 = PLineAlpha(PRingDist(nx, ny, .2f), .015f, .012f) * .5f;
     float rings = (std::max)(ring1, (std::max)(ring2, ring3));
-    // 8 cardinal + ordinal dots
     float dots = .0f;
     for (int i = 0; i < 8; ++i)
     {
@@ -1019,7 +1087,6 @@ static float RuneRings(float nx, float ny)
         float dotSize = (i % 2 == 0) ? .04f : .025f;  // cardinal dots larger
         dots = (std::max)(dots, PGaussian(std::sqrt(dx * dx + dy * dy), dotSize));
     }
-    // 4 short radial lines connecting outer to middle ring
     float radials = .0f;
     for (int i = 0; i < 4; ++i)
     {
@@ -1032,13 +1099,15 @@ static float RuneRings(float nx, float ny)
     return std::clamp(rings + dots * .6f + radials + core + PGaussian(r, .45f) * .06f, .0f, 1.0f);
 }
 
-// Five-pointed star inscribed in circle with vertex dots
+/**
+ * @fn static float RunePentagram(float nx, float ny)
+ * @brief Evaluate alpha for the five-pointed star inscribed in circle with vertex dots.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float RunePentagram(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Outer circle
     float circle = PLineAlpha(PRingDist(nx, ny, .55f), .025f, .02f);
-    // 5-pointed star: 5 line segments connecting alternating vertices
     float star = .0f;
     float vx[5], vy[5];
     for (int i = 0; i < 5; ++i)
@@ -1053,7 +1122,6 @@ static float RunePentagram(float nx, float ny)
         star = (std::max)(star,
                           PLineAlpha(PLineDist(nx, ny, vx[i], vy[i], vx[j], vy[j]), .02f, .018f));
     }
-    // Vertex dots
     float dots = .0f;
     for (int i = 0; i < 5; ++i)
     {
@@ -1065,40 +1133,41 @@ static float RunePentagram(float nx, float ny)
         circle + star * .8f + dots * .5f + core + PGaussian(r, .45f) * .06f, .0f, 1.0f);
 }
 
-// Stylized all-seeing eye: almond shape + circle pupil + center dot
+/**
+ * @fn static float RuneEye(float nx, float ny)
+ * @brief Evaluate alpha for the stylized all-seeing eye: almond shape + circle pupil + center dot.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float RuneEye(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Almond/eye shape: two arcs meeting at left and right points
-    // Upper arc (concave down) and lower arc (concave up)
     float eyeTop = ny + .35f - (nx * nx) * 1.2f;   // parabolic upper lid
     float eyeBot = -ny + .35f - (nx * nx) * 1.2f;  // parabolic lower lid
     float eyeShape = (std::min)(eyeTop, eyeBot);
     float eyeMask = PSmoothstep(.0f, .06f, eyeShape);
-    // Eye outline (where eyeShape ~= 0)
     float outline = PGaussian(eyeShape, .03f) * .7f;
-    // Pupil: circle in center
     float pupil = PLineAlpha(PRingDist(nx, ny, .15f), .025f, .02f) * .6f;
-    // Iris dot
     float iris = PGaussian(r, .06f) * .7f;
-    // Subtle glow
     float glow = PGaussian(r, .4f) * .08f;
     return std::clamp(outline + pupil + iris + eyeMask * .15f + glow, .0f, 1.0f);
 }
 
-// ---- Orbs ----
-
-// Soft featureless light disc for the particle glow halo: a pure Gaussian
-// falloff with no core, spikes, or art. Drawn additively behind the crisp sprite
-// it reads as emitted light. The halo must not reuse the sprite art, which reads
-// as a transparent scaled-up duplicate of the particle instead of a glow.
+/**
+ * @fn static float HaloSoftDisc(float nx, float ny)
+ * @brief Evaluate a featureless Gaussian disc for halo and glint light.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float HaloSoftDisc(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     return std::clamp(PGaussian(r, .32f), .0f, 1.0f);
 }
 
-// Multi-layered gaussian sphere with hot center
+/**
+ * @fn static float OrbGaussian(float nx, float ny)
+ * @brief Evaluate alpha for the multi-layered gaussian sphere with hot center.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float OrbGaussian(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
@@ -1109,12 +1178,15 @@ static float OrbGaussian(float nx, float ny)
     return std::clamp(core + inner + mid + outer, .0f, 1.0f);
 }
 
-// Orb with pronounced fresnel ring and inner glow
+/**
+ * @fn static float OrbRinged(float nx, float ny)
+ * @brief Evaluate alpha for the orb with pronounced fresnel ring and inner glow.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float OrbRinged(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float body = PGaussian(r, .28f) * .5f;
-    // Strong fresnel-like edge ring
     float ring = PGaussian(std::abs(r - .4f), .04f) * .6f;
     float innerRing = PGaussian(std::abs(r - .22f), .025f) * .15f;
     float core = std::pow(PGaussian(r, .06f), .5f) * .45f;
@@ -1122,35 +1194,42 @@ static float OrbRinged(float nx, float ny)
     return std::clamp(body + ring + innerRing + core + glow, .0f, 1.0f);
 }
 
-// Double-ring halo with center spark
+/**
+ * @fn static float OrbHalo(float nx, float ny)
+ * @brief Evaluate alpha for the double-ring halo with center spark.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float OrbHalo(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Primary ring
     float ring1 = PGaussian(std::abs(r - .38f), .06f) * .7f;
-    // Secondary inner ring
     float ring2 = PGaussian(std::abs(r - .2f), .04f) * .3f;
-    // Center spark
     float spark = std::pow(PGaussian(r, .04f), .5f) * .35f;
-    // Fill glow
     float fill = PGaussian(r, .45f) * .12f;
     return std::clamp(ring1 + ring2 + spark + fill, .0f, 1.0f);
 }
 
-// Pulsar: bright core with 3 concentric ripple rings
+/**
+ * @fn static float OrbPulsar(float nx, float ny)
+ * @brief Evaluate alpha for the pulsar: bright core with 3 concentric ripple rings.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float OrbPulsar(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float core = std::pow(PGaussian(r, .06f), .4f) * .5f;
     float glow = PGaussian(r, .3f) * .25f;
-    // 3 expanding rings at different radii
     float ring1 = PGaussian(std::abs(r - .2f), .025f) * .4f;
     float ring2 = PGaussian(std::abs(r - .38f), .02f) * .3f;
     float ring3 = PGaussian(std::abs(r - .55f), .018f) * .2f;
     return std::clamp(core + glow + ring1 + ring2 + ring3, .0f, 1.0f);
 }
 
-// Nebula: large asymmetric multi-center soft glow
+/**
+ * @fn static float OrbNebula(float nx, float ny)
+ * @brief Evaluate alpha for the nebula: large asymmetric multi-center soft glow.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float OrbNebula(float nx, float ny)
 {
     float g1 = PGaussian(std::sqrt((nx - .1f) * (nx - .1f) + (ny + .05f) * (ny + .05f)), .35f);
@@ -1159,27 +1238,25 @@ static float OrbNebula(float nx, float ny)
     float g4 = PGaussian(std::sqrt((nx + .08f) * (nx + .08f) + (ny + .08f) * (ny + .08f)), .28f);
     float g5 = PGaussian(std::sqrt((nx - .15f) * (nx - .15f) + (ny - .08f) * (ny - .08f)), .22f);
     float g6 = PGaussian(std::sqrt((nx + .05f) * (nx + .05f) + (ny - .15f) * (ny - .15f)), .2f);
-    // Soft average blend for nebula-like diffusion
     float combined = (g1 + g2 + g3 + g4 + g5 + g6) / 6.0f;
     float r = std::sqrt(nx * nx + ny * ny);
     float highlight = (std::max)(g1, (std::max)(g2, g3)) * .2f;
     return std::clamp(combined * .7f + highlight + PGaussian(r, .06f) * .15f, .0f, 1.0f);
 }
 
-// ---- Crystals ----
-
-// Hexagonal outline with internal facet lines and center glow
+/**
+ * @fn static float CrystalHex(float nx, float ny)
+ * @brief Evaluate alpha for the hexagonal outline with internal facet lines and center glow.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float CrystalHex(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // Hexagonal distance (max of 3 axes)
     float h1 = std::abs(ny);
     float h2 = std::abs(nx * .866f + ny * .5f);
     float h3 = std::abs(nx * .866f - ny * .5f);
     float hexDist = (std::max)(h1, (std::max)(h2, h3));
-    // Hex outline
     float hexOutline = PGaussian(std::abs(hexDist - .45f), .025f) * .8f;
-    // Internal facet lines (3 axes through center)
     float facets = .0f;
     for (int i = 0; i < 3; ++i)
     {
@@ -1192,7 +1269,12 @@ static float CrystalHex(float nx, float ny)
     return std::clamp(hexOutline + facets * .3f + core + glow, .0f, 1.0f);
 }
 
-// Emerald-cut crystal with short facets instead of a thin rod silhouette
+/**
+ * @fn static float CrystalShard(float nx, float ny)
+ * @brief Evaluate alpha for the emerald-cut crystal with short facets instead of a thin rod
+ * silhouette.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float CrystalShard(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
@@ -1217,17 +1299,19 @@ static float CrystalShard(float nx, float ny)
         1.0f);
 }
 
-// Triangular prism cross-section with radial lines to center
+/**
+ * @fn static float CrystalPrism(float nx, float ny)
+ * @brief Evaluate alpha for the triangular prism cross-section with radial lines to center.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float CrystalPrism(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
     float s = .5f;
-    // Equilateral triangle outline
     float e1 = PLineAlpha(PLineDist(nx, ny, .0f, -s, -s * .866f, s * .5f), .025f, .02f);
     float e2 = PLineAlpha(PLineDist(nx, ny, -s * .866f, s * .5f, s * .866f, s * .5f), .025f, .02f);
     float e3 = PLineAlpha(PLineDist(nx, ny, s * .866f, s * .5f, .0f, -s), .025f, .02f);
     float tri = (std::max)(e1, (std::max)(e2, e3));
-    // Radial lines from center to each vertex
     float rd1 = PLineDist(nx, ny, 0.0f, 0.0f, 0.0f, -s);
     float rd2 = PLineDist(nx, ny, 0.0f, 0.0f, -s * .866f, s * .5f);
     float rd3 = PLineDist(nx, ny, 0.0f, 0.0f, s * .866f, s * .5f);
@@ -1239,11 +1323,14 @@ static float CrystalPrism(float nx, float ny)
     return std::clamp(tri * .8f + radials + core + PGaussian(r, .4f) * .08f, .0f, 1.0f);
 }
 
-// Crystal cluster: multiple overlapping small diamond shapes
+/**
+ * @fn static float CrystalCluster(float nx, float ny)
+ * @brief Evaluate alpha for the crystal cluster: multiple overlapping small diamond shapes.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float CrystalCluster(float nx, float ny)
 {
     float r = std::sqrt(nx * nx + ny * ny);
-    // 4 small overlapping diamonds at offset positions
     float cluster = .0f;
     float offsets[][2] = {{-.12f, -.15f}, {.15f, -.08f}, {-.08f, .12f}, {.1f, .15f}};
     float sizes[] = {.28f, .22f, .25f, .2f};
@@ -1251,7 +1338,6 @@ static float CrystalCluster(float nx, float ny)
     for (int i = 0; i < 4; ++i)
     {
         float ox = nx - offsets[i][0], oy = ny - offsets[i][1];
-        // Rotate
         float ca = std::cos(rotations[i]), sa = std::sin(rotations[i]);
         float rx = ox * ca - oy * sa, ry = ox * sa + oy * ca;
         float diam = std::abs(rx) + std::abs(ry);
@@ -1263,7 +1349,6 @@ static float CrystalCluster(float nx, float ny)
     return std::clamp(cluster + core + PGaussian(r, .4f) * .06f, .0f, 1.0f);
 }
 
-// Generator function arrays indexed by style
 static const PPixelFn kStarGens[] = {
     Star4Cross, Star6Point, StarDiamond, StarFlare, StarCompass, StarPinwheel, StarNova};
 static const PPixelFn kSparkGens[] = {
@@ -1287,57 +1372,60 @@ struct GenArray
     int count;
 };
 
-// Procedural sets are a fallback only: they render solely for a style that
-// loaded no sprite from the manifest. Each style reuses the closest-looking
-// generator set rather than shipping bespoke generators.
+// Use the nearest procedural set only when a style has no loaded manifest sprite.
 static const GenArray kAllGens[NUM_TYPES] = {
-    {kOrbGens, 5},      // Firefly  -> soft glowing orbs
-    {kStarGens, 7},     // Snow     -> star/flake points
-    {kOrbGens, 5},      // Smoke    -> soft blobs
-    {kSparkGens, 6},    // Spark    -> embers
-    {kWispGens, 8},     // Wisp     -> wisps
-    {kStarGens, 7},     // Leaf     -> small shapes
-    {kWispGens, 8},     // Aurora   -> ribbons
-    {kStarGens, 7},     // CherryBlossom -> small petals/points
-    {kOrbGens, 5},      // Dust     -> tiny soft motes
-    {kOrbGens, 5},      // Mote     -> soft glowing motes
-    {kRuneGens, 6},     // Arcane   -> rune glyphs
-    {kSparkGens, 6},    // Ash      -> embers
-    {kWispGens, 8},     // Bat      -> moth silhouette is the nearest wing shape
-    {kOrbGens, 5},      // Bubble   -> ringed orbs
-    {kWispGens, 8},     // Butterfly -> moth silhouette
-    {kOrbGens, 5},      // Coin     -> round discs
-    {kStarGens, 7},     // Confetti -> small bright shapes
-    {kStarGens, 7},     // Constellation -> star points
-    {kRuneGens, 6},     // Curse    -> dark sigils
-    {kStarGens, 7},     // Enchant  -> sparkle points
-    {kSparkGens, 6},    // Fairy    -> firefly-like glints
-    {kOrbGens, 5},      // Fog      -> soft blobs
-    {kCrystalGens, 4},  // Gem      -> faceted crystals
-    {kStarGens, 7},     // Glitter  -> sparkle points
-    {kOrbGens, 5},      // Heart    -> soft rounded shapes
-    {kRuneGens, 6},     // Hex      -> sigils
-    {kOrbGens, 5},      // Ink      -> soft blobs
-    {kOrbGens, 5},      // Moon     -> glowing discs
-    {kOrbGens, 5},      // Planet   -> ringed orbs
-    {kOrbGens, 5},      // Pollen   -> soft motes
-    {kWispGens, 8},     // Soul     -> wisps
-    {kWispGens, 8},     // Steam    -> tendrils
-    {kOrbGens, 5},      // Void     -> nebula orbs
-    {kWispGens, 8},     // Vortex   -> spirals
-    {kWispGens, 8},     // Wind     -> tendrils
-    {kSparkGens, 6},    // Zap      -> crackles
-    {kStarGens, 7},     // Zzz      -> small bright shapes
-    {kSparkGens, 6},    // Ember    -> embers
-    {kStarGens, 7},     // Pixiedust -> sparkle points
-    {kRuneGens, 6},     // Runes    -> rune glyphs
-    {kOrbGens, 5},      // Sand     -> tiny soft grains
+    {kOrbGens, 5},      // Firefly
+    {kStarGens, 7},     // Snow
+    {kOrbGens, 5},      // Smoke
+    {kSparkGens, 6},    // Spark
+    {kWispGens, 8},     // Wisp
+    {kStarGens, 7},     // Leaf
+    {kWispGens, 8},     // Aurora
+    {kStarGens, 7},     // CherryBlossom
+    {kOrbGens, 5},      // Dust
+    {kOrbGens, 5},      // Mote
+    {kRuneGens, 6},     // Arcane
+    {kSparkGens, 6},    // Ash
+    {kWispGens, 8},     // Bat
+    {kOrbGens, 5},      // Bubble
+    {kWispGens, 8},     // Butterfly
+    {kOrbGens, 5},      // Coin
+    {kStarGens, 7},     // Confetti
+    {kStarGens, 7},     // Constellation
+    {kRuneGens, 6},     // Curse
+    {kStarGens, 7},     // Enchant
+    {kSparkGens, 6},    // Fairy
+    {kOrbGens, 5},      // Fog
+    {kCrystalGens, 4},  // Gem
+    {kStarGens, 7},     // Glitter
+    {kOrbGens, 5},      // Heart
+    {kRuneGens, 6},     // Hex
+    {kOrbGens, 5},      // Ink
+    {kOrbGens, 5},      // Moon
+    {kOrbGens, 5},      // Planet
+    {kOrbGens, 5},      // Pollen
+    {kWispGens, 8},     // Soul
+    {kWispGens, 8},     // Steam
+    {kOrbGens, 5},      // Void
+    {kWispGens, 8},     // Vortex
+    {kWispGens, 8},     // Wind
+    {kSparkGens, 6},    // Zap
+    {kStarGens, 7},     // Zzz
+    {kSparkGens, 6},    // Ember
+    {kStarGens, 7},     // Pixiedust
+    {kRuneGens, 6},     // Runes
+    {kOrbGens, 5},      // Sand
 };
 static_assert(sizeof(kAllGens) / sizeof(kAllGens[0]) == Settings::kParticleStyleCount,
               "kAllGens must cover every ParticleStyle");
 
-// Create a D3D11 texture from a pixel generator function (white RGBA with computed alpha).
-// Runs the full quality pipeline: supersampling, mip chain, dithered quantization.
+/**
+ * @fn static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn generator)
+ * @brief Sample a procedural mask into white RGBA mip levels.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Build white RGBA mip levels with sampled, dithered alpha.
+ */
 static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn generator)
 {
     TextureInfo info;
@@ -1348,11 +1436,8 @@ static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn genera
 
     const int size = PROC_SIZE;
 
-    // Level 0 in float: 4x rotated-grid supersampling per pixel. The circular
-    // guard mask is applied per sample, so its edge is anti-aliased together with
-    // the design. Starting the mask at .88 forces alpha to zero at the quad
-    // boundary (no square clipping under additive blending) without eating into
-    // designs that reach r ~ .7.
+    // Sample the guard mask with the art. Its .88 cutoff hides the quad boundary
+    // under additive blending without clipping designs near r = .7.
     std::vector<float> levelAlpha(static_cast<size_t>(size) * size);
     static constexpr float SAMPLE_OFFSETS[4][2] = {
         {-.375f, .125f}, {.125f, .375f}, {.375f, -.125f}, {-.125f, -.375f}};
@@ -1383,8 +1468,7 @@ static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn genera
                       }
                   });
 
-    // Full mip chain via successive 2x2 box reduction in float. PROC_SIZE is
-    // a power of two, so every level halves cleanly down to 1x1.
+    // Power-of-two dimensions permit 2x2 float reduction down to 1x1.
     int mipLevels = 1;
     for (int d = size; d > 1; d >>= 1)
     {
@@ -1417,8 +1501,7 @@ static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn genera
             levelAlpha = std::move(reduced);
         }
 
-        // Quantize with interleaved gradient noise as unbiased stochastic
-        // rounding - removes banding rings in smooth glow falloffs.
+        // Stochastic rounding prevents rings in smooth alpha gradients.
         auto& pixels = mipPixels[level];
         pixels.resize(static_cast<size_t>(dim) * dim * 4);
         for (int y = 0; y < dim; ++y)
@@ -1428,9 +1511,7 @@ static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn genera
                 float a = levelAlpha[static_cast<size_t>(y) * dim + x];
                 int a8 = static_cast<int>(a * 255.0f + PInterleavedGradientNoise(x, y));
                 BYTE alphaByte = static_cast<BYTE>(std::clamp(a8, 0, 255));
-                // Fully transparent texels carry black RGB (mirrors the
-                // file-loading sanitization) so screen-style blending cannot
-                // lift hidden white into the framebuffer as box artifacts.
+                // Black RGB at zero alpha prevents screen-blend rectangle artifacts.
                 BYTE rgb = (alphaByte == 0) ? 0 : 255;
                 size_t idx = (static_cast<size_t>(y) * dim + x) * 4;
                 pixels[idx + 0] = rgb;
@@ -1478,7 +1559,11 @@ static TextureInfo CreateProceduralTexture(ID3D11Device* device, PPixelFn genera
     return info;
 }
 
-// Generate all procedural textures for a particle style.
+/**
+ * @fn static int GenerateProceduralTextures(ID3D11Device* device, int styleIndex)
+ * @brief Append fallback textures for the requested particle style.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static int GenerateProceduralTextures(ID3D11Device* device, int styleIndex)
 {
     if (styleIndex < 0 || styleIndex >= NUM_TYPES)
@@ -1520,12 +1605,11 @@ bool Initialize(ID3D11Device* device)
         return true;
     }
 
-    // Reset stale partial state from previous failed initialization attempts.
+    // Release partial resources before retrying initialization.
     ReleaseResources_NoLock();
 
     SKSE::log::info("ParticleTextures: Initializing particle textures...");
 
-    // Store device and get context
     s_Device = device;
     device->GetImmediateContext(s_Context.ReleaseAndGetAddressOf());
     if (!s_Context)
@@ -1533,9 +1617,8 @@ bool Initialize(ID3D11Device* device)
         SKSE::log::warn("ParticleTextures: Failed to get immediate device context");
     }
 
-    // Create point sampler for small sprites
     D3D11_SAMPLER_DESC pointDesc = {};
-    pointDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;  // No interpolation
+    pointDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
     pointDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
     pointDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
     pointDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -1555,7 +1638,6 @@ bool Initialize(ID3D11Device* device)
         SKSE::log::info("ParticleTextures: Created point sampler for small sprites");
     }
 
-    // Create linear sampler for high-resolution textures
     D3D11_SAMPLER_DESC linearDesc = pointDesc;
     linearDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     hr = device->CreateSamplerState(&linearDesc, s_LinearSampler.ReleaseAndGetAddressOf());
@@ -1568,7 +1650,6 @@ bool Initialize(ID3D11Device* device)
         SKSE::log::info("ParticleTextures: Created linear sampler for HD particles");
     }
 
-    // Additive blend state for bright particles.
     D3D11_BLEND_DESC addDesc = {};
     addDesc.AlphaToCoverageEnable = FALSE;
     addDesc.IndependentBlendEnable = FALSE;
@@ -1590,8 +1671,7 @@ bool Initialize(ID3D11Device* device)
         SKSE::log::info("ParticleTextures: Created additive blend state");
     }
 
-    // Screen-like blend state for softer luminous sprites. The source
-    // contribution is gated by source alpha to avoid rectangle artifacts.
+    // Gate screen-blend source color by alpha to hide transparent rectangles.
     D3D11_BLEND_DESC screenDesc = addDesc;
     screenDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
     screenDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_COLOR;
@@ -1605,8 +1685,6 @@ bool Initialize(ID3D11Device* device)
         SKSE::log::info("ParticleTextures: Created screen blend state");
     }
 
-    // Manifest-mapped sprites take priority; procedural generation below only
-    // covers the styles that end up with none.
     int totalLoaded = 0;
     {
         ComScope com;
@@ -1617,14 +1695,8 @@ bool Initialize(ID3D11Device* device)
                 CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
             if (SUCCEEDED(wicHr))
             {
-                // Sprite sources come from the obfuscated asset manifest: each
-                // style token maps to a list of GUID-named variant files, static
-                // or strip. A horizontal flipbook (width an exact multiple of
-                // height, quotient > 1) gets its frame count from its dimensions;
-                // filenames carry no information. Every loaded variant enters the
-                // per-particle variant rotation (GetTextureInfoForIndex), so a
-                // style with N variants spawns each on ~1/N of its particles,
-                // stably (no flicker across frames).
+                // Manifest names are opaque. Dimensions identify square-frame strips;
+                // every variant enters deterministic per-particle rotation.
                 const auto detectFrames = [](TextureInfo& info)
                 {
                     if (info.height > 0 && info.width % info.height == 0 &&
@@ -1657,8 +1729,7 @@ bool Initialize(ID3D11Device* device)
                     }
                 }
 
-                // End-of-life pop sprite for Bubble, outside the hash rotation
-                // (see PopTextures); frame count detected as above.
+                // Keep the bubble death strip outside normal variant rotation.
                 if (const std::string& popPath = ProjectManifest::BubblePop(); !popPath.empty())
                 {
                     const int bubbleStyle = static_cast<int>(Settings::ParticleStyle::Bubble);
@@ -1685,7 +1756,6 @@ bool Initialize(ID3D11Device* device)
         }
     }
 
-    // Procedural fallback for any style the manifest gave no usable file.
     for (int i = 0; i < NUM_TYPES; ++i)
     {
         if (Textures()[i].empty())
@@ -1694,7 +1764,6 @@ bool Initialize(ID3D11Device* device)
         }
     }
 
-    // Shared soft glow disc (halo + glint light layer for every style).
     SoftGlowTexture() = CreateProceduralTexture(device, HaloSoftDisc);
     if (SoftGlowTexture().srv)
     {
@@ -1712,8 +1781,13 @@ bool Initialize(ID3D11Device* device)
     return s_Initialized.load(std::memory_order_acquire);
 }
 
-// Bind the sampler passed as UserCallbackData and push the previous one, for
-// RestoreSamplerCallback to pop. Runs on the render thread during ImGui render.
+/**
+ * @fn static void SetSamplerCallback(const ImDrawList*, const ImDrawCmd* cmd)
+ * @brief Save the current sampler and bind the callback sampler.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Defer sampler binding to ImGui rendering; push its previous value for the restore callback.
+ */
 static void SetSamplerCallback(const ImDrawList*, const ImDrawCmd* cmd)
 {
     auto* sampler = reinterpret_cast<ID3D11SamplerState*>(cmd ? cmd->UserCallbackData : nullptr);
@@ -1727,6 +1801,11 @@ static void SetSamplerCallback(const ImDrawList*, const ImDrawCmd* cmd)
     s_SamplerStateStack.push_back(std::move(saved));
 }
 
+/**
+ * @fn static void RestoreSamplerCallback(const ImDrawList*, const ImDrawCmd*)
+ * @brief Restore the sampler saved by the matching particle callback.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void RestoreSamplerCallback(const ImDrawList*, const ImDrawCmd*)
 {
     if (s_SamplerStateStack.empty())
@@ -1742,6 +1821,11 @@ static void RestoreSamplerCallback(const ImDrawList*, const ImDrawCmd*)
     }
 }
 
+/**
+ * @fn static void SetBlendCallback(const ImDrawList*, const ImDrawCmd* cmd)
+ * @brief Save the current blend state and bind the callback state.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void SetBlendCallback(const ImDrawList*, const ImDrawCmd* cmd)
 {
     auto* blend = reinterpret_cast<ID3D11BlendState*>(cmd ? cmd->UserCallbackData : nullptr);
@@ -1756,6 +1840,11 @@ static void SetBlendCallback(const ImDrawList*, const ImDrawCmd* cmd)
     s_BlendStateStack.push_back(std::move(saved));
 }
 
+/**
+ * @fn static void RestoreBlendCallback(const ImDrawList*, const ImDrawCmd*)
+ * @brief Restore the blend state saved by the matching particle callback.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void RestoreBlendCallback(const ImDrawList*, const ImDrawCmd*)
 {
     if (s_BlendStateStack.empty())
@@ -1791,9 +1880,13 @@ int GetTextureCount(int style)
     return static_cast<int>(Textures()[style].size());
 }
 
-// Stable mix of style and particle index. The one call site passes particle
-// index 0, which collapses the avalanche steps and leaves a per-style constant
-// offset; the particle index enters the choice through the round-robin below.
+/**
+ * @fn static size_t HashIndex(int style, int particleIndex)
+ * @brief Mix particle and style indices into a stable variant offset.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The caller passes particle index 0; the mix supplies a stable per-style offset.
+ */
 static size_t HashIndex(int style, int particleIndex)
 {
     size_t hash = static_cast<size_t>(particleIndex);
@@ -1806,6 +1899,13 @@ static size_t HashIndex(int style, int particleIndex)
     return hash;
 }
 
+/**
+ * @fn static const TextureInfo* GetTextureInfoForIndex(int style, int particleIndex)
+ * @brief Select a particle variant by round-robin with a stable style offset.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return Borrowed texture information; null for an invalid or empty style.
+ */
 static const TextureInfo* GetTextureInfoForIndex(int style, int particleIndex)
 {
     if (style < 0 || style >= NUM_TYPES)
@@ -1817,12 +1917,8 @@ static const TextureInfo* GetTextureInfoForIndex(int style, int particleIndex)
         return nullptr;
     }
 
-    // Stratified round-robin with a per-style hash offset: consecutive particles
-    // cycle through the variants, so a style with N variants puts each on an equal
-    // share of its particles (within +/-1) even at small counts - a raw hash can
-    // starve a variant entirely at count ~8. The result stays deterministic per
-    // particle across frames (no flicker), and the style offset keeps different
-    // styles from starting on the same variant.
+    // Round-robin keeps variant counts within one particle even at low counts.
+    // A per-style offset decorrelates styles without changing selection between frames.
     const size_t texCount = Textures()[style].size();
     const size_t texIndex = (static_cast<size_t>(particleIndex) + HashIndex(style, 0)) % texCount;
     return &Textures()[style][texIndex];
@@ -1834,9 +1930,13 @@ ImTextureID GetRandomTexture(int style, int particleIndex)
     return info ? reinterpret_cast<ImTextureID>(info->srv.Get()) : ImTextureID{};
 }
 
-// Shared quad emitter for sprite draws: frame-UV selection, resolution
-// normalization, sampler + blend callbacks. frame indexes into a horizontal
-// flipbook strip and is wrapped into [0, frames).
+/**
+ * @fn static void DrawSpriteQuad(ImDrawList* list, const ImVec2& center, float size, const
+ *     TextureInfo& texInfo, int frame, ImU32 color, BlendMode blendMode, float rotation)
+ * @brief Emit one sprite quad with wrapped frames and deferred state changes.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ */
 static void DrawSpriteQuad(ImDrawList* list,
                            const ImVec2& center,
                            float size,
@@ -1856,11 +1956,8 @@ static void DrawSpriteQuad(ImDrawList* list,
     frame = ((frame % frames) + frames) % frames;
     const float frameWidth = static_cast<float>(texInfo.width) / static_cast<float>(frames);
 
-    // Cap the on-screen size of high-resolution sources. The caller passes the
-    // same requested edge whatever the art resolution, so a frame above 1200 px
-    // is scaled by 1200 / maxFrameDim; the .45 floor stops a very large source
-    // (4K and up) from shrinking to a dot. A frame at or below 1200 px keeps the
-    // requested edge. Strips measure by the single frame, not by the whole sheet.
+    // Cap high-resolution art by 1200 / maxFrameDim; a .45 floor keeps very large art visible.
+    // Measure strips by frame dimensions.
     const float texMaxDim = (std::max)(frameWidth, static_cast<float>(texInfo.height));
     const float resolutionScale =
         (texMaxDim > .0f) ? std::clamp(1200.0f / texMaxDim, .45f, 1.0f) : 1.0f;
@@ -1871,10 +1968,7 @@ static void DrawSpriteQuad(ImDrawList* list,
         return;
     }
 
-    // Point-sample by default so low-resolution pixel-art sprites keep hard edges
-    // at any magnification; the glow is layered around that edge, never blurred
-    // into it. Linear filtering only above 64 px per frame, where nearest-neighbor
-    // would alias on minification.
+    // Point sampling preserves pixel-art edges; frames above 64px use linear minification.
     ID3D11SamplerState* samplerToUse =
         (texMaxDim > 64.0f && s_LinearSampler) ? s_LinearSampler.Get() : s_PointSampler.Get();
 
@@ -1902,7 +1996,6 @@ static void DrawSpriteQuad(ImDrawList* list,
         list->AddCallback(SetBlendCallback, blendToUse);
     }
 
-    // Horizontal flipbook frame window in U.
     const float u0 = static_cast<float>(frame) / static_cast<float>(frames);
     const float u1 = static_cast<float>(frame + 1) / static_cast<float>(frames);
 
@@ -1919,10 +2012,10 @@ static void DrawSpriteQuad(ImDrawList* list,
 
         ImVec2 corners[4];
         float offsets[4][2] = {
-            {-halfSize, -halfSize},  // Top-left
-            {halfSize, -halfSize},   // Top-right
-            {halfSize, halfSize},    // Bottom-right
-            {-halfSize, halfSize},   // Bottom-left
+            {-halfSize, -halfSize},  // top-left
+            {halfSize, -halfSize},   // top-right
+            {halfSize, halfSize},    // bottom-right
+            {-halfSize, halfSize},   // bottom-left
         };
 
         for (int i = 0; i < 4; i++)
@@ -1933,10 +2026,10 @@ static void DrawSpriteQuad(ImDrawList* list,
         }
 
         ImVec2 uvs[4] = {
-            ImVec2(u0, 0),  // Top-left
-            ImVec2(u1, 0),  // Top-right
-            ImVec2(u1, 1),  // Bottom-right
-            ImVec2(u0, 1),  // Bottom-left
+            ImVec2(u0, 0),  // top-left
+            ImVec2(u1, 0),  // top-right
+            ImVec2(u1, 1),  // bottom-right
+            ImVec2(u0, 1),  // bottom-left
         };
 
         list->AddImageQuad(tex,
@@ -1951,8 +2044,7 @@ static void DrawSpriteQuad(ImDrawList* list,
                            color);
     }
 
-    // Restore only the states set above. A full ImGui reset would also erase the
-    // enclosing world-projection and depth shaders between particle sprites.
+    // Preserve enclosing projection and depth shaders when restoring sprite state.
     if (blendToUse)
     {
         list->AddCallback(RestoreBlendCallback, nullptr);
