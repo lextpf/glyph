@@ -1,9 +1,3 @@
-// Unit tests for Graffito's runtime-independent projection math.
-//
-// This suite tests the production code directly: GraffitoMath.hpp and
-// GraffitoShaderContract.hpp carry no game or ImGui dependency, so they are
-// included and exercised as-is. There is nothing mirrored here.
-
 #include "../src/GraffitoMath.hpp"
 #include "../src/GraffitoShaderContract.hpp"
 
@@ -82,7 +76,7 @@ TEST(GraffitoMotion, PredictionBridgesOnlyTheObservedSampleWindow)
     EXPECT_NEAR(fresh.y, 19.4, 1e-12);
     EXPECT_NEAR(fresh.z, 30.3, 1e-12);
 
-    // A stale sample stops after 1.5 intervals rather than drifting forever.
+    // prediction stops after 1.5 sample intervals.
     const auto stale = PredictMotionPosition(sample, velocity, 1.0, .016);
     EXPECT_NEAR(stale.x, 12.4, 1e-12);
     EXPECT_NEAR(stale.y, 18.8, 1e-12);
@@ -317,8 +311,7 @@ TEST(GraffitoFolio, FacetMetricsStayReadableAtProductionFontSizes)
     EXPECT_GT(configured.markerLift, defaults.markerLift);
     EXPECT_GT(configured.RankSize(configured.rearWidth), 90.0);
 
-    // The rank deliberately breaks above the triangle's base instead of being
-    // fitted into its narrowing interior.
+    // the rank extends above the triangle base, outside its narrowing interior.
     const double rankSize = configured.RankSize(configured.rearWidth);
     const double rankTop = configured.height * .34 - rankSize * .5;
     EXPECT_LT(rankTop, 0.0);
