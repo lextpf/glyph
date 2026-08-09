@@ -9,16 +9,10 @@
 /**
  * @namespace Graffito::Math
  * @brief Pure geometry helpers for perspective-projected world text.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  *
- * This header has no ImGui, Direct3D, or Skyrim dependencies, so these routines
- * are directly unit-testable. The renderer-facing Graffito module converts
- * engine types at the edge.
- *
- * Every routine is stateless and touches no shared state, so the game thread and
- * the render thread may both call it. Unless a parameter states otherwise: world
- * positions and lengths are in game units, angles are in radians, times are in
- * seconds, and source offsets are in ImGui pixels with +Y downward.
+ * Runtime-independent, stateless geometry; safe from either thread. Units are world units,
+ * radians, seconds and source pixels with downward +Y unless a parameter states otherwise.
  */
 namespace Graffito::Math
 {
@@ -28,9 +22,7 @@ inline constexpr double TWO_PI = PI * 2.0;
 /**
  * @struct Vec2
  * @brief Plain two-dimensional math value.
- *
- * The value can represent a
- * source-space offset, a screen point, or a solver sample.
+ * @author Alex (<https://github.com/lextpf>)
  */
 struct Vec2
 {
@@ -41,11 +33,7 @@ struct Vec2
 /**
  * @struct Vec3
  * @brief Plain three-dimensional math value.
- *
- * The value can represent a
- * world position, a world direction, or one `(x, y, value)` sample
- * for the affine plane
- * solvers.
+ * @author Alex (<https://github.com/lextpf>)
  */
 struct Vec3
 {
@@ -54,26 +42,61 @@ struct Vec3
     double z = 0.0;
 };
 
+/**
+ * @fn Vec3 operator+(const Vec3& lhs, const Vec3& rhs)
+ * @brief Add vectors component by component.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The component sums.
+ */
 inline Vec3 operator+(const Vec3& lhs, const Vec3& rhs)
 {
     return {lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z};
 }
 
+/**
+ * @fn Vec3 operator-(const Vec3& lhs, const Vec3& rhs)
+ * @brief Subtract vectors component by component.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The left components minus the right components.
+ */
 inline Vec3 operator-(const Vec3& lhs, const Vec3& rhs)
 {
     return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
 }
 
+/**
+ * @fn Vec3 operator*(const Vec3& value, double scale)
+ * @brief Scale each vector component by the same factor.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The scaled vector.
+ */
 inline Vec3 operator*(const Vec3& value, double scale)
 {
     return {value.x * scale, value.y * scale, value.z * scale};
 }
 
+/**
+ * @fn double Dot(const Vec3& lhs, const Vec3& rhs)
+ * @brief Measure the scalar product of two vectors.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The sum of their component products.
+ */
 inline double Dot(const Vec3& lhs, const Vec3& rhs)
 {
     return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
 }
 
+/**
+ * @fn Vec3 Cross(const Vec3& lhs, const Vec3& rhs)
+ * @brief Form the right-handed cross product.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return A vector perpendicular to both inputs; zero for parallel inputs.
+ */
 inline Vec3 Cross(const Vec3& lhs, const Vec3& rhs)
 {
     return {lhs.y * rhs.z - lhs.z * rhs.y,
@@ -81,13 +104,22 @@ inline Vec3 Cross(const Vec3& lhs, const Vec3& rhs)
             lhs.x * rhs.y - lhs.y * rhs.x};
 }
 
+/**
+ * @fn double LengthSquared(const Vec3& value)
+ * @brief Measure vector magnitude without a square root.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The sum of squared components.
+ */
 inline double LengthSquared(const Vec3& value)
 {
     return Dot(value, value);
 }
 
 /**
+ * @fn bool Normalize(const Vec3& value, Vec3& out, double epsilon = 1e-12)
  * @brief Scale a vector to unit length.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param value   Vector to normalize.
  * @param out     Receives the unit vector. It is only meaningful when the
@@ -95,7 +127,7 @@ inline double LengthSquared(const Vec3& value)
  *                test fails.
  * @param epsilon Smallest accepted length. The test compares the squared length
  *                against epsilon squared.
- * @return true when the result is a finite unit vector; false for a non-finite
+ * @return True when the result is a finite unit vector; false for a non-finite
  *         input or for a length at or below epsilon.
  */
 inline bool Normalize(const Vec3& value, Vec3& out, double epsilon = 1e-12)
@@ -112,22 +144,29 @@ inline bool Normalize(const Vec3& value, Vec3& out, double epsilon = 1e-12)
     return std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z);
 }
 
+/**
+ * @fn bool IsFinite(const Vec3& value)
+ * @brief Check every vector component for a finite value.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True when all three components are finite.
+ */
 inline bool IsFinite(const Vec3& value)
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
 /**
+ * @fn Vec3 BlendMotionVelocity(const Vec3& previousVelocity, const Vec3& previousSample, const
+ *     Vec3& currentSample, double sampleDeltaTime, double response)
  * @brief Blend a newly measured world-space velocity into the previous estimate.
- *
- * An invalid sample keeps the prior finite estimate instead of injecting a
- * one-frame spike.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param previousVelocity  Prior estimate. A non-finite value is treated as zero.
  * @param previousSample    Earlier world position.
  * @param currentSample     Later world position.
- * @param sampleDeltaTime   Seconds between the two samples. A non-finite value,
- *                          or one at or below 1e-6, returns the prior estimate.
+ * @param sampleDeltaTime   Seconds between the two samples. A non-finite value, or one at or below
+ * 1e-6, returns the prior estimate.
  * @param response          Blend weight for the new measurement, clamped to [0, 1].
  * @return The blended velocity, in world units per second.
  */
@@ -155,25 +194,24 @@ inline Vec3 BlendMotionVelocity(const Vec3& previousVelocity,
 }
 
 /**
+ * @fn Vec3 PredictMotionPosition(const Vec3& sample, const Vec3& velocity, double sampleAge, double
+ *     sampleInterval, double maxHorizon = .050, double maxDisplacement = 32.0)
  * @brief Predict a sampled world position just far enough to bridge render frames.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The horizon is also capped at 1.5 observed sample intervals, so a stalled
- * snapshot freezes near the last credible pose instead of running away.
+ * Cap prediction at 1.5 observed intervals so stalled snapshots stay near the last pose.
  *
  * @param sample          Last known world position.
  * @param velocity        Current velocity estimate, in world units per second.
  * @param sampleAge       Seconds since @p sample was taken. It is raised to 0.
- * @param sampleInterval  Observed seconds between samples, clamped to
- * [0.001, `maxHorizon`].
- *
+ * @param sampleInterval  Observed seconds between samples, clamped to [0.001, `maxHorizon`].
  * @param maxHorizon      Upper bound on the extrapolation time, in seconds. The default is 50 ms.
- * It must be 0.001 or more; a smaller positive bound inverts the limits of the sample interval
+ * it must be 0.001 or more; a smaller positive bound inverts the limits of the sample interval
  * clamp below, which is undefined behavior.
- * @param maxDisplacement Upper bound on the extrapolated offset length, in world
- *                        units. The default is 32.
- * @return The extrapolated position. Any non-finite input, or a non-positive
- *         bound, returns `sample` unchanged; a non-finite `sample` returns the
- *         zero vector.
+ * @param maxDisplacement Upper bound on the extrapolated offset length, in world units. The default
+ * is 32.
+ * @return The extrapolated position. Any non-finite input, or a non-positive bound, returns
+ * `sample` unchanged; a non-finite `sample` returns the zero vector.
  */
 inline Vec3 PredictMotionPosition(const Vec3& sample,
                                   const Vec3& velocity,
@@ -207,20 +245,22 @@ inline Vec3 PredictMotionPosition(const Vec3& sample,
 }
 
 /**
+ * @fn double RaySphereHitDistance(const Vec3& rayOrigin, const Vec3& rayDirection, const Vec3&
+ *     sphereCenter, double sphereRadius, double maxDistance =
+ *     std::numeric_limits<double>::infinity())
  * @brief Return the first non-negative distance at which a ray enters a sphere.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The direction is normalized internally, so callers can pass the camera basis
- * verbatim. An origin already inside the sphere returns zero.
+ * Normalize direction internally; an origin inside the sphere returns zero.
  *
  * @param rayOrigin    Ray start point. A non-finite value returns infinity.
- * @param rayDirection Ray direction, of any length. A zero-length or non-finite
- *                     direction returns infinity.
+ * @param rayDirection Ray direction, of any length. A zero-length or non-finite direction returns
+ * infinity.
  * @param sphereCenter Sphere center. A non-finite value returns infinity.
- * @param sphereRadius Sphere radius. A value at or below zero returns infinity;
- *                     it does not degenerate to a point test.
- * @param maxDistance  Largest accepted entry distance, in world units. A
- *                     negative or NaN value returns infinity. The default
- *                     accepts any distance.
+ * @param sphereRadius Sphere radius. A value at or below zero returns infinity; it does not
+ * degenerate to a point test.
+ * @param maxDistance  Largest accepted entry distance, in world units. A negative or NaN value
+ * returns infinity. The default accepts any distance.
  * @return Entry distance along the normalized direction, or infinity for no hit.
  */
 inline double RaySphereHitDistance(const Vec3& rayOrigin,
@@ -273,6 +313,7 @@ inline double RaySphereHitDistance(const Vec3& rayOrigin,
 /**
  * @struct UprightBasis
  * @brief Orthonormal right-handed page axes for upright actor text.
+ * @author Alex (<https://github.com/lextpf>)
  */
 struct UprightBasis
 {
@@ -282,17 +323,15 @@ struct UprightBasis
 };
 
 /**
+ * @fn UprightBasis BuildUprightBasis(double yawRadians)
  * @brief Build the stable yaw-only basis used by actor-bound Graffito.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Skyrim's yaw-zero forward is +Y, hence `(sin(yaw), cos(yaw), 0)`. Page-right
- * is `worldUp x forward`; the actor's anatomical right would mirror the
- * lettering for a camera standing in front of the actor.
+ * Yaw-zero forward is +Y: (sin(yaw), cos(yaw), 0). Page-right = worldUp x forward
+ * keeps lettering readable from the front. Forward == Cross(right, up).
  *
- * The result obeys the PlanePose convention, `forward == Cross(right, up)`, so
- * it can be used as a plane basis directly.
- *
- * @param yawRadians Actor yaw, in radians. It is not scrubbed: a non-finite yaw
- *                   gives a non-finite basis.
+ * @param yawRadians Actor yaw, in radians. It is not scrubbed: a non-finite yaw gives a non-finite
+ * basis.
  * @return The orthonormal right-handed page basis.
  */
 inline UprightBasis BuildUprightBasis(double yawRadians)
@@ -303,17 +342,16 @@ inline UprightBasis BuildUprightBasis(double yawRadians)
 }
 
 /**
+ * @fn double YawFacingPoint(const Vec3& anchor, const Vec3& target, double fallbackYaw)
  * @brief Resolve Skyrim yaw whose readable normal points from an anchor toward a target.
- *
- * Only the horizontal separation is used, because a yaw has no vertical part.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param anchor       Plane position.
  * @param target       Point the readable normal must face.
- * @param fallbackYaw  Returned when the horizontal separation is non-finite or
- *                     at or below 1e-5 world units. A non-finite fallback
- *                     itself yields 0.
- * @return The yaw, in radians. A resolved yaw is from -pi through pi. A
- *         returned fallback is passed through as given and is not wrapped.
+ * @param fallbackYaw  Returned when the horizontal separation is non-finite or at or below 1e-5
+ * world units. A non-finite fallback itself yields 0.
+ * @return The yaw, in radians. A resolved yaw is from -pi through pi. A returned fallback is passed
+ * through as given and is not wrapped.
  */
 inline double YawFacingPoint(const Vec3& anchor, const Vec3& target, double fallbackYaw)
 {
@@ -327,13 +365,13 @@ inline double YawFacingPoint(const Vec3& anchor, const Vec3& target, double fall
 }
 
 /**
+ * @fn double WrapAngle(double angle)
  * @brief Wrap an angle to the turn centred on zero.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The result is in radians, from -pi
- * through pi. A non-finite angle returns 0.
+ * Non-finite angles return zero.
  *
  * @param angle  Angle to wrap, in radians.
- *
  * @return       The wrapped angle, from -pi through pi.
  */
 inline double WrapAngle(double angle)
@@ -346,7 +384,9 @@ inline double WrapAngle(double angle)
 }
 
 /**
+ * @fn double ShortestAngleDelta(double fromRadians, double toRadians)
  * @brief Signed shortest turn between two angles.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param fromRadians Start angle, in radians.
  * @param toRadians   End angle, in radians.
@@ -359,23 +399,21 @@ inline double ShortestAngleDelta(double fromRadians, double toRadians)
 }
 
 /**
+ * @fn double ExponentialAlpha(double deltaTime, double settleTime, double epsilon = 0.01)
  * @brief Frame-rate-independent exponential approach factor.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * With frame time $\Delta t$, settle time $T$ and residual error fraction
- * $\epsilon$, the factor is
+ * Delta t is frame time, T is settle time and epsilon is the remaining error fraction.
+ * Compounding the factor for T seconds leaves epsilon of the initial error.
  *
  * $$ \alpha = 1 - \epsilon^{\,\Delta t / T} $$
  *
- * so compounding it over a total time T leaves exactly epsilon of the original
- * error whatever the frame pacing. This matches the renderer's smoothing
- * convention.
- *
- * @param deltaTime  Frame time, in seconds. A non-finite or non-positive value
- *                   returns 0, so nothing moves this frame.
- * @param settleTime Time T, in seconds. A non-finite or non-positive value
- *                   returns 1, so the value snaps to its target.
- * @param epsilon    Error fraction still left at the settle time, clamped to
- *                   [1e-9, 1 - 1e-9]. The default leaves 1 percent.
+ * @param deltaTime  Frame time, in seconds. A non-finite or non-positive value returns 0, so
+ * nothing moves this frame.
+ * @param settleTime Time T, in seconds. A non-finite or non-positive value returns 1, so the value
+ * snaps to its target.
+ * @param epsilon    Error fraction still left at the settle time, clamped to [1e-9, 1 - 1e-9]. The
+ * default leaves 1 percent.
  * @return The blend factor, from 0 through 1.
  */
 inline double ExponentialAlpha(double deltaTime, double settleTime, double epsilon = 0.01)
@@ -393,7 +431,10 @@ inline double ExponentialAlpha(double deltaTime, double settleTime, double epsil
 }
 
 /**
+ * @fn double SmoothAngle(double currentRadians, double targetRadians, double deltaTime, double
+ *     settleTime, double epsilon = 0.01)
  * @brief Smooth toward a target angle along the shortest turn.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param currentRadians Present angle. A non-finite value adopts the target.
  * @param targetRadians  Wanted angle. A non-finite value returns the wrapped
@@ -422,19 +463,14 @@ inline double SmoothAngle(double currentRadians,
 }
 
 /**
+ * @fn double SmoothStep(double value)
  * @brief Cubic ease with zero slope at both ends.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The input is clamped to the unit range first, so the result runs from 0
- * through 1. A
- * non-finite input is not scrubbed: an infinite value saturates to
- * the nearer end of that range,
- * while NaN passes the clamp unchanged and gives
- * NaN. No caller in this header can reach it with
- * a non-finite value.
+ * Clamp input to [0, 1]. Infinities saturate; NaN propagates.
  *
  * @param value  Input value.
- * @return       The eased value from zero
- * through one, or NaN when `value` is NaN.
+ * @return       The eased value from zero through one, or NaN when `value` is NaN.
  */
 inline double SmoothStep(double value)
 {
@@ -445,12 +481,10 @@ inline double SmoothStep(double value)
 /**
  * @struct FacingMaterial
  * @brief View-dependent ink treatment for a two-sided inscription.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The caller decides where opacity is applied: it is either folded into the
- * plate's other fades on the CPU or handed to the shader as the material
- * opacity, never both. Graffito's vertex shader consumes the desaturation and
- * brightness fields for every vertex, so fill, outline, and shadow all receive
- * the same reverse-side ink bleed.
+ * Apply opacity once, either on the CPU or in the shader. Desaturation and brightness
+ * affect all vertices, including fill, outline and shadow.
  */
 struct FacingMaterial
 {
@@ -467,26 +501,25 @@ inline constexpr double EDGE_SEAM_DESATURATION = 1.0;
 inline constexpr double EDGE_SEAM_BRIGHTNESS = 0.55;
 
 /**
+ * @fn FacingMaterial EvaluateFacingMaterial(double frontDot, double fadeDegrees, double
+ *     backBleedAlpha, double edgeSeamAlpha)
  * @brief Resolve front ink, an edge-on seam, and mirrored backside bleed.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Material colors are blended weighted by opacity, so there is no hue pop as the
- * front face gives way to the seam and the reverse ink.
+ * Weight material colors by opacity to avoid a hue jump at the seam.
  *
- * @param frontDot       Dot product of the plane normal with the unit direction
- *                       from the plane toward the viewer. A positive value
- *                       selects the readable side, a negative value the reverse
- *                       side, and exactly zero forces the pure edge seam. A
- *                       non-finite value returns a fully transparent material.
- * @param fadeDegrees    Angular transition band on either side of edge-on, in
- *                       degrees, clamped to at most 90. A non-finite or
- *                       non-positive value removes the band, but a frontDot of
- *                       exactly zero still gives the pure seam.
+ * @param frontDot       Dot product of the plane normal with the unit direction from the plane
+ * toward the viewer. A positive value selects the readable side, a negative value the reverse side,
+ * and exactly zero forces the pure edge seam. A non-finite value returns a fully transparent
+ * material.
+ * @param fadeDegrees    Angular transition band on either side of edge-on, in degrees, clamped to
+ * at most 90. A non-finite or non-positive value removes the band, but a frontDot of exactly zero
+ * still gives the pure seam.
  * @param backBleedAlpha Opacity of the reverse-side ink, clamped to [0, 1].
  * @param edgeSeamAlpha  Opacity at the pure edge seam, clamped to [0, 1].
- * @return The blended opacity, desaturation, and brightness. When the blended
- *         opacity is at or below 1e-12 the blend has no weight, so the two
- *         treatment fields keep their defaults of 0 desaturation and 1
- *         brightness.
+ * @return The blended opacity, desaturation, and brightness. When the blended opacity is at or
+ * below 1e-12 the blend has no weight, so the two treatment fields keep their defaults of 0
+ * desaturation and 1 brightness.
  */
 inline FacingMaterial EvaluateFacingMaterial(double frontDot,
                                              double fadeDegrees,
@@ -539,12 +572,10 @@ inline FacingMaterial EvaluateFacingMaterial(double frontDot,
 /**
  * @struct PlanePose
  * @brief Position and orthonormal page basis for an arbitrary text plane.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The three axes must be orthonormal and right-handed, with
- * `normal == Cross(right, up)`, and +normal is the readable side. Nothing checks
- * the invariant. CylinderPointFromSourceOffset ignores the stored normal and
- * recomputes `Cross(right, up)`, so a pose whose normal disagrees bends the
- * cylinder the wrong way with no diagnostic.
+ * Axes must be orthonormal and right-handed: normal == Cross(right, up). +normal is
+ * the readable side. This is unchecked; CylinderPointFromSourceOffset recomputes normal.
  */
 struct PlanePose
 {
@@ -555,17 +586,15 @@ struct PlanePose
 };
 
 /**
+ * @fn PlanePose OffsetPlanePose(const PlanePose& pose, double normalDistance)
  * @brief Translate a plane along its own normal without changing its basis.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * A positive distance moves toward the readable side. A non-finite distance
- * becomes zero, so a
- * bad depth setting cannot poison the projection.
+ * Positive distance moves toward the readable side. Non-finite distance becomes zero.
  *
  * @param pose            Source plane pose.
-
- * * @param normalDistance  Signed distance along the plane normal.
- * @return                The
- * translated pose.
+ * @param normalDistance  Signed distance along the plane normal.
+ * @return                The translated pose.
  */
 inline PlanePose OffsetPlanePose(const PlanePose& pose, double normalDistance)
 {
@@ -578,37 +607,31 @@ inline PlanePose OffsetPlanePose(const PlanePose& pose, double normalDistance)
 /**
  * @struct FolioWeights
  * @brief Continuous view weights for the full front and the compact marker.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * For any valid direction the three weights are a partition:
- * `front + spine + back == 1`, and `front * back == 0`, so the front and rear
- * treatments are never both active. A non-finite direction, or one whose front
- * and right components have a planar length at or below 1e-6 (a straight-down
- * view), returns all three weights as zero instead of a partition, so nothing
- * is drawn.
+ * Valid directions satisfy front + spine + back == 1 and front * back == 0.
+ * Non-finite directions or planar length <= 1e-6 return all-zero weights.
  */
 struct FolioWeights
 {
     double front = 0.0;  ///< Weight of the full front inscription.
     double spine = 0.0;  ///< Weight of the compact side facet.
     double back = 0.0;   ///< Weight of the rear facet.
-    /// Side the spine and facet poses must use: +1 is page-right, -1 is
-    /// page-left. It stays at +1 when all three weights are zero.
+    /// +1 is page-right; -1 is page-left. Zero weights retain +1.
     int sideSign = 1;
 };
 
 /**
  * @brief Depth multipliers of the configured relief spacing, far to near.
  *
- * The caller offsets each relief plane by minus this multiple of the spacing
- * along the plane normal, so index 0 is the farthest layer and adjacent layers
- * are exactly one spacing apart.
+ * Offset along the normal by minus this multiple of relief spacing; index 0 is farthest.
  */
 inline constexpr std::array<double, 3> FOLIO_RELIEF_STEPS{3.0, 2.0, 1.0};
 
 /**
  * @struct FolioFacetMetrics
- * @brief Source-space dimensions and head clearance for the
- * compact marker.
+ * @brief Source-space dimensions and head clearance for the compact marker.
+ * @author Alex (<https://github.com/lextpf>)
  */
 struct FolioFacetMetrics
 {
@@ -618,15 +641,21 @@ struct FolioFacetMetrics
     double rearWidth = 66.0;     ///< Width of the rear facet, in source pixels.
     double markerLift = 9.0;     ///< Clearance above the head anchor, in source pixels.
 
-    /// @brief Distance from the front face to the farthest relief plane, in source pixels.
+    /**
+     * @fn double TotalReliefDepth() const
+     * @brief Measure the full relief stack behind the front face.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return Distance to the farthest relief plane, in source pixels.
+     */
     double TotalReliefDepth() const { return reliefSpacing * FOLIO_RELIEF_STEPS.front(); }
 
     /**
+     * @fn double RankSize(double width) const
      * @brief Rank glyph size for one facet, in source pixels.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The size is 0.82 of the smaller of the facet width and the marker height,
-     * then clamped to 42 through 96, so even a small facet carries a legible
-     * rank.
+     * Size = clamp(.82 * min(width, marker height), 42, 96) source pixels.
      *
      * @param width Facet width, in source pixels.
      * @return The rank glyph size, in source pixels.
@@ -638,23 +667,20 @@ struct FolioFacetMetrics
 };
 
 /**
+ * @fn FolioFacetMetrics ComputeFolioFacetMetrics(double nameFontSize, double reliefSpacingPixels)
  * @brief Derive the compact marker's metrics from the name typography.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Relief spacing stays in source pixels, so changing typography cannot enlarge
- * the gap between adjacent planes. The reverse coupling does exist: the side
- * width is at least 1.5 times the total relief depth, so a deeper relief widens
- * that one field until its clamp stops it. The visible triangle is sized
- * independently at about half a name row high, so it remains legible when it
- * replaces the complete inscription at side and rear angles.
+ * Relief spacing stays in source pixels. Side width is at least 1.5 times relief depth,
+ * subject to its clamp; typography does not enlarge the spacing.
  *
- * @param nameFontSize        Name row font size, in source pixels. A non-finite
- *                            or negative value is treated as 0.
- * @param reliefSpacingPixels Wanted gap between adjacent relief planes, in
- *                            source pixels, clamped to [0, 28]. A non-finite
- *                            value is treated as 0, which disables the relief.
- * @return Metrics in source pixels. Height is clamped to [56, 120], side width
- *         to [48, 108], rear width to [66, 140], and marker lift to [8, 20], so
- *         every field stays positive even for a zero font size.
+ * @param nameFontSize        Name row font size, in source pixels. A non-finite or negative value
+ * is treated as 0.
+ * @param reliefSpacingPixels Wanted gap between adjacent relief planes, in source pixels, clamped
+ * to [0, 28]. A non-finite value is treated as 0, which disables the relief.
+ * @return Metrics in source pixels. Height is clamped to [56, 120], side width to [48, 108], rear
+ * width to [66, 140], and marker lift to [8, 20], so every field stays positive even for a zero
+ * font size.
  */
 inline FolioFacetMetrics ComputeFolioFacetMetrics(double nameFontSize, double reliefSpacingPixels)
 {
@@ -682,12 +708,12 @@ inline constexpr double FOLIO_SPINE_TO_BACK_START_DEGREES = 110.0;
 inline constexpr double FOLIO_SPINE_TO_BACK_END_DEGREES = 130.0;
 
 /**
+ * @fn FolioWeights EvaluateFolioWeights(double frontDot, double rightDot)
  * @brief Blend the full front, the compact side facet, and the rear facet.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The pair is re-normalized to unit length in the page plane, which removes
- * camera elevation from the azimuth decision. The side facet only becomes
- * active at 45 degrees or more off front, where its selected-side sign is well
- * conditioned, so no hysteresis state is needed and there is no dead angle.
+ * Normalize the direction in the page plane to exclude camera elevation. Side activation
+ * begins at 45 degrees, where its sign is stable without hysteresis.
  *
  * @verbatim
  * azimuth from the readable front normal, in degrees
@@ -696,8 +722,8 @@ inline constexpr double FOLIO_SPINE_TO_BACK_END_DEGREES = 130.0;
  * |--front----|~~fade~~~|----spine-----|~~fade~~~|---back----|
  * @endverbatim
  *
- * @param frontDot Component along the plane normal of the direction from the
- *                 plane toward the viewer. It need not be normalized.
+ * @param frontDot Component along the plane normal of the direction from the plane toward the
+ * viewer. It need not be normalized.
  * @param rightDot Component of that same direction along the page-right axis.
  * @return The three weights and the selected side.
  */
@@ -731,20 +757,17 @@ inline FolioWeights EvaluateFolioWeights(double frontDot, double rightDot)
 }
 
 /**
+ * @fn Vec3 WorldPointFromSourceOffset(const PlanePose& pose, const Vec2& sourceOffset, double
+ *     worldUnitsPerPixel)
  * @brief Map a source-space offset onto an arbitrary plane pose.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Source +Y is downward, matching ImGui, so it maps toward the negative pose up
- * axis. A
- * non-finite offset component or scale is treated as 0, so the result
- * still lies on the plane.
-
- * *
+ * Source +Y maps toward -pose.up. Non-finite offsets or scale become zero.
+ *
  * @param pose                Plane pose.
- * @param sourceOffset        Source-space offset, in
- * pixels.
+ * @param sourceOffset        Source-space offset, in pixels.
  * @param worldUnitsPerPixel  Plane scale in world units per source pixel.
- * @return The
- * mapped world point.
+ * @return The mapped world point.
  */
 inline Vec3 WorldPointFromSourceOffset(const PlanePose& pose,
                                        const Vec2& sourceOffset,
@@ -757,34 +780,27 @@ inline Vec3 WorldPointFromSourceOffset(const PlanePose& pose,
 }
 
 /**
+ * @fn Vec3 CylinderPointFromSourceOffset(const PlanePose& pose, const Vec2& sourceOffset, double
+ *     worldUnitsPerPixel, double apexOffsetXPixels, double radiansPerPixel, double surfaceRadius)
  * @brief Map a source-space offset onto a cylinder wrapped about the pose up axis.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @p apexOffsetXPixels locates the arc apex relative to the pose's source
- * anchor, and @p radiansPerPixel is the constant curvature; a zero curvature, or
- * a zero radius, reproduces WorldPointFromSourceOffset exactly. Every scalar
- * argument is treated as 0 when it is not finite, so a non-finite curvature or
- * radius takes that same flat path. The apex column is the fixed point of the
- * wrap: at the apex the cylinder and the flat plane give the same world point,
- * for every source Y.
+ * Zero or non-finite curvature/radius takes the exact flat path. Non-finite scalar inputs
+ * become zero. The apex column stays fixed for every source Y. Use each surface radius
+ * with the shared curvature to keep concentric layers aligned.
  *
- * @p surfaceRadius is this surface's own radius, so concentric layers can share
- * a single axis. The angle always comes from the caller's curvature and is never
- * re-derived from arc length at this radius; preserving arc length instead would
- * slide a layer sideways against the front it belongs to.
+ * In the formula, O is origin, R/U are page axes, N = R x U, s is worldUnitsPerPixel,
+ * a is apexOffsetXPixels, k is radiansPerPixel and r is surfaceRadius.
+ * The axis passes through O + R(a s) - N r along U; wings recede along -N.
  *
- * With origin `O`, axes `R`, `U` and `N = R x U`, scale `s`
- * (`worldUnitsPerPixel`), apex `a` (`apexOffsetXPixels`), curvature `k`
- * (`radiansPerPixel`) and radius `r` (`surfaceRadius`):
+ * R * sin(theta) controls physical width. The small-angle flat limit requires r == s / k;
+ * other radii scale inscription width by r*k/s.
  *
  * $$
  * P(x,y) = O + R\,\bigl(a\,s + r\sin\theta\bigr)
  *            + N\,r\,\bigl(\cos\theta - 1\bigr) - U\,(y\,s),
  * \qquad \theta = (x - a)\,k
  * $$
- *
- * The axis is the line through `O + R(a s) - N r` along `U`, one radius behind
- * the apex, so the apex is the point closest to the readable side and the wings
- * recede along `-N`.
  *
  * @verbatim
  * Cross-section viewed along U (theta > 0):
@@ -805,24 +821,22 @@ inline Vec3 WorldPointFromSourceOffset(const PlanePose& pose,
  * Both A and P are r units from C. Positive theta turns toward +R.
  * @endverbatim
  *
- * Because the horizontal term is `r sin(theta)` while the angle comes from `k`
- * alone, `r` also
- * sets the physical width: the small-angle limit `r*theta`
- * matches WorldPointFromSourceOffset
- * only when `r == s / k`. Any other radius
- * rescales the inscription by `r*k/s` instead of only
- * curving it.
- *
+ * @p apexOffsetXPixels locates the arc apex relative to the pose's source anchor, and @p
+ * radiansPerPixel is the constant curvature; a zero curvature, or a zero radius, reproduces
+ * WorldPointFromSourceOffset exactly. Every scalar argument is treated as 0 when it is not finite,
+ * so a non-finite curvature or radius takes that same flat path. The apex column is the fixed point
+ * of the wrap: at the apex the cylinder and the flat plane give the same world point, for every
+ * source Y.
+ * @p surfaceRadius is this surface's own radius, so concentric layers can share a single axis. the
+ * angle always comes from the caller's curvature and is never re-derived from arc length at this
+ * radius; preserving arc length instead would slide a layer sideways against the front it belongs
+ * to.
  * @param pose                Plane pose.
- * @param sourceOffset Source-space
- * offset, in pixels.
+ * @param sourceOffset Source-space offset, in pixels.
  * @param worldUnitsPerPixel  Plane scale in world units per source pixel.
- *
  * @param apexOffsetXPixels   Horizontal arc-apex offset from the source anchor.
- * @param
- * radiansPerPixel     Cylindrical curvature.
- * @param surfaceRadius       Radius of this
- * concentric surface, in world units.
+ * @param radiansPerPixel     Cylindrical curvature.
+ * @param surfaceRadius       Radius of this concentric surface, in world units.
  * @return                    The mapped world point.
  */
 inline Vec3 CylinderPointFromSourceOffset(const PlanePose& pose,
@@ -850,17 +864,21 @@ inline Vec3 CylinderPointFromSourceOffset(const PlanePose& pose,
 }
 
 /**
+ * @fn PlanePose BuildFolioBackPose(const PlanePose& frontPose, double sourcePivotXPixels, double
+ *     worldUnitsPerPixel)
  * @brief Build a rear-facing pose that preserves the front plate's footprint.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @p sourcePivotXPixels is the reflection axis relative to the front pose's
- * source anchor. For every source point `(x,y)`, the returned pose maps it to
- * the same world point as the front pose maps `(2*pivot-x,y)`.
+ * Reflect about sourcePivotXPixels: rear (x,y) maps to front (2*pivot-x,y).
  *
+ * @p sourcePivotXPixels is the reflection axis relative to the front pose's source anchor. for
+ * every source point `(x,y)`, the returned pose maps it to the same world point as the front pose
+ * maps `(2*pivot-x,y)`.
  * @param frontPose          Front plate pose. Its basis invariant is preserved.
- * @param sourcePivotXPixels Reflection axis, in source pixels relative to the
- *                           front source anchor. A non-finite value becomes 0.
- * @param worldUnitsPerPixel Physical scale of one source pixel, in world units.
- *                           A non-finite value becomes 0.
+ * @param sourcePivotXPixels Reflection axis, in source pixels relative to the front source anchor.
+ * A non-finite value becomes 0.
+ * @param worldUnitsPerPixel Physical scale of one source pixel, in world units. A non-finite value
+ * becomes 0.
  * @return The rear-facing pose, sharing the front pose's up axis.
  */
 inline PlanePose BuildFolioBackPose(const PlanePose& frontPose,
@@ -879,26 +897,24 @@ inline PlanePose BuildFolioBackPose(const PlanePose& frontPose,
 }
 
 /**
+ * @fn PlanePose BuildFolioSpinePose(const PlanePose& frontPose, int sideSign, const Vec2&
+ *     frontEdgeOffsetPixels, double worldUnitsPerPixel)
  * @brief Build the compact side-indicator plane at a selected edge of the front.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @p frontEdgeOffsetPixels is the edge point relative to the front source
- * anchor, normally the selected horizontal bound and the plate's vertical
- * center. The returned origin is the spine layout's own source anchor.
+ * Anchor at the selected front edge. The plane is perpendicular to the front, with its
+ * readable normal pointing outward. Source +X runs front-to-rear on the right side and
+ * rear-to-front on the left to preserve readable orientation.
  *
- * The returned plane stands perpendicular to the front plate, and its readable
- * normal points away from the plate along the selected side: page-right for a
- * non-negative sideSign, page-left for a negative one. Source +X runs from the
- * front face toward the rear on the page-right side, and from the rear toward
- * the front face on the page-left side, so the inscription reads correctly from
- * whichever side is selected.
- *
+ * @p frontEdgeOffsetPixels is the edge point relative to the front source anchor, normally the
+ * selected horizontal bound and the plate's vertical center. The returned origin is the spine
+ * layout's own source anchor.
  * @param frontPose             Front plate pose.
- * @param sideSign              Selected side. A negative value is page-left; 0
- *                              or positive is page-right.
- * @param frontEdgeOffsetPixels Edge point, in source pixels relative to the
- *                              front source anchor.
- * @param worldUnitsPerPixel    Physical scale of one source pixel, in world
- *                              units. A non-finite value becomes 0.
+ * @param sideSign              Selected side. A negative value is page-left; 0 or positive is
+ * page-right.
+ * @param frontEdgeOffsetPixels Edge point, in source pixels relative to the front source anchor.
+ * @param worldUnitsPerPixel    Physical scale of one source pixel, in world units. A non-finite
+ * value becomes 0.
  * @return The side-indicator pose, pinned to the edge point.
  */
 inline PlanePose BuildFolioSpinePose(const PlanePose& frontPose,
@@ -917,22 +933,20 @@ inline PlanePose BuildFolioSpinePose(const PlanePose& frontPose,
 }
 
 /**
+ * @fn PlanePose BuildFolioFacetPose(const PlanePose& frontPose, int sideSign, const Vec2&
+ *     frontEdgeOffsetPixels, double worldUnitsPerPixel, double depthWorldUnits)
  * @brief Center a side-facet plane across the depth behind the front face.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The returned pose keeps the handed side basis from BuildFolioSpinePose, but
- * its source anchor sits halfway between the inscription and its rear relief
- * layer. A triangle drawn symmetrically around that anchor therefore occupies
- * the real front-to-back span instead of lying across the front plane.
+ * Retain the BuildFolioSpinePose basis and center the anchor halfway through relief depth.
  *
  * @param frontPose             Front plate pose.
  * @param sideSign              Selected side; see BuildFolioSpinePose.
- * @param frontEdgeOffsetPixels Edge point, in source pixels relative to the
- *                              front source anchor.
- * @param worldUnitsPerPixel    Physical scale of one source pixel, in world
- *                              units. A non-finite value becomes 0.
- * @param depthWorldUnits       Front-to-back span to straddle, in world units.
- *                              A non-finite or negative value becomes 0, which
- *                              reproduces BuildFolioSpinePose exactly.
+ * @param frontEdgeOffsetPixels Edge point, in source pixels relative to the front source anchor.
+ * @param worldUnitsPerPixel    Physical scale of one source pixel, in world units. A non-finite
+ * value becomes 0.
+ * @param depthWorldUnits       Front-to-back span to straddle, in world units. A non-finite or
+ * negative value becomes 0, which reproduces BuildFolioSpinePose exactly.
  * @return The centered side-facet pose.
  */
 inline PlanePose BuildFolioFacetPose(const PlanePose& frontPose,
@@ -949,31 +963,33 @@ inline PlanePose BuildFolioFacetPose(const PlanePose& frontPose,
 }
 
 /**
+ * @fn PlanePose BuildFallenEpitaphPose(double yawRadians, double progress, const Vec3&
+ *     uprightOrigin, const Vec3& groundHinge, const Vec2& sourceHinge, double worldUnitsPerPixel)
  * @brief Hinge upright text onto the ground while pinning one source-space point.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Source +Y is downward, matching ImGui and BuildProjection. At progress zero
- * the exact upright origin and basis are returned. At one, the page normal is
- * world-up, its top points back toward the actor, and @p sourceHinge lands on
+ * Progress 0 returns the exact upright pose. At 1, normal points world-up, page top points
+ * back toward the actor, and sourceHinge reaches groundHinge without sliding.
+ *
+ * Clamp progress to [0, 1], then smoothstep-ease angle and translation. Progress .25 gives
+ * about 14.1 degrees. Non-finite progress becomes zero.
+ *
  * @p groundHinge without sliding.
- *
- * @p progress is clamped to [0, 1] and smoothstep-eased before it drives both
- * the 0 to 90 degree hinge angle and the hinge translation, so mid-range values
- * are not linear in angle: 0.25 gives about 14.1 degrees, not 22.5. A
- * non-finite value is treated as 0.
- *
- * @param yawRadians         Actor yaw, in radians; see BuildUprightBasis. It is
- *                           not scrubbed.
+ * @p progress is clamped to [0, 1] and smoothstep-eased before it drives both the 0 to 90 degree
+ * hinge angle and the hinge translation, so mid-range values are not linear in angle: 0.25 gives
+ * about 14.1 degrees, not 22.5. A non-finite value is treated as 0.
+ * @param yawRadians         Actor yaw, in radians; see BuildUprightBasis. It is not scrubbed.
  * @param progress           Hinge progress, from 0 upright through 1 landed.
- * @param uprightOrigin      World point that source offset (0, 0) maps to at
- *                           progress 0. It is not scrubbed.
- * @param groundHinge        World point the source hinge lands on at progress
- *                           1. It is not scrubbed.
- * @param sourceHinge        Pinned point, in source pixels relative to the
- *                           source anchor. It is not scrubbed.
- * @param worldUnitsPerPixel Physical scale of one source pixel, in world units.
- *                           A non-finite value becomes 0.
- * @return The hinged pose. For a finite yaw its basis stays orthonormal and
- *         right-handed, so it obeys the PlanePose convention at every progress.
+ * @param uprightOrigin      World point that source offset (0, 0) maps to at progress 0. It is not
+ * scrubbed.
+ * @param groundHinge        World point the source hinge lands on at progress 1. It is not
+ * scrubbed.
+ * @param sourceHinge        Pinned point, in source pixels relative to the source anchor. It is not
+ * scrubbed.
+ * @param worldUnitsPerPixel Physical scale of one source pixel, in world units. A non-finite value
+ * becomes 0.
+ * @return The hinged pose. For a finite yaw its basis stays orthonormal and right-handed, so it
+ * obeys the PlanePose convention at every progress.
  */
 inline PlanePose BuildFallenEpitaphPose(double yawRadians,
                                         double progress,
@@ -1003,20 +1019,19 @@ inline PlanePose BuildFallenEpitaphPose(double yawRadians,
 }
 
 /**
+ * @fn double RangeFade(double distance, double fadeStart, double fadeEnd)
  * @brief Smooth distance fade between a near and a far bound.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The result is 1 at or below the near bound, 0 at or beyond the far bound, and
- * a smoothstep in between. A non-finite distance returns 0, so a bad
- * measurement hides the plate instead of drawing it at full strength.
+ * Fade from 1 at the near bound to 0 at the far bound using smoothstep.
+ * Non-finite distance returns zero.
  *
  * @param distance  Distance to the plate, in world units. It is raised to 0.
- * @param fadeStart Near bound, in world units. It is raised to 0. A non-finite
- *                  value becomes 0.
- * @param fadeEnd   Far bound, in world units. It is raised to 0. A non-finite
- *                  value adopts the near bound.
- * @return The fade factor, from 0 through 1. When the far bound is not above
- *         the near bound the band collapses to a hard cut at the far bound: 1
- *         at or below it, 0 above it.
+ * @param fadeStart Near bound, in world units. It is raised to 0. A non-finite value becomes 0.
+ * @param fadeEnd   Far bound, in world units. It is raised to 0. A non-finite value adopts the near
+ * bound.
+ * @return The fade factor, from 0 through 1. When the far bound is not above the near bound the
+ * band collapses to a hard cut at the far bound: 1 at or below it, 0 above it.
  */
 inline double RangeFade(double distance, double fadeStart, double fadeEnd)
 {
@@ -1037,9 +1052,10 @@ inline double RangeFade(double distance, double fadeStart, double fadeEnd)
 /**
  * @struct Homography
  * @brief Row-major 3-by-3 projective map.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * For a source point
- * $(x,y)$, the homogeneous map and perspective divide are
+ * Transform accepts either sign of W. BuildProjection requires positive W at control
+ * points to keep adjacent chords oriented consistently.
  *
  * $$
  * \begin{bmatrix} X \\ Y \\ W
@@ -1049,27 +1065,23 @@ inline double RangeFade(double distance, double fadeStart, double fadeEnd)
  * \left(\frac{X}{W},\frac{Y}{W}\right),
  * \qquad |W| > \epsilon.
  * $$
- *
- * Transform accepts
- * either sign of $W$. BuildProjection applies the stronger invariant
- * $W > 0$ at its control
- * points, so adjacent chord maps keep one orientation.
  */
 struct Homography
 {
-    /// Nine entries in row order: the two numerator rows, then the denominator
-    /// row. The default is the identity map.
+    /// Row-major numerator rows followed by denominator; default is identity.
     std::array<double, 9> m{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
 
     /**
+     * @fn bool Transform(const Vec2& point, Vec2& out, double epsilon = 1e-12) const
      * @brief Map a point and apply the perspective divide.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * @param point   Source point.
      * @param out     Receives the mapped point. It is set to zero when the
      *                denominator test fails, and holds a non-finite value when
      *                the divide itself overflows.
      * @param epsilon Smallest accepted absolute denominator.
-     * @return true when the mapped point is finite; false for a non-finite or
+     * @return True when the mapped point is finite; false for a non-finite or
      *         near-zero denominator, or for a non-finite quotient.
      */
     bool Transform(const Vec2& point, Vec2& out, double epsilon = 1e-12) const
@@ -1086,11 +1098,11 @@ struct Homography
     }
 
     /**
+     * @fn double Denominator(const Vec2& point) const
      * @brief Sample the denominator row at a point, without the divide.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * BuildProjection uses it to reject a chord whose denominator is not
-     * positive at every control point, because a sign change there means the
-     * map folds.
+     * BuildProjection requires positive W at each control point to reject folds.
      *
      * @param point Source point.
      * @return The denominator, which is the homogeneous W of the mapped point.
@@ -1101,9 +1113,9 @@ struct Homography
 /**
  * @struct AffinePlane
  * @brief Affine scalar field over two-dimensional coordinates.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The
- * field is `value = xSlope*x + ySlope*y + constant`.
+ * The field is `value = xSlope*x + ySlope*y + constant`.
  */
 struct AffinePlane
 {
@@ -1111,6 +1123,13 @@ struct AffinePlane
     double ySlope = 0.0;
     double constant = 0.0;
 
+    /**
+     * @fn double Sample(double x, double y) const
+     * @brief Evaluate the affine field at a two-dimensional point.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return The scalar value without clamping.
+     */
     double Sample(double x, double y) const { return xSlope * x + ySlope * y + constant; }
 };
 
@@ -1119,11 +1138,12 @@ namespace detail
 using Matrix3 = std::array<double, 9>;
 
 /**
+ * @fn Matrix3 Multiply(const Matrix3& lhs, const Matrix3& rhs)
  * @brief Multiply two row-major 3-by-3 matrices.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param lhs  Left matrix.
- * @param rhs
- * Right matrix.
+ * @param rhs Right matrix.
  * @return     The product `lhs * rhs`.
  */
 inline Matrix3 Multiply(const Matrix3& lhs, const Matrix3& rhs)
@@ -1143,22 +1163,34 @@ inline Matrix3 Multiply(const Matrix3& lhs, const Matrix3& rhs)
 }
 
 /**
- * @brief Solve a square system by Gauss-Jordan elimination with scaled pivoting.
+ * @brief Coefficient matrix of a square system with the right-hand side appended.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Each row is scored by its own largest absolute coefficient, so a system that
- * mixes pixel-sized and unit-sized rows still picks sane pivots.
+ * The row length is one greater than the row count: N coefficient columns, then the constant.
  *
- * @tparam N        Number of unknowns.
- * @param augmented The N by N+1 augmented matrix. It is overwritten in place,
- *                  including on a failed solve.
- * @param out       Receives the N solution values. It is only meaningful when
- *                  the function returns true.
- * @param epsilon   Degeneracy threshold. A row scale, a scaled pivot score, or
- *                  a pivot relative to its row scale at or below it fails.
- * @return true when every unknown resolved to a finite value.
+ * @tparam N Number of unknowns.
  */
 template <std::size_t N>
-inline bool SolveLinear(double (&augmented)[N][N + 1], std::array<double, N>& out, double epsilon)
+using AugmentedMatrix = double[N][N + 1];
+
+/**
+ * @fn bool SolveLinear(AugmentedMatrix<N>& augmented, std::array<double, N>& out, double epsilon)
+ * @brief Solve a square system by Gauss-Jordan elimination with scaled pivoting.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Score pivots by each row maximum to handle mixed pixel and unit scales.
+ *
+ * @tparam N        Number of unknowns.
+ * @param augmented The N by N+1 augmented matrix. It is overwritten in place, including on a failed
+ * solve.
+ * @param out       Receives the N solution values. It is only meaningful when the function returns
+ * true.
+ * @param epsilon   Degeneracy threshold. A row scale, a scaled pivot score, or a pivot relative to
+ * its row scale at or below it fails.
+ * @return True when every unknown resolved to a finite value.
+ */
+template <std::size_t N>
+inline bool SolveLinear(AugmentedMatrix<N>& augmented, std::array<double, N>& out, double epsilon)
 {
     std::array<double, N> rowScale{};
     for (std::size_t row = 0; row < N; ++row)
@@ -1239,20 +1271,20 @@ inline bool SolveLinear(double (&augmented)[N][N + 1], std::array<double, N>& ou
 }
 
 /**
+ * @fn bool Normalization(const std::array<Vec2, 4>& points, std::array<Vec2, 4>& normalized,
+ *     Matrix3& transform, Matrix3& inverse, double epsilon)
  * @brief Hartley normalization of four points: centre them, then scale them.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The scale puts the mean distance from the centroid at the square root of 2,
- * which is what keeps the eight-equation homography solve conditioned for both
- * pixel coordinates and tiny normalized-screen quads.
+ * Center points and scale their mean centroid distance to sqrt(2) to condition the solve.
  *
  * @param points     Four input points.
  * @param normalized Receives the centred and scaled points.
  * @param transform  Receives the map from input space to normalized space.
  * @param inverse    Receives the exact inverse of that map.
  * @param epsilon    Smallest accepted mean distance from the centroid.
- * @return true on success; false for a non-finite point or a point set that is
- *         effectively one point. All three out parameters are then left
- *         unchanged.
+ * @return True on success; false for a non-finite point or a point set that is effectively one
+ * point. All three out parameters are then left unchanged.
  */
 inline bool Normalization(const std::array<Vec2, 4>& points,
                           std::array<Vec2, 4>& normalized,
@@ -1296,30 +1328,26 @@ inline bool Normalization(const std::array<Vec2, 4>& points,
 }  // namespace detail
 
 /**
+ * @fn bool SolveHomography(const std::array<Vec2, 4>& source, const std::array<Vec2, 4>&
+ *     destination, Homography& out, double epsilon = 1e-10)
  * @brief Solve the unique projective map between two non-degenerate four-point sets.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Hartley normalization plus scaled partial-pivot elimination keeps the solve
- * stable for both pixel coordinates and tiny normalized-screen quads.
+ * Use normalized coordinates and scaled pivots for pixel and small screen-space quads.
  *
  * @param source      Four source points, in correspondence order.
  * @param destination Four destination points, in the same order.
  * @param out         Receives the solved map. It is cleared first.
- * @param epsilon     Degeneracy threshold for normalization, elimination, and
- *                    the denominator test.
- * @return true when the solve succeeded and every correspondence reprojects to
- *         within 1e-7 times the largest absolute destination coordinate, where
- *         that coordinate is treated as at least 1.
- *
- * @post The returned matrix is scaled so its largest absolute entry is exactly
- *       1, and signed so the denominator at the source-set centroid is
- *       positive. BuildProjection depends on both halves of that gauge: it
- *       rejects any chord whose denominator is not positive at its own control
- *       points, rescales every later chord to match its neighbour's denominator
- *       at a shared point, then requires the two to still agree at two shared
- *       corners within a tolerance that never tightens below 1e-4 absolute. A
- *       change to either convention makes the wrapped solve reject its chords
- *       and fall back to the flat single-quad plate, without failing this
- *       function's own validation.
+ * @param epsilon     Degeneracy threshold for normalization, elimination, and the denominator test.
+ * @return True when the solve succeeded and every correspondence reprojects to within 1e-7 times
+ * the largest absolute destination coordinate, where that coordinate is treated as at least 1.
+ * @post The returned matrix is scaled so its largest absolute entry is exactly 1, and signed so the
+ * denominator at the source-set centroid is positive. BuildProjection depends on both halves of
+ * that gauge: it rejects any chord whose denominator is not positive at its own control points,
+ * rescales every later chord to match its neighbour's denominator at a shared point, then requires
+ * the two to still agree at two shared corners within a tolerance that never tightens below 1e-4
+ * absolute. A change to either convention makes the wrapped solve reject its chords and fall back
+ * to the flat single-quad plate, without failing this function's own validation.
  */
 inline bool SolveHomography(const std::array<Vec2, 4>& source,
                             const std::array<Vec2, 4>& destination,
@@ -1436,21 +1464,21 @@ inline bool SolveHomography(const std::array<Vec2, 4>& source,
 }
 
 /**
+ * @fn bool SolveAffinePlane(const std::array<Vec3, 4>& samples, AffinePlane& out, double epsilon =
+ *     1e-10, double residualTolerance = 1e-4)
  * @brief Fit an affine scalar plane through four samples, or reject the set.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * This is not a least-squares fit. The three samples forming the largest
- * triangle in normalized space are solved exactly, then all four residuals are
- * checked and the whole fit is rejected when any of them is too large.
- * BuildProjection relies on that rejection to drop a non-planar strip.
+ * Solve the largest normalized triangle exactly, then reject if any of the four residuals
+ * exceeds the limit. This rejects non-planar strips rather than fitting least squares.
  *
  * @param samples           Four samples as `(x, y, value)`.
  * @param out               Receives the fitted plane. It is cleared first.
- * @param epsilon           Degeneracy threshold for normalization, triangle
- *                          area, and elimination.
- * @param residualTolerance Relative tolerance. The absolute limit is
- *                          `residualTolerance * max(1, largest |value|)`.
- * @return true when the triangle is well conditioned and every residual is
- *         within the limit; false otherwise.
+ * @param epsilon           Degeneracy threshold for normalization, triangle area, and elimination.
+ * @param residualTolerance Relative tolerance. The absolute limit is `residualTolerance * max(1,
+ * largest |value|)`.
+ * @return True when the triangle is well conditioned and every residual is within the limit; false
+ * otherwise.
  */
 inline bool SolveAffinePlane(const std::array<Vec3, 4>& samples,
                              AffinePlane& out,
@@ -1542,25 +1570,22 @@ inline bool SolveAffinePlane(const std::array<Vec3, 4>& samples,
 }
 
 /**
+ * @fn bool SolveAffinePlaneLeastSquares(const Vec3* samples, std::size_t count, AffinePlane& out,
+ *     double& maxResidual, double epsilon = 1e-10)
  * @brief Best-fit affine depth field over an arbitrary number of samples.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * A curved plate has no exact depth plane, so the whole-plate value passed to
- * the depth-clip stage is an approximation. Unlike SolveAffinePlane, which
- * solves the best-conditioned three samples exactly and rejects the fit on any
- * disagreeing residual, this minimizes squared error over every sample and
- * reports the worst residual, leaving the accept or reject decision to the
- * caller. BuildProjection discards that residual, so its wrapped-plate depth
- * carries no accuracy guarantee.
+ * Minimize squared error over all samples and report the worst residual. Callers decide
+ * acceptance; BuildProjection discards that residual, so wrapped depth has no accuracy bound.
  *
  * @param samples     Pointer to @p count samples as `(x, y, value)`.
  * @param count       Number of samples. Fewer than 3 returns false.
  * @param out         Receives the fitted plane. It is cleared first.
- * @param maxResidual Receives the largest absolute residual over the samples. It
- *                    is set to 0 before the solve.
+ * @param maxResidual Receives the largest absolute residual over the samples. It is set to 0 before
+ * the solve.
  * @param epsilon     Degeneracy threshold for the normal-equation elimination.
- * @return true when the solve succeeded; false on a null pointer, too few
- *         samples, a non-finite sample, a singular system, or a non-finite
- *         residual.
+ * @return True when the solve succeeded; false on a null pointer, too few samples, a non-finite
+ * sample, a singular system, or a non-finite residual.
  */
 inline bool SolveAffinePlaneLeastSquares(const Vec3* samples,
                                          std::size_t count,
