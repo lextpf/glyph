@@ -17,23 +17,13 @@
 /**
  * @namespace TextEffects
  * @brief Internal helpers shared by the TextEffects implementation files.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup TextEffects
  *
- * Public effect functions live in TextEffects.hpp. This file declares what they share:
- * color math, vertex-capture state, and the internal outline variants.
+ * Render-thread helpers for TextEffects.hpp; no game-state access. TextVertexSetup captures
+ * white text vertices and string bounds before an effect rewrites their colors.
  *
- * The thread affinity of the public API applies here as well: every helper runs on the
- * render thread inside an ImGui frame, and none of them touch game state.
- *
- * ## :material-palette-outline: Vertex-Recolor Pattern
- *
- * Most animated effects render the text in white, capture the vertex range that call added
- * to the ImDrawList, then rewrite those vertices' colors. TextVertexSetup::Begin() performs
- * the capture and records the vertex range plus the bounding box; the caller then walks
- * `[vtxStart, vtxEnd)` and writes colors directly.
- *
- * ```cpp
+ * @code{.cpp}
  * TextVertexSetup vs;
  * if (!TextVertexSetup::Begin(vs, list, font, size, pos, text)) return;
  * for (int i = vs.vtxStart; i < vs.vtxEnd; ++i)
@@ -41,15 +31,13 @@
  *     auto& v = list->VtxBuffer[i];
  *     v.col = ScaleRGB(v.col, brightness);  // or HSV shift, gradient, ...
  * }
- * ```
+ * @endcode
  *
- * ## :material-vector-square: Outline Variants
- *
- * |               Helper | Stamps         | Use when                                 |
+ * | Helper               | Stamps         | Use when                                 |
  * |----------------------|----------------|------------------------------------------|
  * | DrawOutline4Internal | 4 cardinal     | FastOutlines = true (lower draw cost)    |
  * | DrawOutline8Internal | 8-24 ring taps | Smoother edges, default                  |
- * |  DrawOutlineInternal | per argument   | Caller passes `fastOutlines` as argument |
+ * | DrawOutlineInternal  | per argument   | Caller passes `fastOutlines` as argument |
  *
  * @see TextEffects::DrawOutline (public wrapper)
  */
@@ -57,22 +45,21 @@ namespace TextEffects
 {
 using Utf8Utils::Utf8ToChars;
 
-static constexpr float PI = std::numbers::pi_v<float>;  ///< pi
+static constexpr float PI = std::numbers::pi_v<float>;  ///< Pi
 static constexpr float TWO_PI = 2.0f * PI;              ///< 2*pi
 static constexpr float INV_TWO_PI =
     std::numbers::inv_pi_v<float> *
     0.5f;  ///< 1/(2*pi); scales an angle in radians to one turn from 0 to 1
 
 /**
+ * @fn float Frac(float x)
  * @brief Compute the non-negative fractional part of a value.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The function calculates `x
- * - floor(x)`, so negative input also produces a value in
- * [0, 1).
+ * The expression x - floor(x) stays in [0, 1) for negative inputs.
  *
  * @param x  Input value.
-
- * * @return   The fractional part of `x`.
+ * @return   The fractional part of `x`.
  */
 inline float Frac(float x)
 {
@@ -80,17 +67,13 @@ inline float Frac(float x)
 }
 
 /**
+ * @fn float NoiseHash(float x, float y)
  * @brief Compute the integer-grid hash for value noise.
- *
- * Text energy effects and particle
- * drift reach this function through `ValueNoise` and
- * `FBMNoise`, so they sample the same noise
- * field.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param x  Grid X coordinate.
  * @param y  Grid Y coordinate.
- * @return   A value in
- * [0, 1).
+ * @return   A value in [0, 1).
  */
 inline float NoiseHash(float x, float y)
 {
@@ -113,10 +96,11 @@ inline float NoiseHash(float x, float y)
 }
 
 /**
+ * @fn float ValueNoise(float x, float y)
  * @brief Compute two-dimensional value noise with quintic interpolation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param x  Sample
- * X coordinate.
+ * @param x  Sample X coordinate.
  * @param y  Sample Y coordinate.
  * @return   A value in [0, 1).
  */
@@ -142,22 +126,16 @@ inline float ValueNoise(float x, float y)
 }
 
 /**
+ * @fn float FBMNoise(float x, float y, int octaves, float persistence = .5f)
  * @brief Compute fractal Brownian motion from value noise.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Enchant text shading and
- * falling-particle drift share this function. Frost and Sparkle use
- * the file-local integer-grid
- * hash in `TextEffectsComplex.cpp` because they require hard cell
- * edges.
- *
- * @param x Sample X
- * coordinate.
+ * @param x Sample X coordinate.
  * @param y            Sample Y coordinate.
- * @param octaves      Number of noise
- * octaves, capped at eight.
- * @param persistence  Amplitude multiplier for each successive
- * octave.
- * @return             The accumulated value, normally in [0, 1).
+ * @param octaves      Positive number of noise octaves, capped at eight.
+ * @param persistence  Non-negative amplitude multiplier for each successive octave.
+ * @return             The normalized weighted noise, normally in [0, 1).
+ * @pre Coordinates and persistence are finite; octaves is at least one.
  */
 inline float FBMNoise(float x, float y, int octaves, float persistence = .5f)
 {
@@ -183,29 +161,26 @@ inline float FBMNoise(float x, float y, int octaves, float persistence = .5f)
 }
 
 /**
+ * @fn ImVec4 HSVtoRGB(float h, float s, float v, float a)
  * @brief Convert an HSV color to RGBA.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Production effects use
- * `ImGui::ColorConvertHSVtoRGB` instead. The tests in
- * `tests/test_utils.cpp` contain a separate
- * implementation. Keep both implementations in
- * sync.
+ * tests/test_utils.cpp has a separate implementation; keep it in sync.
  *
- * @param h  Hue in [0, 1]. The value
- * wraps.
+ * @param h  Hue in [0, 1]. The value wraps.
  * @param s  Saturation in [0, 1].
  * @param v  Brightness in [0, 1].
- * @param a  Alpha
- * in [0, 1].
+ * @param a  Alpha in [0, 1].
  * @return   The RGBA color.
  */
 ImVec4 HSVtoRGB(float h, float s, float v, float a);
 
 /**
+ * @fn int GetA(ImU32 c)
  * @brief Extract the alpha channel from a packed ImU32 color.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param c  Packed color.
- *
  * @return   The alpha value in [0, 255].
  */
 inline int GetA(ImU32 c)
@@ -214,15 +189,13 @@ inline int GetA(ImU32 c)
 }
 
 /**
+ * @fn ImU32 WithAlpha(ImU32 c, float mul)
  * @brief Scale the alpha channel and preserve the RGB channels.
- *
- * This helper has no
- * production caller.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param c    Packed color.
  * @param mul  Alpha multiplier.
- * @return
- * The color with its alpha clamped to [0, 255].
+ * @return The color with its alpha clamped to [0, 255].
  */
 inline ImU32 WithAlpha(ImU32 c, float mul)
 {
@@ -237,16 +210,13 @@ inline ImU32 WithAlpha(ImU32 c, float mul)
 }
 
 /**
+ * @fn ImU32 ScaleRGB(ImU32 c, float mul)
  * @brief Scale the RGB channels and preserve the alpha channel.
- *
- * This helper is used only
- * by the example in the header documentation.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param c    Packed color.
- * @param mul
- * Non-negative RGB multiplier. Negative values are clamped to zero.
- * @return     The scaled
- * color.
+ * @param mul Non-negative RGB multiplier. Negative values are clamped to zero.
+ * @return     The scaled color.
  */
 inline ImU32 ScaleRGB(ImU32 c, float mul)
 {
@@ -267,19 +237,11 @@ inline ImU32 ScaleRGB(ImU32 c, float mul)
 /**
  * @struct TextVertexSetup
  * @brief Vertex state captured after a white text draw.
+ * @author Alex (<https://github.com/lextpf>)
  *
- *
- * Callers use the captured range to recolor vertices for one effect. The members have no
- *
- * defaults and are valid only after `Begin` returns true. Do not read a member after a false
- *
- * return.
- *
- * The bounding box covers the complete string, not one glyph. Normalized coordinates
- * use the
- * complete text run. `width` and `height` clamp to 1e-3 to prevent division by zero.
- *
- * `normalizedX` and `normalizedY` return coordinates in [0, 1] inside the bounding box.
+ * Members are valid only after Begin returns true. Bounds cover emitted glyph quads,
+ * excluding spaces and clipped glyphs. Width and height are floored at 1e-3 pixels.
+ * Normalized coordinates are not clamped; positions outside the bounds can exceed [0, 1].
  */
 struct TextVertexSetup
 {
@@ -289,33 +251,56 @@ struct TextVertexSetup
     ImVec2 bbMin;      ///< Top-left of the text bounding box, in screen pixels
     ImVec2 bbMax;      ///< Bottom-right of the text bounding box, in screen pixels
 
+    /**
+     * @fn float width() const
+     * @brief Measure the captured vertex extent along screen X.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return The width in pixels, floored at 1e-3.
+     */
     float width() const { return (std::max)(bbMax.x - bbMin.x, 1e-3f); }
+    /**
+     * @fn float height() const
+     * @brief Measure the captured vertex extent along screen Y.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return The height in pixels, floored at 1e-3.
+     */
     float height() const { return (std::max)(bbMax.y - bbMin.y, 1e-3f); }
+    /**
+     * @fn float normalizedX(float x) const
+     * @brief Normalize a screen X coordinate against the captured bounds.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return The relative coordinate without clamping.
+     */
     float normalizedX(float x) const { return (x - bbMin.x) / width(); }
+    /**
+     * @fn float normalizedY(float y) const
+     * @brief Normalize a screen Y coordinate against the captured bounds.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return The relative coordinate without clamping.
+     */
     float normalizedY(float y) const { return (y - bbMin.y) / height(); }
+    /**
+     * @fn ImVec2 center() const
+     * @brief Locate the midpoint of the emitted glyph bounds.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return The center in screen pixels.
+     */
     ImVec2 center() const { return ImVec2((bbMin.x + bbMax.x) * .5f, (bbMin.y + bbMax.y) * .5f); }
 
     /**
+     * @fn bool Begin(TextVertexSetup& out, ImDrawList* list, ImFont* font, float size, const
+     *     ImVec2& pos, const char* text)
      * @brief Draw white text and capture its emitted vertex range.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The white
-     * color is a placeholder. The caller replaces the color of each vertex in the
-     * range.
- *
-
-     * * @param out   Receives the draw list, vertex range, and bounding box on success.
-     *
-     * @param list  ImGui draw list.
-     * @param font  Font used to draw the text.
-     * @param
-     * size  Font size, in pixels.
-     * @param pos   Top-left text position.
-     * @param text
-     * Null-terminated UTF-8 text.
-     * @return      True when the draw adds vertices. False for a
-     * null input, empty text, or a
-     *              draw that adds no vertices. Do not read
-     * `out` after a false return.
+     * @param out   Receives the draw list, vertex range, and bounding box on success.
+     * @return      True when the draw adds vertices. False for a null input, empty text, or a draw
+     * that adds no vertices. Do not read `out` after a false return.
      */
     static bool Begin(TextVertexSetup& out,
                       ImDrawList* list,
@@ -325,31 +310,7 @@ struct TextVertexSetup
                       const char* text);
 };
 
-/**
- * @brief Draw concentric glow rings behind a text outline.
- *
- * This declaration repeats the
- * public entry point. `TextEffects.hpp` documents the ring
- * radius and alpha formulas.
- *
- *
- * @param list          ImGui draw list.
- * @param font          Font used to draw the text.
- *
- * @param size          Font size, in pixels.
- * @param pos           Top-left text position.
- *
- * @param text          Null-terminated UTF-8 text.
- * @param glowColor     Glow color.
- * @param
- * outlineWidth  Outline width, in pixels.
- * @param glowScale     Radius multiplier for the glow.
-
- * * @param glowAlpha     Peak glow opacity.
- * @param rings         Number of concentric rings.
- *
- * @param fastOutlines  Whether to use the four-direction outline path.
- */
+// DrawOutlineGlow is documented at its canonical declaration in TextEffects.hpp.
 void DrawOutlineGlow(ImDrawList* list,
                      ImFont* font,
                      float size,
@@ -363,23 +324,14 @@ void DrawOutlineGlow(ImDrawList* list,
                      bool fastOutlines);
 
 /**
+ * @fn void DrawOutline4Internal(ImDrawList* list, ImFont* font, float size, const ImVec2& pos,
+ *     const char* text, ImU32 outline, float w)
  * @brief Draw a text outline with four cardinal stamps.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * This path costs less than the
- * ring variant and produces a less smooth outline.
- *
- * @param list     ImGui draw list.
- * @param
- * font     Font used to draw the text.
- * @param size     Font size, in pixels.
- * @param pos
- * Top-left text position.
- * @param text     Null-terminated UTF-8 text.
- * @param outline  Outline
- * color.
+ * @param outline  Outline color.
  * @param w        Outline width, in pixels.
- * @pre `list`, `font`, and `text` are not
- * null.
+ * @pre `list`, `font`, and `text` are not null.
  */
 void DrawOutline4Internal(ImDrawList* list,
                           ImFont* font,
@@ -390,24 +342,15 @@ void DrawOutline4Internal(ImDrawList* list,
                           float w);
 
 /**
+ * @fn void DrawOutline8Internal(ImDrawList* list, ImFont* font, float size, const ImVec2& pos,
+ *     const char* text, ImU32 outline, float w)
  * @brief Draw a circular text outline with eight through 24 stamps.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The tap count is
- * `clamp(ceil(pi * w), 8, 24)`. This is approximately one stamp per two
- * pixels of circumference.
- * A half-step phase offset moves the stamps away from the cardinal
- * axes. This path is smoother
- * than the four-stamp variant.
+ * Tap count = clamp(ceil(pi * w), 8, 24), about one stamp per two circumference pixels.
+ * A half-step offset avoids cardinal axes.
  *
- * @param list     ImGui draw list.
- * @param font     Font used
- * to draw the text.
- * @param size     Font size, in pixels.
- * @param pos      Top-left text
- * position.
- * @param text     Null-terminated UTF-8 text.
  * @param outline  Outline color.
- *
  * @param w        Outline radius, in pixels.
  * @pre `list`, `font`, and `text` are not null.
  */
@@ -420,26 +363,15 @@ void DrawOutline8Internal(ImDrawList* list,
                           float w);
 
 /**
+ * @fn void DrawOutlineInternal(ImDrawList* list, ImFont* font, float size, const ImVec2& pos, const
+ *     char* text, ImU32 outline, float w, bool fastOutlines)
  * @brief Select and draw one internal text-outline variant.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `fastOutlines` selects the
- * four-stamp path. Otherwise, the function selects the circular
- * ring path.
- *
- * @param list
- * ImGui draw list.
- * @param font          Font used to draw the text.
- * @param size          Font
- * size, in pixels.
- * @param pos           Top-left text position.
- * @param text Null-terminated
- * UTF-8 text.
  * @param outline       Outline color.
- * @param w             Outline width, in
- * pixels.
+ * @param w             Outline width, in pixels.
  * @param fastOutlines  Whether to use the four-stamp path.
- * @pre `list`, `font`, and
- * `text` are not null.
+ * @pre `list`, `font`, and `text` are not null.
  */
 void DrawOutlineInternal(ImDrawList* list,
                          ImFont* font,
@@ -451,17 +383,13 @@ void DrawOutlineInternal(ImDrawList* list,
                          bool fastOutlines);
 
 /**
+ * @fn ImU32 ThreeColorGradient(ImU32 colA, ImU32 colMid, ImU32 colB, float t)
  * @brief Blend three colors with smoothstep transitions.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The result moves from A to Mid
- * to B without a visible breakpoint. This helper has no
- * production caller.
- *
- * @param colA
- * Color at `t = 0`.
+ * @param colA Color at `t = 0`.
  * @param colMid  Color at `t = 0.5`.
  * @param colB    Color at `t = 1`.
- *
  * @param t       Interpolation value in [0, 1].
  * @return        The blended packed color.
  */
@@ -474,19 +402,16 @@ inline ImU32 ThreeColorGradient(ImU32 colA, ImU32 colMid, ImU32 colB, float t)
 }
 
 /**
+ * @fn ImU32 DeepShade(ImU32 c, float valMul = .55f, float satMul = 1.35f)
  * @brief Make a color darker and more saturated while preserving alpha.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Tier palettes can
- * contain bright colors with only a small difference. Animated effects
- * sweep between this shade
- * and a hot highlight to create visible contrast.
+ * Use with HotHighlight to give bright, similar tier colors visible animation contrast.
  *
  * @param c       Packed source color.
- *
  * @param valMul  Brightness multiplier.
  * @param satMul  Saturation multiplier.
- * @return The
- * adjusted packed color.
+ * @return The adjusted packed color.
  */
 inline ImU32 DeepShade(ImU32 c, float valMul = .55f, float satMul = 1.35f)
 {
@@ -497,7 +422,7 @@ inline ImU32 DeepShade(ImU32 c, float valMul = .55f, float satMul = 1.35f)
     float h = .0f, s = .0f, v = .0f;
     ImGui::ColorConvertRGBtoHSV(r / 255.0f, g / 255.0f, b / 255.0f, h, s, v);
     v = Saturate(v * valMul);
-    s = Saturate(s * satMul + .10f);  // desaturated near-whites gain a hue too
+    s = Saturate(s * satMul + .10f);  // Desaturated near-whites gain a hue too
     float nr = .0f, ng = .0f, nb = .0f;
     ImGui::ColorConvertHSVtoRGB(h, s, v, nr, ng, nb);
     return IM_COL32(static_cast<int>(nr * 255.0f + .5f),
@@ -507,16 +432,13 @@ inline ImU32 DeepShade(ImU32 c, float valMul = .55f, float satMul = 1.35f)
 }
 
 /**
+ * @fn ImU32 HotHighlight(ImU32 c, float whiteness = .75f)
  * @brief Move a color toward white while preserving its alpha.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * This function supplies the
- * bright endpoint of the `DeepShade` and `HotHighlight` sweep.
- *
- * @param c          Packed
- * source color.
+ * @param c          Packed source color.
  * @param whiteness  Blend factor toward white.
- * @return           The adjusted
- * packed color.
+ * @return           The adjusted packed color.
  */
 inline ImU32 HotHighlight(ImU32 c, float whiteness = .75f)
 {
@@ -526,18 +448,16 @@ inline ImU32 HotHighlight(ImU32 c, float whiteness = .75f)
 }
 
 /**
+ * @fn ImU32 WithAlphaFrom(ImU32 rgbSrc, ImU32 alphaSrc)
  * @brief Combine the RGB channels of one color with the alpha of another.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `LerpColorU32`
- * interpolates all four channels. A bright sweep target must adopt the fill
- * alpha, or the text
- * becomes more transparent where it becomes brighter.
+ * LerpColorU32 interpolates alpha too. Highlights must keep fill alpha to avoid
+ * transparent bright regions.
  *
- * @param rgbSrc    Color that supplies
- * the RGB channels.
+ * @param rgbSrc    Color that supplies the RGB channels.
  * @param alphaSrc  Color that supplies the alpha channel.
- * @return The
- * repacked color.
+ * @return The repacked color.
  */
 inline ImU32 WithAlphaFrom(ImU32 rgbSrc, ImU32 alphaSrc)
 {
