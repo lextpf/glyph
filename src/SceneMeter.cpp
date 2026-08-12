@@ -20,23 +20,18 @@ namespace
 ComPtr<ID3D11Device> s_Device;
 ComPtr<ID3D11DeviceContext> s_Context;
 
-// Full-res mip pyramid the backbuffer is copied into each capture.
 ComPtr<ID3D11Texture2D> s_MipTex;
 ComPtr<ID3D11ShaderResourceView> s_MipSRV;
 
-// Staging ring: written on capture, mapped 2 frames later so the CPU never
-// waits on the GPU.
+// Read staging slots two frames after capture; never wait for the GPU.
 constexpr int RING_SIZE = 3;
 ComPtr<ID3D11Texture2D> s_Staging[RING_SIZE];
 bool s_StagingPending[RING_SIZE] = {};
 uint64_t s_CaptureCounter = 0;
 
-// Source description the lazy resources were built for.  A mismatch
-// (resize, ENB format flip) tears them down and rebuilds.
 D3D11_TEXTURE2D_DESC s_SourceDesc{};
 bool s_ResourcesReady = false;
 
-// Selected mip + CPU grid.
 UINT s_GridMip = 0;
 UINT s_GridW = 0;
 UINT s_GridH = 0;
@@ -45,8 +40,13 @@ std::vector<float> s_GridRGB;  // gridW * gridH * 3
 bool s_GridValid = false;
 
 bool s_Initialized = false;
-bool s_Failed = false;  // latched hard-failure: feature off, logged once
+bool s_Failed = false;  // Latched hard-failure: feature off, logged once
 
+/**
+ * @fn void FailOnce(const char* reason)
+ * @brief Latch scene-meter failure and log the first reason.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void FailOnce(const char* reason)
 {
     if (!s_Failed)
@@ -56,7 +56,15 @@ void FailOnce(const char* reason)
     }
 }
 
-// IEEE 754 half -> float (staging readback of R16G16B16A16_FLOAT).
+/**
+ * @fn float HalfToFloat(uint16_t h)
+ * @brief Decode a half-float texel channel for CPU scene sampling.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * IEEE 754 half -> float for R16G16B16A16_FLOAT readback.
+ *
+ * @return The IEEE 754 value represented as a 32-bit float.
+ */
 float HalfToFloat(uint16_t h)
 {
     const uint32_t sign = (h & 0x8000u) << 16;
@@ -71,7 +79,7 @@ float HalfToFloat(uint16_t h)
             std::memcpy(&f, &bits, 4);
             return f;
         }
-        // Subnormal: normalize.
+
         while ((mant & 0x400u) == 0)
         {
             mant <<= 1;
@@ -82,7 +90,7 @@ float HalfToFloat(uint16_t h)
     }
     else if (exp == 31)
     {
-        exp = 255 - 112;  // Inf/NaN -> big float; callers clamp
+        exp = 255 - 112;  // inf/NaN -> big float; callers clamp
     }
     const uint32_t bits = sign | ((exp + 112) << 23) | (mant << 13);
     float f;
@@ -90,8 +98,15 @@ float HalfToFloat(uint16_t h)
     return f;
 }
 
-// Decode one texel of a supported backbuffer format to linear-ish [0,1] RGB.
-// Returns false for unsupported formats (checked once at resource build).
+/**
+ * @fn bool DecodeTexel(DXGI_FORMAT fmt, const uint8_t* p, float rgb[3])
+ * @brief Decode a supported backbuffer texel into clamped RGB channels.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Decode supported texels to linear-ish RGB in [0, 1]; unsupported formats return false.
+ *
+ * @return True on success; false for an unsupported format.
+ */
 bool DecodeTexel(DXGI_FORMAT fmt, const uint8_t* p, float rgb[3])
 {
     switch (fmt)
@@ -133,12 +148,25 @@ bool DecodeTexel(DXGI_FORMAT fmt, const uint8_t* p, float rgb[3])
     }
 }
 
+/**
+ * @fn UINT BytesPerTexel(DXGI_FORMAT fmt)
+ * @brief Resolve the byte stride of an accepted backbuffer format.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return Eight for R16G16B16A16_FLOAT; four for every other value.
+ */
 UINT BytesPerTexel(DXGI_FORMAT fmt)
 {
     return fmt == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8u : 4u;
 }
 
-// (Re)build the mip pyramid + staging ring for the given backbuffer desc.
+/**
+ * @fn bool BuildResources(const D3D11_TEXTURE2D_DESC& src)
+ * @brief Replace scene-meter textures and reset the readback ring.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True when the mip texture and every staging texture are ready.
+ */
 bool BuildResources(const D3D11_TEXTURE2D_DESC& src)
 {
     s_MipTex.Reset();
@@ -174,9 +202,7 @@ bool BuildResources(const D3D11_TEXTURE2D_DESC& src)
         return false;
     }
 
-    // Descend to the first mip at or below 64 texels wide: 60 at 1920 and
-    // 3840, 40 at 2560.  The h > 2 guard stops extreme aspect ratios from
-    // collapsing the grid height.
+    // Stop at width <= 64 without collapsing height below two texels.
     UINT mip = 0;
     UINT w = src.Width;
     UINT h = src.Height;
@@ -190,7 +216,7 @@ bool BuildResources(const D3D11_TEXTURE2D_DESC& src)
     D3D11_TEXTURE2D_DESC mipDesc{};
     mipDesc.Width = src.Width;
     mipDesc.Height = src.Height;
-    mipDesc.MipLevels = 0;  // full chain
+    mipDesc.MipLevels = 0;  // Full chain
     mipDesc.ArraySize = 1;
     mipDesc.Format = src.Format;
     mipDesc.SampleDesc.Count = 1;
@@ -276,9 +302,7 @@ void Shutdown()
 
 void OnResize(uint32_t width, uint32_t height)
 {
-    // Resources rebuild lazily against the actual bound backbuffer (the only
-    // authority on format under ENB/upscaler stacks); only a genuine size
-    // change needs to invalidate them here.
+    // Detect format changes from the bound backbuffer at capture time.
     if (s_ResourcesReady && (width != s_SourceDesc.Width || height != s_SourceDesc.Height))
     {
         s_ResourcesReady = false;
@@ -286,14 +310,13 @@ void OnResize(uint32_t width, uint32_t height)
     }
 }
 
-void CaptureCallback(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
+void CaptureCallback(const ImDrawList*, const ImDrawCmd*)
 {
     if (!s_Initialized || s_Failed || !s_Context)
     {
         return;
     }
 
-    // Resolve the currently bound render target (the composed scene).
     ComPtr<ID3D11RenderTargetView> rtv;
     s_Context->OMGetRenderTargets(1, rtv.GetAddressOf(), nullptr);
     if (!rtv)
@@ -319,9 +342,8 @@ void CaptureCallback(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
         }
     }
 
-    // Downsample: copy -> mip chain -> tiny mip -> staging ring slot.
-    // Copies and GenerateMips leave the application pipeline state intact,
-    // so this callback needs no ResetRenderState.
+    // Backbuffer -> mip chain -> tiny mip -> staging slot. These operations preserve
+    // pipeline state, so no ResetRenderState is needed.
     s_Context->CopySubresourceRegion(s_MipTex.Get(), 0, 0, 0, 0, tex.Get(), 0, nullptr);
     s_Context->GenerateMips(s_MipSRV.Get());
 
@@ -339,8 +361,7 @@ void CollectResults()
         return;
     }
 
-    // Map the oldest pending slot - written RING_SIZE-1 captures ago, so the
-    // GPU has almost certainly finished with it.  Never wait.
+    // Map the slot from RING_SIZE - 1 captures ago without waiting.
     const int slot = static_cast<int>((s_CaptureCounter + 1) % RING_SIZE);
     if (!s_StagingPending[slot])
     {
@@ -352,7 +373,7 @@ void CollectResults()
         s_Staging[slot].Get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
     if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
     {
-        return;  // keep last frame's grid
+        return;  // Keep last frame's grid
     }
     if (FAILED(hr))
     {
