@@ -8,76 +8,72 @@
 /**
  * @namespace SceneMeter
  * @brief Image-space scene sampling that adapts nameplate ink to the scene's light.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup TextPostProcess
  *
- * Meters the backbuffer so nameplate ink tracks the light around it instead of sitting
- * at fixed sRGB white: over a bright scene the ink dims slightly, in a dark warm-lit
- * one it lifts a few percent and takes on some of the light's color.
+ * Capture before all glyph draws to exclude the overlay. A three-slot staging ring
+ * provides delayed CPU samples without waiting for the GPU. All entry points run on
+ * the render thread; the grid and GPU state have no synchronization.
  *
- * ## Pipeline (two frames of latency, never stalls)
+ * Unsupported formats, MSAA or missing mip autogeneration latch a failure. IsInitialized
+ * then returns false until Initialize or Shutdown clears the latch; resize alone cannot
+ * restore the feature.
  *
- * ```
+ * @verbatim
  * frame N   : capture callback (before any glyph draws)
  *             backbuffer -> mip chain -> tiny mip -> staging ring slot
  * frame N+2 : CollectResults() maps the oldest pending slot (DO_NOT_WAIT)
  *             into a CPU grid; plates bilinear-sample it during layout
- * ```
- *
- * The ring holds 3 slots.  A capture writes slot `counter % 3`, and CollectResults maps
- * slot `(counter + 1) % 3` - the slot written two captures earlier - so the CPU never
- * waits on the GPU.  CollectResults also runs while the draw list is built, whereas the
- * capture
- * callback executes later at ImGui render time, which adds the second frame of
- * latency.
- *
+ * @endverbatim
  *
  * @verbatim
- * For capture counter c:
+ * for capture counter c:
  *
- * draw-list build now    read slot (c + 1) % 3 capture c
- * - 2
- * GPU may still own      pending slot (c + 2) % 3  capture c - 1
- * ImGui execution later
- * write slot c % 3          capture c
+ * phase                  slot          stored capture
+ * draw-list build now    (c + 1) % 3    c - 2
+ * GPU may still own      (c + 2) % 3    c - 1
+ * ImGui execution later  c % 3          c
  *
- * The three roles rotate by one slot after each capture.
-
- * * @endverbatim
- *
- * The capture runs before glyph's own draws, so the meter never reads the
- * overlay's own
- * text back.  Any failure - exotic backbuffer format, MSAA, no mip autogen -
- * disables the feature with one log line and no visual change.  The failure latches:
- * `IsInitialized` returns false from then on, even when the backbuffer format later changes back to
- * a supported one.  Only `Initialize` or `Shutdown` clears the latch, so a resize alone does not
- * re-enable the feature.
+ * roles rotate by one slot after each capture.
+ * @endverbatim
  */
 namespace SceneMeter
 {
 /**
+ * @fn bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
  * @brief Store the device references and clear the latched failure flag.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Resources themselves are (re)created lazily on the first capture, so a backbuffer
- * format change (ENB, upscalers) is handled there.
+ * Retain device and context references. Create resources lazily at capture time, using
+ * the actual backbuffer format. Call Shutdown before replacing the device so cached
+ * textures cannot survive onto a different device.
  *
- * @param device   D3D11 device for resource creation.
- * @param context  D3D11 immediate context for the copies and the readback.
- * @return true when both pointers are valid.
+ * @return True when both pointers are valid.
  */
 bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context);
 
-/// @brief True when the scene meter is initialized and usable.
+/**
+ * @fn bool IsInitialized()
+ * @brief Report whether scene capture can be attempted.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True after initialization when no failure is latched; samples may still be unavailable.
+ */
 bool IsInitialized();
 
-/// @brief Release all GPU resources.
+/**
+ * @fn void Shutdown()
+ * @brief Release all GPU resources.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void Shutdown();
 
 /**
+ * @fn void OnResize(uint32_t width, uint32_t height)
  * @brief Invalidate the cached resources after a backbuffer size change.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Releases nothing here: the next capture rebuilds the resources and releases the old
- * ones.  A format-only change is ignored here and detected in CaptureCallback instead.
+ * The next capture replaces resources. Format-only changes are detected during capture.
  *
  * @param width   New backbuffer width in pixels.
  * @param height  New backbuffer height in pixels.
@@ -85,34 +81,36 @@ void Shutdown();
 void OnResize(uint32_t width, uint32_t height);
 
 /**
+ * @fn void CaptureCallback(const ImDrawList* dl, const ImDrawCmd* cmd)
  * @brief ImDrawCallback: downsample the current backbuffer into the staging ring.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Add as the FIRST callback of the overlay draw list, before any glyph content, so the
- * sample excludes the overlay itself.  Alters no pipeline state (copies and
- * GenerateMips only), so no ResetRenderState is needed.
- *
- * @param dl   Draw list that owns the command (unused).
- * @param cmd  Draw command that carries the callback (unused).
+ * Queue first, before any glyph content. Copies and GenerateMips preserve pipeline state.
  */
 void CaptureCallback(const ImDrawList* dl, const ImDrawCmd* cmd);
 
 /**
+ * @fn void CollectResults()
  * @brief Map the oldest pending staging texture into the CPU grid, without blocking.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Call once per frame from the render thread before plates sample.  Keeps the previous
- * grid when the slot is still in use by the GPU.
+ * Call once per frame on the render thread before sampling. Keep the previous grid
+ * when the GPU still owns the pending slot.
  */
 void CollectResults();
 
 /**
+ * @fn bool Sample(float x01, float y01, float& outLum, float* outRGB)
  * @brief Bilinear-sample the metered scene at normalized screen coordinates.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @param x01          Normalized viewport x in [0, 1]; outside values clamp.
  * @param y01          Normalized viewport y in [0, 1]; outside values clamp.
  * @param[out] outLum  Rec.709 luminance of the sampled region [0,1].
- * @param[out] outRGB  Average color of the sampled region (clamped [0,1]).
- * @return false while no results are available yet (feature warms up).  Both outputs
- *         stay untouched in that case.
+ * @param[out] outRGB  Average color in [0, 1]; points to three writable floats.
+ * @return False while no results are available yet (feature warms up).  Both outputs stay untouched
+ * in that case.
+ * @pre Coordinates are finite and the RGB output pointer is not null.
  */
 bool Sample(float x01, float y01, float& outLum, float outRGB[3]);
 }  // namespace SceneMeter
