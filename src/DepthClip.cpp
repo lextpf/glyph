@@ -17,11 +17,7 @@ namespace DepthClip
 {
 namespace
 {
-// Pixel shader: ImGui's stock shader plus a feathered scene-depth compare.
-// The plate's viewport-space depth comes from the same projection the game
-// rasterized with, so a direct compare against the depth buffer is exact by
-// construction.  Five taps at the feather radius soften the intersection
-// edge.  polarity 0 disables the test (neutral params).
+// Five depth taps feather intersections; polarity 0 disables clipping.
 constexpr const char* kDepthClipPS = R"(
 cbuffer DepthClipCB : register(b0)
 {
@@ -101,11 +97,10 @@ ComPtr<ID3D11DeviceContext> s_Context;
 ComPtr<ID3D11PixelShader> s_PS;
 ComPtr<ID3D11Buffer> s_CB;
 
-// Per-frame state (render thread only).
-ID3D11ShaderResourceView* s_DepthSRV = nullptr;  // borrowed from the game
+ID3D11ShaderResourceView* s_DepthSRV = nullptr;  // Borrowed from the game
 float s_FeatherPx = 2.5f;
 float s_Polarity = .0f;
-std::deque<PlateParams> s_ParamArena;  // deque: stable addresses across push_back
+std::deque<PlateParams> s_ParamArena;  // Deque: stable addresses across push_back
 std::vector<SavedPixelState> s_StateStack;
 
 bool s_Initialized = false;
@@ -203,12 +198,8 @@ bool BeginFrame(float featherPx, float polarity)
         return false;
     }
 
-    // Only the post-Z-prepass COPY is safe to sample: the live kMAIN depth
-    // may still be bound as a DSV during UI rendering, and D3D silently
-    // nulls a conflicting SRV binding - which would read as depth 0 and
-    // make every plate invisible.  If the copy is absent (some ENB or
-    // upscaler stacks), the frame goes unclipped and line-of-sight culling
-    // remains the only occlusion.
+    // Sample only the post-Z-prepass copy. The live kMAIN can still be a DSV, which makes
+    // D3D11 null a conflicting SRV and hide every plate. If the copy is absent, skip clipping.
     auto& data = renderer->data;
     s_DepthSRV = data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
     if (!s_DepthSRV)
@@ -253,14 +244,14 @@ void* MakeNeutralParams()
     return &s_ParamArena.back();
 }
 
-void ApplyCallback(const ImDrawList* /*dl*/, const ImDrawCmd* cmd)
+void ApplyCallback(const ImDrawList*, const ImDrawCmd* cmd)
 {
     if (!s_Context)
     {
         return;
     }
 
-    // Keep Apply/Restore balanced even if a recoverable setup step fails.
+    // Balance apply/restore when setup fails.
     SavedPixelState saved{};
     if (!s_PS || !s_CB || !s_DepthSRV || !cmd || !cmd->UserCallbackData)
     {
@@ -269,9 +260,7 @@ void ApplyCallback(const ImDrawList* /*dl*/, const ImDrawCmd* cmd)
     }
     const auto* params = static_cast<const PlateParams*>(cmd->UserCallbackData);
 
-    // The active viewport tells us the pixel->uv mapping for whichever
-    // channel is executing (full-res backbuffer, full-res divide RT, or the
-    // half-res glow capture) - SV_Position is always in that space.
+    // Derive pixel-to-UV mapping from the active viewport, including half-resolution glow.
     D3D11_VIEWPORT vp{};
     UINT vpCount = 1;
     s_Context->RSGetViewports(&vpCount, &vp);
@@ -311,7 +300,7 @@ void ApplyCallback(const ImDrawList* /*dl*/, const ImDrawCmd* cmd)
     s_Context->PSSetShaderResources(1, 1, srvs);
 }
 
-void RestoreCallback(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
+void RestoreCallback(const ImDrawList*, const ImDrawCmd*)
 {
     if (!s_Context || s_StateStack.empty())
     {
