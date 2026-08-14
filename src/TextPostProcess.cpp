@@ -16,10 +16,6 @@ namespace logger = SKSE::log;
 namespace TextPostProcess
 {
 
-// ============================================================================
-// Embedded HLSL sources
-// ============================================================================
-
 static const char* kFullscreenVS_HLSL = R"(
 struct VSOut {
     float4 pos : SV_Position;
@@ -44,8 +40,7 @@ cbuffer BlurCB : register(b0) {
 static const int HALF_KERNEL = 16;
 float Gauss(float x, float s) { return exp(-0.5 * (x * x) / (s * s)); }
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
-    // Clamp sigma so the 16-tap half-kernel always covers at least 3 sigma.
-    // Prevents boxy edges when GlowRadius is large.
+    // cap sigma at 16/3 so the kernel covers three sigma without box-shaped edges.
     float sigma = clamp(Sigma, 0.001, HALF_KERNEL / 3.0);
     float4 sum  = InputTex.Sample(Sampler, uv) * Gauss(0, sigma);
     float  wSum = Gauss(0, sigma);
@@ -72,8 +67,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
     float4 bg   = Snapshot.Sample(Sampler, uv);
     if (text.a < 0.001) discard;
 
-    // Luminance of the text pixel - dark outlines and shadows composite
-    // normally so they do not invert to bright.
+    // dark text must composite normally; division would turn outlines bright.
     float lum = dot(text.rgb, float3(0.299, 0.587, 0.114));
     float divideMask = smoothstep(0.10, 0.25, lum);
 
@@ -83,10 +77,10 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
         text.b > 0.001 ? saturate(bg.b / text.b) : 1.0
     );
 
-    // Normal alpha composite as fallback for dark pixels
+
     float3 normal = lerp(bg.rgb, text.rgb, text.a);
 
-    // Blend: dark pixels use normal composite, bright pixels use divide
+
     float effectiveStrength = Strength * divideMask;
     float3 result = lerp(normal, divided, effectiveStrength);
     return float4(result, 1.0);
@@ -102,8 +96,7 @@ cbuffer CompositeCB : register(b0) {
 };
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
     float4 c = InputTex.Sample(Sampler, uv);
-    // Intensity scales the captured color only, with no added white term,
-    // so the captured hue is preserved.
+    // scale captured color without a white term to preserve hue.
     float3 bloom = saturate(c.rgb * (0.46 + Intensity * 0.34));
     float veilAlpha = saturate(pow(c.a, 0.72) * (0.14 + Intensity * 0.16));
     float coreExponent = lerp(1.18, 1.78, Intensity);
@@ -112,10 +105,6 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
     return float4(bloom, glowAlpha);
 }
 )";
-
-// ============================================================================
-// Constant buffer layouts
-// ============================================================================
 
 struct BlurConstants
 {
@@ -136,11 +125,14 @@ struct DivideConstants
     float pad[3];
 };
 
-// ============================================================================
-// File-scope resources
-// ============================================================================
-
 static std::atomic<bool> s_Initialized{false};
+/**
+ * @fn std::mutex& InitMutex()
+ * @brief Share the lock used by initialization and shutdown.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The module's initialization mutex.
+ */
 static std::mutex& InitMutex()
 {
     static std::mutex m;
@@ -150,7 +142,6 @@ static std::mutex& InitMutex()
 static ComPtr<ID3D11Device> s_Device;
 static ComPtr<ID3D11DeviceContext> s_Context;
 
-// Ping-pong render targets (half-res)
 static ComPtr<ID3D11Texture2D> s_RT_A;
 static ComPtr<ID3D11RenderTargetView> s_RTV_A;
 static ComPtr<ID3D11ShaderResourceView> s_SRV_A;
@@ -158,12 +149,10 @@ static ComPtr<ID3D11Texture2D> s_RT_B;
 static ComPtr<ID3D11RenderTargetView> s_RTV_B;
 static ComPtr<ID3D11ShaderResourceView> s_SRV_B;
 
-// Shaders
 static ComPtr<ID3D11VertexShader> s_FullscreenVS;
 static ComPtr<ID3D11PixelShader> s_BlurPS;
 static ComPtr<ID3D11PixelShader> s_CompositePS;
 
-// Pipeline objects
 static ComPtr<ID3D11Buffer> s_BlurCB;
 static ComPtr<ID3D11Buffer> s_CompositeCB;
 static ComPtr<ID3D11SamplerState> s_LinearClampSampler;
@@ -171,47 +160,43 @@ static ComPtr<ID3D11BlendState> s_AdditiveBlend;  // Created, but no pass binds 
 static ComPtr<ID3D11BlendState> s_ScreenBlend;
 static ComPtr<ID3D11RasterizerState> s_NoCullRS;
 
-// Saved main RT (between Begin/End callbacks)
 static ComPtr<ID3D11RenderTargetView> s_SavedRTV;
 static ComPtr<ID3D11DepthStencilView> s_SavedDSV;
 static D3D11_VIEWPORT s_SavedViewport{};
 static UINT s_SavedViewportCount = 0;
 
-// RT dimensions
 static uint32_t s_BlurWidth = 0;
 static uint32_t s_BlurHeight = 0;
 static uint32_t s_FullWidth = 0;
 static uint32_t s_FullHeight = 0;
 
-// Render target format, chosen at init from device format support
 static DXGI_FORMAT s_RTFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-// Divide capture resources (full-res)
 static ComPtr<ID3D11Texture2D> s_RT_Divide;
 static ComPtr<ID3D11RenderTargetView> s_RTV_Divide;
 static ComPtr<ID3D11ShaderResourceView> s_SRV_Divide;
-static ComPtr<ID3D11Texture2D> s_RT_Snapshot;  // backbuffer copy (SRV only)
+static ComPtr<ID3D11Texture2D> s_RT_Snapshot;  // Backbuffer copy (SRV only)
 static ComPtr<ID3D11ShaderResourceView> s_SRV_Snapshot;
 static ComPtr<ID3D11PixelShader> s_DividePS;
 static ComPtr<ID3D11Buffer> s_DivideCB;
 
-// Saved state for divide capture (separate from glow's saved state)
 static ComPtr<ID3D11RenderTargetView> s_DivideSavedRTV;
 static ComPtr<ID3D11DepthStencilView> s_DivideSavedDSV;
 static D3D11_VIEWPORT s_DivideSavedViewport{};
 static UINT s_DivideSavedViewportCount = 0;
 
-// Glow params (set per-frame)
 static float s_GlowRadius = 4.0f;
 static float s_GlowIntensity = .5f;
 
-// Divide params (set per-frame)
 static float s_DivideStrength = .0f;
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
+/**
+ * @fn ComPtr<ID3DBlob> CompileShader(const char* source, const char* target, const char* entry)
+ * @brief Compile an embedded shader and report compilation diagnostics.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The compiled bytecode, or an empty COM pointer on failure.
+ */
 static ComPtr<ID3DBlob> CompileShader(const char* source, const char* target, const char* entry)
 {
     ComPtr<ID3DBlob> blob;
@@ -239,6 +224,14 @@ static ComPtr<ID3DBlob> CompileShader(const char* source, const char* target, co
     return blob;
 }
 
+/**
+ * @fn bool CreateRenderTarget(uint32_t w, uint32_t h, ComPtr<ID3D11Texture2D>& tex,
+ *     ComPtr<ID3D11RenderTargetView>& rtv, ComPtr<ID3D11ShaderResourceView>& srv)
+ * @brief Replace a texture and its render-target and shader-resource views.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return True when all resources exist; failure may leave partial output resources.
+ */
 static bool CreateRenderTarget(uint32_t w,
                                uint32_t h,
                                ComPtr<ID3D11Texture2D>& tex,
@@ -274,6 +267,11 @@ static bool CreateRenderTarget(uint32_t w,
     return true;
 }
 
+/**
+ * @fn void ReleaseResources()
+ * @brief Release post-processing resources and clear initialization state.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void ReleaseResources()
 {
     s_RT_A.Reset();
@@ -311,7 +309,13 @@ static void ReleaseResources()
     s_Initialized = false;
 }
 
-// Draw a fullscreen triangle (no vertex buffer, 3 vertices from SV_VertexID)
+/**
+ * @fn void DrawFullscreenTriangle()
+ * @brief Draw a full-screen pass without a vertex buffer.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * SV_VertexID generates the fullscreen triangle without a vertex buffer.
+ */
 static void DrawFullscreenTriangle()
 {
     s_Context->IASetInputLayout(nullptr);
@@ -320,10 +324,6 @@ static void DrawFullscreenTriangle()
     s_Context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
     s_Context->Draw(3, 0);
 }
-
-// ============================================================================
-// Public API
-// ============================================================================
 
 bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
 {
@@ -337,7 +337,6 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
     s_Device = device;
     s_Context = context;
 
-    // Check for R16G16B16A16_FLOAT render target support; fall back to R8G8B8A8_UNORM
     UINT fmtSupport = 0;
     if (SUCCEEDED(device->CheckFormatSupport(DXGI_FORMAT_R16G16B16A16_FLOAT, &fmtSupport)) &&
         (fmtSupport & D3D11_FORMAT_SUPPORT_RENDER_TARGET) &&
@@ -352,7 +351,6 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
             "TextPostProcess: R16G16B16A16_FLOAT not supported, falling back to R8G8B8A8_UNORM");
     }
 
-    // Compile shaders
     auto vsBlob = CompileShader(kFullscreenVS_HLSL, "vs_5_0", "main");
     auto blurBlob = CompileShader(kGaussianBlurPS_HLSL, "ps_5_0", "main");
     auto compositeBlob = CompileShader(kCompositePS_HLSL, "ps_5_0", "main");
@@ -409,7 +407,6 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
         return false;
     }
 
-    // Constant buffers
     D3D11_BUFFER_DESC cbDesc{};
     cbDesc.ByteWidth = sizeof(BlurConstants);
     cbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -439,7 +436,6 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
         return false;
     }
 
-    // Linear clamp sampler
     D3D11_SAMPLER_DESC sampDesc{};
     sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -456,7 +452,6 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
         return false;
     }
 
-    // Additive blend state
     D3D11_BLEND_DESC blendDesc{};
     blendDesc.RenderTarget[0].BlendEnable = TRUE;
     blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
@@ -473,9 +468,8 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
         return false;
     }
 
-    // Screen-style blend state: output = src.rgb * src.a + dst.rgb * (1 - src.rgb).
-    // The destination factor falls with the source color, so a bright
-    // background cannot clip to white the way pure additive does.
+    // Screen blend: src.rgb * src.a + dst.rgb * (1 - src.rgb).
+    // The destination factor limits clipping on bright backgrounds.
     D3D11_BLEND_DESC screenDesc{};
     screenDesc.RenderTarget[0].BlendEnable = TRUE;
     screenDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
@@ -492,7 +486,6 @@ bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context)
         return false;
     }
 
-    // No-cull rasterizer state for fullscreen triangle
     D3D11_RASTERIZER_DESC rsDesc{};
     rsDesc.FillMode = D3D11_FILL_SOLID;
     rsDesc.CullMode = D3D11_CULL_NONE;
@@ -533,9 +526,7 @@ void OnResize(uint32_t width, uint32_t height)
     if (width == s_FullWidth && height == s_FullHeight)
         return;
 
-    // The accepted size is recorded before creation, so the size test above also
-    // suppresses a retry: a target that fails here stays missing, and its bracket
-    // stays a no-op, until the resolution changes again.
+    // Recording size before creation prevents retries until the next resize.
     s_FullWidth = width;
     s_FullHeight = height;
     s_BlurWidth = (std::max)(width / 2u, 1u);
@@ -557,16 +548,12 @@ void OnResize(uint32_t width, uint32_t height)
                      height);
     }
 
-    // Full-res divide capture RT (uses our HDR format for nametag rendering)
     bool divOk = CreateRenderTarget(width, height, s_RT_Divide, s_RTV_Divide, s_SRV_Divide);
     if (divOk)
     {
-        // Snapshot must match the backbuffer format for CopyResource.
-        // Query the actual backbuffer format from the main render target.
-        // This depends on the caller: the game's main RT must be bound now, or
-        // the snapshot keeps the fallback format below, and the copy in
-        // BeginDivideCapture is then rejected unless that format happens to match.
-        DXGI_FORMAT bbFormat = DXGI_FORMAT_R8G8B8A8_UNORM;  // safe default
+        // CopyResource requires matching formats. The game backbuffer must be bound
+        // when its format is queried; the fallback format can otherwise make copies invalid.
+        DXGI_FORMAT bbFormat = DXGI_FORMAT_R8G8B8A8_UNORM;  // Safe default
         {
             ComPtr<ID3D11RenderTargetView> curRTV;
             s_Context->OMGetRenderTargets(1, curRTV.GetAddressOf(), nullptr);
@@ -615,30 +602,23 @@ void SetGlowParams(float radius, float intensity)
     s_GlowIntensity = intensity;
 }
 
-// ============================================================================
-// ImDrawCallbacks
-// ============================================================================
-
-void BeginGlowCapture(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
+void BeginGlowCapture(const ImDrawList*, const ImDrawCmd*)
 {
     if (!s_Context || !s_RTV_A)
         return;
 
-    // Save current render target and viewport
     s_SavedRTV.Reset();
     s_SavedDSV.Reset();
     s_Context->OMGetRenderTargets(1, s_SavedRTV.GetAddressOf(), s_SavedDSV.GetAddressOf());
     s_SavedViewportCount = 1;
     s_Context->RSGetViewports(&s_SavedViewportCount, &s_SavedViewport);
 
-    // Switch to glow RT A (half-res)
     ID3D11RenderTargetView* rtv = s_RTV_A.Get();
     s_Context->OMSetRenderTargets(1, &rtv, nullptr);
 
     const float clearColor[4] = {0, 0, 0, 0};
     s_Context->ClearRenderTargetView(s_RTV_A.Get(), clearColor);
 
-    // Set half-res viewport so ImGui text maps correctly
     D3D11_VIEWPORT vp{};
     vp.Width = static_cast<float>(s_BlurWidth);
     vp.Height = static_cast<float>(s_BlurHeight);
@@ -646,26 +626,21 @@ void BeginGlowCapture(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     s_Context->RSSetViewports(1, &vp);
 }
 
-void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
+void EndGlowAndComposite(const ImDrawList*, const ImDrawCmd*)
 {
     if (!s_Context || !s_RTV_A || !s_RTV_B || !s_SavedRTV)
         return;
 
-    // RT A holds the glow text at half resolution.  Apply a separable
-    // Gaussian blur: A -> B (horizontal), B -> A (vertical).
+    // Half-resolution blur: A -> B (horizontal), B -> A (vertical).
 
-    // Sigma is in half-res texels, and one texel spans two backbuffer pixels,
-    // so 0.48 gives about one full-res pixel of sigma per pixel of radius.  A
-    // Gaussian reaches about 3 sigma, so the glow spreads roughly three times
-    // the requested radius and stays diffuse instead of resolving as a hard
-    // plate behind the text.  The shader clamps sigma to 16/3 texels.
+    // Sigma uses half-resolution texels. The .48 scale gives roughly one backbuffer pixel
+    // of sigma per radius pixel; the shader caps sigma at 16/3 texels.
     const float sigma = (std::max)(1.0f, s_GlowRadius * .48f);
 
-    // Unbind RT A as target, we'll read from it
+    // Unbind RT A before reading it.
     ID3D11RenderTargetView* nullRTV = nullptr;
     s_Context->OMSetRenderTargets(1, &nullRTV, nullptr);
 
-    // Common state for blur passes
     s_Context->VSSetShader(s_FullscreenVS.Get(), nullptr, 0);
     s_Context->PSSetShader(s_BlurPS.Get(), nullptr, 0);
     s_Context->RSSetState(s_NoCullRS.Get());
@@ -673,7 +648,6 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     ID3D11SamplerState* sampler = s_LinearClampSampler.Get();
     s_Context->PSSetSamplers(0, 1, &sampler);
 
-    // Disable blending for blur passes (overwrite)
     const float blendFactor[4] = {0, 0, 0, 0};
     s_Context->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
 
@@ -683,7 +657,7 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     halfVP.MaxDepth = 1.0f;
     s_Context->RSSetViewports(1, &halfVP);
 
-    // --- Horizontal blur: read A -> write B ---
+    // Horizontal blur: A -> B.
     {
         const float clearColor[4] = {0, 0, 0, 0};
         s_Context->ClearRenderTargetView(s_RTV_B.Get(), clearColor);
@@ -709,12 +683,12 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
         s_Context->PSSetConstantBuffers(0, 1, &cb);
         DrawFullscreenTriangle();
 
-        // Unbind SRV to allow B to be read next
+        // Unbind the SRV before binding its texture as a target.
         ID3D11ShaderResourceView* nullSRV = nullptr;
         s_Context->PSSetShaderResources(0, 1, &nullSRV);
     }
 
-    // --- Vertical blur: read B -> write A ---
+    // Vertical blur: B -> A.
     {
         const float clearColor[4] = {0, 0, 0, 0};
         s_Context->ClearRenderTargetView(s_RTV_A.Get(), clearColor);
@@ -744,9 +718,8 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
         s_Context->PSSetShaderResources(0, 1, &nullSRV);
     }
 
-    // --- Composite: read blurred A -> main RT, screen blend (src + dst * (1 - src)) ---
+    // Composite: blurred A -> main RT; screen blend = src + dst * (1 - src).
     {
-        // Restore main render target
         ID3D11RenderTargetView* mainRTV = s_SavedRTV.Get();
         s_Context->OMSetRenderTargets(1, &mainRTV, s_SavedDSV.Get());
         s_Context->RSSetViewports(s_SavedViewportCount, &s_SavedViewport);
@@ -770,35 +743,26 @@ void EndGlowAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
         s_Context->PSSetConstantBuffers(0, 1, &cb);
         DrawFullscreenTriangle();
 
-        // Unbind SRV
         ID3D11ShaderResourceView* nullSRV = nullptr;
         s_Context->PSSetShaderResources(0, 1, &nullSRV);
     }
 
-    // Clean up saved state refs
     s_SavedRTV.Reset();
     s_SavedDSV.Reset();
 
-    // ImDrawCallback_ResetRenderState (added after this callback in the draw list)
-    // will restore ImGui's own shader/blend/viewport/sampler state.
-    // The render target is already restored above.
+    // The queued ImDrawCallback_ResetRenderState restores ImGui state; restore the RT here.
 }
-
-// ============================================================================
-// Color divide callbacks
-// ============================================================================
 
 void SetDivideParams(float strength)
 {
     s_DivideStrength = strength;
 }
 
-void BeginDivideCapture(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
+void BeginDivideCapture(const ImDrawList*, const ImDrawCmd*)
 {
     if (!s_Context || !s_RTV_Divide || !s_RT_Snapshot)
         return;
 
-    // Save the real main render target
     s_DivideSavedRTV.Reset();
     s_DivideSavedDSV.Reset();
     s_Context->OMGetRenderTargets(
@@ -806,11 +770,8 @@ void BeginDivideCapture(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     s_DivideSavedViewportCount = 1;
     s_Context->RSGetViewports(&s_DivideSavedViewportCount, &s_DivideSavedViewport);
 
-    // Snapshot the current backbuffer content (game world before nametags).
-    // CopyResource needs matching dimensions and a compatible format, which
-    // holds only while the backbuffer is the bound target.  When the glow
-    // bracket already switched to the half-res glow RT, the copy is invalid and
-    // the snapshot keeps stale content.
+    // CopyResource requires the backbuffer as the bound target. An enclosing glow capture
+    // binds a half-resolution RT, making this copy invalid and leaving the snapshot stale.
     if (s_DivideSavedRTV)
     {
         ComPtr<ID3D11Resource> mainRes;
@@ -821,14 +782,12 @@ void BeginDivideCapture(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
         }
     }
 
-    // Switch to divide capture RT
     ID3D11RenderTargetView* rtv = s_RTV_Divide.Get();
     s_Context->OMSetRenderTargets(1, &rtv, nullptr);
 
     const float clearColor[4] = {0, 0, 0, 0};
     s_Context->ClearRenderTargetView(s_RTV_Divide.Get(), clearColor);
 
-    // Full-res viewport so ImGui draws map correctly
     D3D11_VIEWPORT vp{};
     vp.Width = static_cast<float>(s_FullWidth);
     vp.Height = static_cast<float>(s_FullHeight);
@@ -836,21 +795,18 @@ void BeginDivideCapture(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     s_Context->RSSetViewports(1, &vp);
 }
 
-void EndDivideAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
+void EndDivideAndComposite(const ImDrawList*, const ImDrawCmd*)
 {
     if (!s_Context || !s_SRV_Divide || !s_SRV_Snapshot || !s_DivideSavedRTV)
         return;
 
-    // Unbind divide RT so we can read from it
     ID3D11RenderTargetView* nullRTV = nullptr;
     s_Context->OMSetRenderTargets(1, &nullRTV, nullptr);
 
-    // Restore the real main render target
     ID3D11RenderTargetView* mainRTV = s_DivideSavedRTV.Get();
     s_Context->OMSetRenderTargets(1, &mainRTV, s_DivideSavedDSV.Get());
     s_Context->RSSetViewports(s_DivideSavedViewportCount, &s_DivideSavedViewport);
 
-    // Set up divide composite pass
     s_Context->VSSetShader(s_FullscreenVS.Get(), nullptr, 0);
     s_Context->PSSetShader(s_DividePS.Get(), nullptr, 0);
     s_Context->RSSetState(s_NoCullRS.Get());
@@ -858,18 +814,14 @@ void EndDivideAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     ID3D11SamplerState* sampler = s_LinearClampSampler.Get();
     s_Context->PSSetSamplers(0, 1, &sampler);
 
-    // No blending - the shader outputs final pixels directly, taking the
-    // background from the snapshot instead of from the destination.  It
-    // discards captured pixels with alpha below 0.001, so pixels with no text
-    // keep the destination content.
+    // The shader writes final pixels from the snapshot. Discard alpha below .001
+    // to preserve the destination where no text was captured.
     const float blendFactor[4] = {0, 0, 0, 0};
     s_Context->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
 
-    // Bind captured nametag (t0) and backbuffer snapshot (t1)
     ID3D11ShaderResourceView* srvs[2] = {s_SRV_Divide.Get(), s_SRV_Snapshot.Get()};
     s_Context->PSSetShaderResources(0, 2, srvs);
 
-    // Update strength constant buffer
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (SUCCEEDED(s_Context->Map(s_DivideCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
     {
@@ -883,11 +835,9 @@ void EndDivideAndComposite(const ImDrawList* /*dl*/, const ImDrawCmd* /*cmd*/)
     s_Context->PSSetConstantBuffers(0, 1, &cb);
     DrawFullscreenTriangle();
 
-    // Unbind SRVs
     ID3D11ShaderResourceView* nullSRVs[2] = {nullptr, nullptr};
     s_Context->PSSetShaderResources(0, 2, nullSRVs);
 
-    // Clean up saved state refs
     s_DivideSavedRTV.Reset();
     s_DivideSavedDSV.Reset();
 }
