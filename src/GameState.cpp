@@ -6,6 +6,11 @@ namespace GameState
 {
 namespace
 {
+/**
+ * @fn bool IsWorldReady()
+ * @brief Check the game-thread world and menu gates shared by plates and captures.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 bool IsWorldReady()
 {
     auto* main = RE::Main::GetSingleton();
@@ -74,8 +79,7 @@ bool CanDrawOverlay()
         return false;
     }
 
-    // Labels hide during combat so they cannot reveal enemy positions. Deck is a
-    // key-triggered capture, so it stops at the lighter IsWorldReady gate.
+    // Hide labels in combat to avoid revealing enemy positions; card captures remain available.
     const auto* player = RE::PlayerCharacter::GetSingleton();
     return player && !player->IsInCombat();
 }
