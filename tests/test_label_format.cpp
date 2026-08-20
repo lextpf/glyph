@@ -1,25 +1,12 @@
-// Unit tests for the contextual nameplate label/token system.
-//
-// Per CLAUDE.md, tests deliberately re-implement the logic under test
-// (RE::Actor / CommonLibSSE / ImGui cannot link in the test harness), so the
-// fixtures below mirror the production code in:
-//   - src/RendererSnapshot.cpp   -- ClassifyDelta
-//   - src/RendererLayout.cpp     -- FormatString, LabelFor
-//   - src/RendererInternal.hpp   -- RelationshipKind / LevelDelta / CreatureKind,
-//                                   ActorLabelContext
-//
-// This mirror goes stale silently. When you change either side, update the
-// other in the same commit.
+// keep these mirrors in sync with ClassifyDelta in RendererSnapshot.cpp and
+// FormatString, LabelFor, and label types in RendererLayout.cpp and RendererInternal.hpp.
+// the harness cannot link game code.
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <string>
 #include <string_view>
-
-// ============================================================================
-// Mirrored enums and label table
-// ============================================================================
 
 enum class RelationshipKind : std::uint8_t
 {
@@ -75,10 +62,6 @@ struct ActorLabelContext
     std::uint32_t formID = 0;
 };
 
-// ============================================================================
-// ClassifyDelta -- mirrors RendererSnapshot.cpp
-// ============================================================================
-
 static LevelDelta ClassifyDelta(
     int actorLv, int playerLv, int weakAtOrBelow, int strongAtOrAbove, int deadlyAtOrAbove)
 {
@@ -91,10 +74,6 @@ static LevelDelta ClassifyDelta(
         return LevelDelta::Weak;
     return LevelDelta::Even;
 }
-
-// ============================================================================
-// LabelFor -- mirrors RendererLayout.cpp
-// ============================================================================
 
 static std::string_view LabelFor(RelationshipKind r, const LabelTokens& lbl)
 {
@@ -146,10 +125,6 @@ static std::string_view LabelFor(CreatureKind k, const LabelTokens& lbl)
     return {};
 }
 
-// ============================================================================
-// FormatString -- mirrors RendererLayout.cpp
-// ============================================================================
-
 static std::string FormatString(const std::string& fmt, const ActorLabelContext& ctx)
 {
     std::string result;
@@ -195,10 +170,6 @@ static std::string FormatString(const std::string& fmt, const ActorLabelContext&
     }
     return result;
 }
-
-// ============================================================================
-// Tests: ClassifyDelta
-// ============================================================================
 
 TEST(ClassifyDeltaTest, DefaultsEvenAtPlayerLevel)
 {
@@ -247,7 +218,6 @@ TEST(ClassifyDeltaTest, FarBelowIsWeak)
 
 TEST(ClassifyDeltaTest, CustomThresholds)
 {
-    // User changes Strong to +3 and Deadly to +6.
     EXPECT_EQ(ClassifyDelta(12, 10, -5, 3, 6), LevelDelta::Even);    // delta = +2 -> Even
     EXPECT_EQ(ClassifyDelta(13, 10, -5, 3, 6), LevelDelta::Strong);  // delta = +3 -> Strong
     EXPECT_EQ(ClassifyDelta(16, 10, -5, 3, 6), LevelDelta::Deadly);  // delta = +6 -> Deadly
@@ -255,15 +225,10 @@ TEST(ClassifyDeltaTest, CustomThresholds)
 
 TEST(ClassifyDeltaTest, PlayerLevelOneEdge)
 {
-    // Brand-new player level 1.  Most enemies are "Strong" or worse.
     EXPECT_EQ(ClassifyDelta(1, 1, -5, 5, 10), LevelDelta::Even);
     EXPECT_EQ(ClassifyDelta(6, 1, -5, 5, 10), LevelDelta::Strong);
     EXPECT_EQ(ClassifyDelta(11, 1, -5, 5, 10), LevelDelta::Deadly);
 }
-
-// ============================================================================
-// Tests: LabelFor (resolution)
-// ============================================================================
 
 TEST(LabelForTest, RelationshipDefaults)
 {
@@ -304,10 +269,6 @@ TEST(LabelForTest, OverrideLabels)
     EXPECT_EQ(LabelFor(CreatureKind::Dragon, lbl), "Wyrm");
 }
 
-// ============================================================================
-// Tests: FormatString -- token substitution
-// ============================================================================
-
 static ActorLabelContext MakeCtx(std::string_view name, int level)
 {
     ActorLabelContext ctx;
@@ -336,7 +297,6 @@ TEST(FormatStringTest, LevelOnly)
 TEST(FormatStringTest, TitleNullExpandsLiterally)
 {
     auto ctx = MakeCtx("Lydia", 12);  // title = nullptr
-    // %t falls through to literal output when title is null.
     EXPECT_EQ(FormatString("%t", ctx), "%t");
 }
 
@@ -387,15 +347,13 @@ TEST(FormatStringTest, AllSixTokensInOneString)
 
 TEST(FormatStringTest, LiteralPercentPreserved)
 {
-    // A `%` followed by an unrecognized char passes through unchanged.
     auto ctx = MakeCtx("X", 1);
     EXPECT_EQ(FormatString("%n is at 100%z", ctx), "X is at 100%z");
 }
 
 TEST(FormatStringTest, NoSubstitutionInResult)
 {
-    // If the name itself contains "%l", the literal substring must NOT be
-    // re-expanded -- the FormatString loop is single-pass.
+    // substituted text must not expand recursively.
     auto ctx = MakeCtx("%l", 7);
     EXPECT_EQ(FormatString("%n", ctx), "%l");
 }
@@ -421,7 +379,6 @@ TEST(FormatStringTest, OnlyLiterals)
 
 TEST(FormatStringTest, TrailingPercent)
 {
-    // A trailing `%` with no following character is preserved literally.
     auto ctx = MakeCtx("Name", 5);
     EXPECT_EQ(FormatString("100%", ctx), "100%");
 }
