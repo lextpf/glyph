@@ -17,6 +17,11 @@ namespace
 {
 using Microsoft::WRL::ComPtr;
 
+/**
+ * @fn std::string HResultText(const char* action, HRESULT hr)
+ * @brief Format a diagnostic with an uppercase hexadecimal HRESULT.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::string HResultText(const char* action, HRESULT hr)
 {
     std::ostringstream out;
@@ -25,19 +30,27 @@ std::string HResultText(const char* action, HRESULT hr)
     return out.str();
 }
 
-// Scoped COM apartment. CoUninitialize runs only when CoInitializeEx succeeded, which keeps
-// the reference count balanced in both success shapes: S_OK for a fresh apartment and S_FALSE
-// for a thread already in a multithreaded one. A caller that is already in a single-threaded
-// apartment gets RPC_E_CHANGED_MODE, a failure, so its apartment is left untouched.
-// EncodeBgraPng therefore accepts that one HRESULT as a usable state.
+// Balances S_OK and S_FALSE; RPC_E_CHANGED_MODE leaves the existing apartment intact.
 class ComApartment
 {
 public:
+    /**
+     * @fn ComApartment()
+     * @brief Request a multithreaded COM apartment on the calling thread.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ComApartment()
         : m_Result(CoInitializeEx(nullptr, COINIT_MULTITHREADED))
     {
     }
 
+    /**
+     * @fn ~ComApartment()
+     * @brief Balance successful COM initialization on the calling thread.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * An existing apartment reported by RPC_E_CHANGED_MODE remains unchanged.
+     */
     ~ComApartment()
     {
         if (SUCCEEDED(m_Result))
@@ -46,6 +59,11 @@ public:
         }
     }
 
+    /**
+     * @fn HRESULT Result() const
+     * @brief Read the original COM initialization result.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     [[nodiscard]] HRESULT Result() const { return m_Result; }
 
 private:
@@ -87,8 +105,7 @@ bool EncodeBgraPng(const std::filesystem::path& path,
 
     HRESULT hr = S_OK;
     {
-        // Keep every object that can hold the destination file open inside this
-        // scope so a failed encode can remove the partial file below.
+        // Release file handles before removing a failed output.
         ComPtr<IWICImagingFactory> factory;
         hr = CoCreateInstance(CLSID_WICImagingFactory,
                               nullptr,
@@ -132,9 +149,7 @@ bool EncodeBgraPng(const std::filesystem::path& path,
             hr = frame->SetResolution(96.0, 96.0);
         }
 
-        // SetPixelFormat is a negotiation: WIC writes back the closest format the PNG encoder
-        // supports, and WritePixels then expects the pixels in that format. Fail instead, so a
-        // card is never written with shifted channels or a dropped alpha.
+        // WIC can change the requested format; reject it to preserve channels and alpha.
         WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
         if (SUCCEEDED(hr))
         {
@@ -146,7 +161,7 @@ bool EncodeBgraPng(const std::filesystem::path& path,
         }
         if (SUCCEEDED(hr))
         {
-            // WritePixels takes a non-const buffer but only reads from it.
+            // WIC reads this buffer despite the mutable pointer type.
             hr = frame->WritePixels(static_cast<UINT>(height),
                                     static_cast<UINT>(strideBytes),
                                     static_cast<UINT>(bgra.size()),
