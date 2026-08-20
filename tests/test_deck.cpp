@@ -1,13 +1,3 @@
-// Unit tests for the Deck card layout helpers and PNG writer.
-//
-// This suite tests the production code directly. CMakeLists.txt compiles
-// src/DeckUtils.cpp and src/DeckPng.cpp into the glyph_test_deck target, so the
-// functions under test are the shipped ones, not copies. Nothing here is mirrored.
-//
-// DeckUtils and DeckPng were factored out of Deck.cpp for exactly this reason:
-// they carry no CommonLibSSE, RE:: or ImGui dependency, so they link in the
-// harness. Prefer extending them over adding a mirror.
-
 #include "DeckPng.hpp"
 #include "DeckUtils.hpp"
 
@@ -491,5 +481,30 @@ TEST(DeckFilenameTest, LeavesRoomForSuffixAndPngExtension)
     const std::string result = Deck::SanitizeFilenameStem(longName);
     EXPECT_EQ(result.size(), 220U);
     EXPECT_EQ(result, std::string(220, 'A'));
+}
+
+TEST(DeckBadgeStripTest, FitReturnsOneWhenTheStripFits)
+{
+    EXPECT_FLOAT_EQ(Deck::FitBadgeStrip(7, 58.0f, 15.0f, 513.0f), 1.0f);
+    EXPECT_FLOAT_EQ(Deck::FitBadgeStrip(1, 58.0f, 15.0f, 513.0f), 1.0f);
+    EXPECT_FLOAT_EQ(Deck::FitBadgeStrip(0, 58.0f, 15.0f, 513.0f), 1.0f);
+}
+
+TEST(DeckBadgeStripTest, FitShrinksAnOverlongStripToTheBudget)
+{
+    const float fit = Deck::FitBadgeStrip(10, 58.0f, 15.0f, 513.0f);
+    EXPECT_NEAR(fit, 513.0f / 715.0f, .0001f);
+    const float total = (58.0f * 10.0f + 15.0f * 9.0f) * fit;
+    EXPECT_LE(total, 513.0f + .001f);
+    EXPECT_LT(Deck::FitBadgeStrip(8, 58.0f, 15.0f, 513.0f), 1.0f);
+}
+
+TEST(DeckBadgeStripTest, FitIsOneForDegenerateInputs)
+{
+    EXPECT_FLOAT_EQ(Deck::FitBadgeStrip(10, 58.0f, 15.0f, .0f), 1.0f);
+    EXPECT_FLOAT_EQ(Deck::FitBadgeStrip(10, .0f, .0f, 513.0f), 1.0f);
+    EXPECT_FLOAT_EQ(Deck::FitBadgeStrip(-3, 58.0f, 15.0f, 513.0f), 1.0f);
+    EXPECT_FLOAT_EQ(Deck::FitBadgeStrip(10, std::numeric_limits<float>::infinity(), 15.0f, 513.0f),
+                    1.0f);
 }
 }  // namespace
