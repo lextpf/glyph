@@ -9,24 +9,30 @@ namespace Deck
 {
 namespace
 {
-// Padding added on each side of the projected head-to-feet box, as a fraction of the longer
-// of the two projected spans. The same span pads both axes, so the padding stays proportional
-// to the subject even when the projection is nearly horizontal or nearly vertical.
+// Equal padding on both axes keeps the margin proportional for any projected slope.
 constexpr float PORTRAIT_PADDING = .125f;
 
-// Leaves room inside Windows' 255-character component limit for
-// "-FFFFFFFF-YYYYMMDD-HHMMSS-999.png".
+// Reserves space within 255 bytes for "-FFFFFFFF-YYYYMMDD-HHMMSS-999.png".
 constexpr std::size_t MAX_FILENAME_STEM_LENGTH = 220;
 
+/**
+ * @fn bool IsFinitePositive(float value) noexcept
+ * @brief Reject non-finite and non-positive dimensions.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 bool IsFinitePositive(float value) noexcept
 {
     return std::isfinite(value) && value > .0f;
 }
 
-// Largest rectangle with the requested aspect that fits inside the source, centered on it.
-// The aspect comparison uses a relative float-epsilon tolerance: an aspect the caller
-// derived from the source dimensions must yield the whole source, not a crop that is one
-// rounding step short on one axis.
+/**
+ * @fn PortraitCrop CenteredAspectCrop(float sourceWidth, float sourceHeight, float desiredAspect)
+ *     noexcept
+ * @brief Fit the largest centered crop with the requested aspect.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Tolerate float rounding so the source aspect returns the whole image.
+ */
 PortraitCrop CenteredAspectCrop(float sourceWidth, float sourceHeight, float desiredAspect) noexcept
 {
     const double width = sourceWidth;
@@ -63,6 +69,11 @@ PortraitCrop CenteredAspectCrop(float sourceWidth, float sourceHeight, float des
             static_cast<float>(cropHeight)};
 }
 
+/**
+ * @fn bool IsUnsafeFilenameByte(unsigned char value) noexcept
+ * @brief Identify bytes that cannot remain in the ASCII filename stem.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 bool IsUnsafeFilenameByte(unsigned char value) noexcept
 {
     if (value < 32 || value >= 127)
@@ -87,6 +98,11 @@ bool IsUnsafeFilenameByte(unsigned char value) noexcept
     }
 }
 
+/**
+ * @fn char AsciiUpper(char value) noexcept
+ * @brief Uppercase an ASCII byte without locale-dependent conversion.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 char AsciiUpper(char value) noexcept
 {
     if (value >= 'a' && value <= 'z')
@@ -96,9 +112,14 @@ char AsciiUpper(char value) noexcept
     return value;
 }
 
+/**
+ * @fn bool IsReservedDeviceName(std::string_view value) noexcept
+ * @brief Recognize Windows device names before a filename extension.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 bool IsReservedDeviceName(std::string_view value) noexcept
 {
-    // Windows also reserves device names when followed by an extension.
+    // Device names remain reserved with extensions.
     const std::size_t dot = value.find('.');
     std::size_t length = dot == std::string_view::npos ? value.size() : dot;
     while (length > 0 && (value[length - 1] == ' ' || value[length - 1] == '.'))
@@ -126,6 +147,11 @@ bool IsReservedDeviceName(std::string_view value) noexcept
     return false;
 }
 
+/**
+ * @fn void TrimFilenameEnding(std::string& value)
+ * @brief Remove trailing spaces and periods from a filename stem.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 void TrimFilenameEnding(std::string& value)
 {
     while (!value.empty() && (value.back() == ' ' || value.back() == '.'))
@@ -143,8 +169,7 @@ Rarity RarityFromTier(int tierIndex, int tierCount) noexcept
     }
 
     const int clampedIndex = std::clamp(tierIndex, 0, tierCount - 1);
-    // Five half-open bands across [0, 1], with the last endpoint clamped back
-    // from the mathematical band 5 to Legendary (band 4).
+    // Clamp the upper endpoint from band 5 to Legendary (band 4).
     const auto scaled = static_cast<std::int64_t>(clampedIndex) * 5;
     const int band = std::min(static_cast<int>(scaled / (tierCount - 1)), 4);
     return static_cast<Rarity>(band);
@@ -161,8 +186,6 @@ Rarity RarityFromActor(const ActorRarityProfile& profile) noexcept
     switch (profile.archetype)
     {
         case RarityArchetype::Dragon:
-            // An override, not a bonus: the level score is discarded so that a low-level
-            // dragon is still Legendary.
             rank = 4;
             break;
         case RarityArchetype::Undead:
@@ -220,8 +243,7 @@ int TreatmentTierForRarity(Rarity rarity, int actorTierIndex, int tierCount) noe
     }
     if (first < 0)
     {
-        // A ladder shorter than five tiers leaves bands empty. Place the card on the tier
-        // that sits at the same proportion of the ladder as the rank does of the bands.
+        // Short ladders leave empty bands; use the proportional tier.
         const float normalized = static_cast<float>(rarityRank) / 4.0f;
         return std::clamp(
             static_cast<int>(std::lround(normalized * (tierCount - 1))), 0, tierCount - 1);
@@ -253,8 +275,7 @@ bool CopyRgbaToBgra(const std::uint8_t* source,
 
     const std::size_t rowBytes = static_cast<std::size_t>(width) * 4;
     const std::size_t rowCount = static_cast<std::size_t>(height);
-    // Two separate products can overflow: the packed destination size, and the offset of the
-    // last source row, which uses the larger sourceRowPitch instead of rowBytes.
+    // Check packed size and padded source offsets separately for overflow.
     if (sourceRowPitch < rowBytes ||
         rowCount > std::numeric_limits<std::size_t>::max() / rowBytes ||
         (rowCount - 1) > std::numeric_limits<std::size_t>::max() / sourceRowPitch)
@@ -351,7 +372,6 @@ PortraitCrop ComputePortraitCrop(float sourceWidth,
         cropWidth = cropHeight * aspect;
     }
 
-    // Preserve the requested aspect while fitting the crop into the source.
     const double fitScale = std::min({1.0,
                                       static_cast<double>(sourceWidth) / cropWidth,
                                       static_cast<double>(sourceHeight) / cropHeight});
@@ -379,8 +399,7 @@ PortraitCrop ComputePortraitCrop(float sourceWidth,
 
 float DeterministicPhase(std::uint32_t formID) noexcept
 {
-    // A small integer finalizer avoids visibly related phases for neighboring
-    // dynamic FormIDs. The upper 24 bits convert exactly to a float in [0, 1).
+    // Decorrelate adjacent FormIDs; the upper 24 bits convert exactly to float.
     std::uint32_t hash = formID;
     hash ^= hash >> 16;
     hash *= 0x7FEB352DU;
@@ -433,5 +452,19 @@ std::string SanitizeFilenameStem(std::string_view value)
         }
     }
     return result;
+}
+
+float FitBadgeStrip(int count, float icon, float gap, float available) noexcept
+{
+    if (count <= 0)
+    {
+        return 1.0f;
+    }
+    const float total = icon * static_cast<float>(count) + gap * static_cast<float>(count - 1);
+    if (!IsFinitePositive(total) || !IsFinitePositive(available))
+    {
+        return 1.0f;
+    }
+    return total <= available ? 1.0f : available / total;
 }
 }  // namespace Deck
