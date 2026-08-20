@@ -1,29 +1,16 @@
-"""Normalize Ninja's clang-cl compile_commands.json for clang-tidy.
+"""
+@brief Rewrite the Ninja compile database for clang-cl driver mode.
+@author Alex (<https://github.com/lextpf>)
 
-The Ninja generator + clang-cl combo emits a hybrid of gcc-style and
-MSVC-style flags. clang-tidy forced into `--driver-mode=cl` (which we
-need so it accepts `/MT`, `/EHa`, and friends) silently drops gcc-only
-flags like `-isystem` and `-std=gnu++NN`, which loses our vcpkg include
-paths and leaves the C++ standard unset.
+Convert GCC-style flags to the forms used by the clang-cl analysis driver.
+Project include paths retain diagnostics; recognized external paths become system includes.
+The optional path defaults to `build-cdb/compile_commands.json`; writes are in place.
 
-This pass rewrites the JSON in-place:
-
-  -isystem <path>          ->  -imsvc <path>      MSVC equivalent of -isystem.
-  -std=gnu++NN | c++NN     ->  /std:c++latest     clang-cl C++ standard flag.
-  -I<third-party-path>     ->  -imsvc <path>      Marks external/, _deps/,
-                                                  and vcpkg_installed/ paths
-                                                  as system. Suppresses
-                                                  clang-tidy diagnostics
-                                                  from headers we do not own
-                                                  (CommonLibSSE-NG, vcpkg).
-
-Project-owned `-I` paths (e.g. -Isrc) are left untouched so first-party
-warnings still surface. Other gcc-style flags (-D, -Xclang, -O3,
--DNDEBUG) are accepted by clang-cl as-is.
-
-Usage:
-    python scripts/_normalize_compile_db.py            # build-cdb/compile_commands.json
-    python scripts/_normalize_compile_db.py <path>     # custom path
+| Input                        | Output           |
+|------------------------------|------------------|
+| `-isystem path`              | `-imsvc path`    |
+| `-std=gnu++NN`, `-std=c++NN` | `/std:c++latest` |
+| `-Ipath` in external code    | `-imsvc path`    |
 """
 
 import json
@@ -47,19 +34,36 @@ _THIRD_PARTY_MARKERS = (
 
 
 def _is_third_party_include(path: str) -> bool:
-    """Heuristic: does this include path live in a vendored / fetched tree?"""
+    """
+    @fn _is_third_party_include(path: str) -> bool
+    @brief Recognize vendored paths by case-sensitive directory markers.
+    @author Alex (<https://github.com/lextpf>)
+    """
     if any(marker in path for marker in _THIRD_PARTY_MARKERS):
         return True
-    # Cover the case where the path ends at the marker directory itself,
-    # e.g. -IC:/.../external without a trailing slash.
+    # Also accept the marker directory without a trailing separator.
     return path.endswith(("/external", "\\external"))
 
 
 def normalize_command_string(cmd: str) -> tuple[str, int]:
-    """Return (new_command, change_count). Operates on the joined string form."""
+    """
+    @fn normalize_command_string(cmd: str) -> tuple[str, int]
+    @brief Normalize a joined compiler command.
+    @author Alex (<https://github.com/lextpf>)
+
+    Apply literal pattern substitutions without shell tokenization. Include paths must
+    follow `-I` without whitespace; the path pattern stops at whitespace.
+
+    @return The command and number of flag replacements.
+    """
     changes = 0
 
     def replace_isystem(_m: re.Match) -> str:
+        """
+        @fn replace_isystem(_m: re.Match) -> str
+        @brief Replace one system-include flag and increment the enclosing change count.
+        @author Alex (<https://github.com/lextpf>)
+        """
         nonlocal changes
         changes += 1
         return "-imsvc "
@@ -67,6 +71,11 @@ def normalize_command_string(cmd: str) -> tuple[str, int]:
     cmd = _ISYSTEM_STRING_RE.sub(replace_isystem, cmd)
 
     def replace_std(_m: re.Match) -> str:
+        """
+        @fn replace_std(_m: re.Match) -> str
+        @brief Select the latest C++ standard and increment the enclosing change count.
+        @author Alex (<https://github.com/lextpf>)
+        """
         nonlocal changes
         changes += 1
         return "/std:c++latest"
@@ -74,6 +83,11 @@ def normalize_command_string(cmd: str) -> tuple[str, int]:
     cmd = _STD_STRING_RE.sub(replace_std, cmd)
 
     def replace_include(m: re.Match) -> str:
+        """
+        @fn replace_include(m: re.Match) -> str
+        @brief Convert a recognized external include and count the replacement.
+        @author Alex (<https://github.com/lextpf>)
+        """
         nonlocal changes
         path = m.group(1)
         if _is_third_party_include(path):
@@ -86,7 +100,16 @@ def normalize_command_string(cmd: str) -> tuple[str, int]:
 
 
 def normalize_arguments_list(args: list[str]) -> tuple[list[str], int]:
-    """Return (new_args, change_count). Operates on the arguments-array form."""
+    """
+    @fn normalize_arguments_list(args: list[str]) -> tuple[list[str], int]
+    @brief Normalize compiler argument tokens into a new list.
+    @author Alex (<https://github.com/lextpf>)
+
+    A separate `-isystem` token consumes its following path. Convert joined `-Ipath`
+    for recognized external directories; leave separate `-I`, `path` tokens unchanged.
+
+    @return The argument list and number of flag replacements.
+    """
     out: list[str] = []
     changes = 0
     i = 0
@@ -117,6 +140,16 @@ def normalize_arguments_list(args: list[str]) -> tuple[list[str], int]:
 
 
 def main() -> int:
+    """
+    @fn main() -> int
+    @brief Normalize the selected compile database in place.
+    @author Alex (<https://github.com/lextpf>)
+
+    Prefer `command` if an entry also contains `arguments`. Rewrite the JSON file even
+    when no flag changes, using two-space indentation.
+
+    @return Zero after writing the database, or one if the input path does not exist.
+    """
     cdb_path = Path(sys.argv[1] if len(sys.argv) > 1 else "build-cdb/compile_commands.json")
     if not cdb_path.exists():
         print(f"error: {cdb_path} not found", file=sys.stderr)
