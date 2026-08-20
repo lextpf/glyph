@@ -1,11 +1,5 @@
-// Unit tests for glyph settings parsing using Google Test.
-//
-// Tests INI parsing logic: tier definitions, color parsing, effect type
-// parsing, and format string handling.
-//
-// The harness links no game code, so the parsing helpers below MIRROR
-// src/Settings.cpp instead of calling it. A mirror goes stale silently, so
-// change the copy here in the same edit that changes the production parser.
+// the harness cannot link Settings.cpp. update these parser and validation mirrors
+// with the production code.
 
 #include "../src/Settings.hpp"
 
@@ -22,10 +16,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-// ============================================================================
-// Re-implement parsing helpers (same logic as Settings.cpp)
-// ============================================================================
 
 static std::string Trim(const std::string& str)
 {
@@ -132,20 +122,17 @@ static EffectType ParseEffectType(const std::string& str)
         return EffectType::Pulse;
     if (s == "Electric")
         return EffectType::Electric;
-    return EffectType::Gradient;  // Default
+    return EffectType::Gradient;
 }
 
 struct Segment
 {
     std::string format;
     bool useLevelFont = false;
-    bool dropIfBlank = false;  // Set by trailing "?" after closing quote.
+    bool dropIfBlank = false;  // trailing "?" after the closing quote
 };
 
-// Mirrors ParseQuotedSegments in Settings.cpp. `forceLevelFont` is the
-// InfoFormat-row mode; when false (Format-row), title segments (`%t`) are
-// extracted into `titleFormat` and other segments use level font iff they
-// contain `%l`.
+// mirrors ParseQuotedSegments in Settings.cpp. forceLevelFont keeps %t inline for InfoFormat.
 static std::vector<Segment> ParseFormat(const std::string& val,
                                         std::string& titleFormat,
                                         bool forceLevelFont = false)
@@ -212,10 +199,6 @@ static std::vector<Segment> ParseFormat(const std::string& val,
     return segments;
 }
 
-// ============================================================================
-// Tests: Trim
-// ============================================================================
-
 TEST(TrimTest, RemovesLeadingSpaces)
 {
     EXPECT_EQ(Trim("   hello"), "hello");
@@ -247,10 +230,6 @@ TEST(TrimTest, HandlesEmptyString)
     EXPECT_TRUE(result.empty() || result == "");
 }
 
-// ============================================================================
-// Tests: ParseFloat
-// ============================================================================
-
 TEST(ParseFloatTest, Valid)
 {
     EXPECT_NEAR(ParseFloat("3.14", 0.0f), 3.14f, 0.001f);
@@ -276,10 +255,6 @@ TEST(ParseFloatTest, EmptyReturnsDefault)
     EXPECT_NEAR(ParseFloat("", 99.0f), 99.0f, 0.001f);
 }
 
-// ============================================================================
-// Tests: ParseInt
-// ============================================================================
-
 TEST(ParseIntTest, Valid)
 {
     EXPECT_EQ(ParseInt("42", 0), 42);
@@ -300,10 +275,6 @@ TEST(ParseIntTest, FloatTruncates)
     // stoi stops at decimal point
     EXPECT_EQ(ParseInt("3.14", 0), 3);
 }
-
-// ============================================================================
-// Tests: ParseColor3
-// ============================================================================
 
 TEST(ParseColor3Test, RGB)
 {
@@ -328,11 +299,10 @@ TEST(ParseColor3Test, PartialDefaults)
     float color[3] = {0, 0, 0};
     ParseColor3("0.5", color);
     EXPECT_NEAR(color[0], 0.5f, 0.01f);
-    // Only first value parsed, others remain 0
+    // missing channels retain zero
 }
 
-// Regression guard on the new always-on badge slot color defaults (these
-// strings live in Settings.cpp's binding table; a typo would ship a bad tint).
+// match the badge color strings in the Settings.cpp binding table.
 TEST(ParseColor3Test, NewBadgeSlotDefaults)
 {
     float muted[3] = {0, 0, 0};
@@ -348,11 +318,7 @@ TEST(ParseColor3Test, NewBadgeSlotDefaults)
     EXPECT_NEAR(combat[2], 0.30f, 0.01f);
 }
 
-// Mirror of Settings.cpp ParseEffectString's positional-parameter splitting
-// (post-fix). The bug was that an empty comma-separated field did `continue`
-// without advancing the index, collapsing later values into earlier slots. The
-// fix advances the index on every field so an empty field keeps its slot (the
-// param stays at its default).
+// mirrors ParseEffectString in Settings.cpp. empty fields retain their positional slots.
 static void ParseEffectParams(const std::string& params, float out[5])
 {
     std::istringstream paramStream(params);
@@ -368,10 +334,6 @@ static void ParseEffectParams(const std::string& params, float out[5])
         paramIdx++;
     }
 }
-
-// ============================================================================
-// Tests: ParseEffectParams (positional slots survive empty fields)
-// ============================================================================
 
 TEST(ParseEffectParamsTest, EmptyFieldPreservesPositionalSlot)
 {
@@ -408,10 +370,6 @@ TEST(ParseEffectParamsTest, AllFieldsPopulated)
     EXPECT_NEAR(out[3], 4.0f, 0.0001f);
     EXPECT_NEAR(out[4], 5.0f, 0.0001f);
 }
-
-// ============================================================================
-// Tests: ParseEffectType
-// ============================================================================
 
 TEST(ParseEffectTypeTest, None)
 {
@@ -489,10 +447,6 @@ TEST(ParseEffectTypeTest, UnknownDefaultsToGradient)
     EXPECT_EQ(ParseEffectType(""), EffectType::Gradient);
 }
 
-// ============================================================================
-// Tests: ParseFormat
-// ============================================================================
-
 TEST(ParseFormatTest, SimpleName)
 {
     std::string title;
@@ -517,7 +471,7 @@ TEST(ParseFormatTest, ExtractsTitle)
 {
     std::string title;
     auto segs = ParseFormat("\"%t\" \"%n\"", title);
-    ASSERT_EQ(segs.size(), 1u);  // Only %n segment
+    ASSERT_EQ(segs.size(), 1u);
     EXPECT_EQ(title, "%t");
 }
 
@@ -568,9 +522,7 @@ TEST(ParseFormatTest, MultipleDropIfBlankSegments)
 
 TEST(ParseFormatTest, QuestionMarkAfterWhitespaceIsLiteral)
 {
-    // The "?" must be immediately adjacent to the closing quote.
-    // "?" separated from the close by whitespace is ignored (parser eats it
-    // along with other non-quote, non-special chars outside quotes).
+    // whitespace breaks the closing quote / question mark pair.
     std::string title;
     auto segs = ParseFormat("\"%n\" ? \"%r\"", title);
     ASSERT_EQ(segs.size(), 2u);
@@ -580,7 +532,6 @@ TEST(ParseFormatTest, QuestionMarkAfterWhitespaceIsLiteral)
 
 TEST(ParseFormatTest, BackToBackDropSegments)
 {
-    // "%n"?"%r"? -- no whitespace between segments must still work.
     std::string title;
     auto segs = ParseFormat("\"%n\"?\"%r\"?", title);
     ASSERT_EQ(segs.size(), 2u);
@@ -590,8 +541,7 @@ TEST(ParseFormatTest, BackToBackDropSegments)
 
 TEST(ParseFormatTest, TitleSegmentNotMarkedDroppable)
 {
-    // "?" after a title-bearing segment must not affect the display vector
-    // (title is hoisted, no segment is pushed).
+    // title segments do not enter the display vector.
     std::string title;
     auto segs = ParseFormat("\"%t\"? \"%n\"", title);
     EXPECT_EQ(title, "%t");
@@ -601,18 +551,12 @@ TEST(ParseFormatTest, TitleSegmentNotMarkedDroppable)
 
 TEST(ParseFormatTest, EscapedQuotesDoNotTriggerJustClosed)
 {
-    // The closing quote of a segment containing an escaped \" must still
-    // accept a trailing "?" -- escapes inside quotes don't break tracking.
     std::string title;
     auto segs = ParseFormat("\"\\\"hi\\\"\"?", title);
     ASSERT_EQ(segs.size(), 1u);
     EXPECT_EQ(segs[0].format, "\"hi\"");
     EXPECT_TRUE(segs[0].dropIfBlank);
 }
-
-// ============================================================================
-// Tests: ParseFormat -- InfoFormat mode (forceLevelFont = true)
-// ============================================================================
 
 TEST(InfoFormatTest, ForceLevelFontOverridesAutoDetect)
 {
@@ -626,8 +570,6 @@ TEST(InfoFormatTest, ForceLevelFontOverridesAutoDetect)
 
 TEST(InfoFormatTest, NoTitleExtractionInInfoMode)
 {
-    // In InfoFormat mode, segments with %t are NOT hoisted to title;
-    // they render inline like any other segment.
     std::string title;
     auto segs = ParseFormat("\"%t\" \"%r\"", title, /*forceLevelFont*/ true);
     ASSERT_EQ(segs.size(), 2u);
@@ -647,14 +589,7 @@ TEST(InfoFormatTest, DropIfBlankStillWorks)
     }
 }
 
-// ============================================================================
-// Focus Target Expanded Nameplate settings
-// ============================================================================
-//
-// Mirrors Settings::FocusSettings + the clamping rules registered for it in
-// Settings.cpp's kSettings binding table.  Production code uses a descriptor
-// table for clamping; here we re-implement the same rules so we can validate
-// them without linking the SKSE plugin.
+// mirrors Settings::FocusSettings and its kSettings validation rules in Settings.cpp.
 
 namespace focus_test
 {
@@ -669,7 +604,6 @@ struct FocusSettings
     bool IgnoreOccluded = true;
 };
 
-// Apply the same per-field validation rules as kSettings in Settings.cpp.
 static void ClampFocus(FocusSettings& f)
 {
     f.ConeAngleDegrees = std::clamp(f.ConeAngleDegrees, 0.5f, 45.0f);
@@ -681,7 +615,6 @@ static void ClampFocus(FocusSettings& f)
     }
 }
 
-// Mirror of Settings.cpp's ParseBool -- accept true/false/1/0/yes/no.
 static bool ParseBool(const std::string& s)
 {
     std::string lower;
@@ -764,7 +697,7 @@ TEST(FocusSettings, ClampSettleTimeAboveMax)
 
 TEST(FocusSettings, SettleTimeZeroAllowed)
 {
-    // SettleTime = 0 is a legitimate "instant focus" mode -- must not be clamped up.
+    // zero selects instant focus.
     focus_test::FocusSettings f;
     f.SettleTime = 0.0f;
     focus_test::ClampFocus(f);
@@ -773,7 +706,7 @@ TEST(FocusSettings, SettleTimeZeroAllowed)
 
 TEST(FocusSettings, MaxDistanceZeroIsSentinel)
 {
-    // 0.0 means "reuse MaxScanDistance"; it must survive validation unchanged.
+    // zero reuses MaxScanDistance.
     focus_test::FocusSettings f;
     f.MaxDistance = 0.0f;
     focus_test::ClampFocus(f);
@@ -823,13 +756,7 @@ TEST(DisplaySettings, ActorLimitDefaultsMatchRenderDefaults)
     EXPECT_EQ(display.MaxScanActors, RenderConstants::DEFAULT_MAX_SCAN_ACTORS);
 }
 
-// ============================================================================
-// Graffito world-plane text settings
-// ============================================================================
-//
-// The settings value type is production code. The clamp helper mirrors the
-// validation rules registered in Settings.cpp's kSettings binding table; the
-// production plugin itself is not linked into this lightweight test executable.
+// the value type is shared; validation mirrors kSettings in Settings.cpp.
 
 namespace graffito_test
 {
@@ -1109,12 +1036,7 @@ TEST(GraffitoSettings, InRangeValuesPreserved)
     EXPECT_FLOAT_EQ(g.EpitaphGroundLift, 4.0f);
 }
 
-// ============================================================================
-// Soft directional drop-shadow settings
-// ============================================================================
-//
-// Mirrors the soft-shadow fields of Settings::ShadowOutlineSettings + the
-// clamping rules registered for them in Settings.cpp's kSettings binding table.
+// mirrors Settings::ShadowOutlineSettings and its kSettings validation rules.
 
 namespace soft_shadow_test
 {
@@ -1129,7 +1051,6 @@ struct SoftShadowSettings
     int Samples = 12;
 };
 
-// Apply the same per-field validation rules as kSettings in Settings.cpp.
 static void ClampSoftShadow(SoftShadowSettings& s)
 {
     s.Distance = std::clamp(s.Distance, 0.0f, 16.0f);
@@ -1211,15 +1132,7 @@ TEST(SoftShadow, InRangeValuesPreserved)
     EXPECT_EQ(s.Samples, 16);
 }
 
-// ============================================================================
-// Particle aura settings
-// ============================================================================
-//
-// Mirrors Settings::ParticleSettings defaults + the clamping rules registered
-// in Settings.cpp's kSettings binding table (the production source of truth).
-// Re-implemented here per the CLAUDE.md rule that tests mirror, not link, the
-// plugin code. Covers the premium-pass keys (depth/warmth/glow/shine) plus the
-// reconciled ParticleSize default.
+// mirrors Settings::ParticleSettings defaults and kSettings validation in Settings.cpp.
 
 namespace particle_test
 {
@@ -1229,19 +1142,18 @@ struct ParticleSettings
     bool Enabled = true;
     bool UseParticleTextures = true;
     int Count = 8;
-    float Size = 4.2f;  // visibility pass: sprites render at/above native 16px
+    float Size = 4.2f;  // sprites render at native 16px or larger
     float Speed = 1.0f;
     float Spread = 20.0f;
     float Alpha = 0.8f;
-    int BlendMode = 1;  // Screen: readable on bright scenes (visibility pass)
+    int BlendMode = 1;  // screen blend for bright scenes
     float DepthStrength = 0.7f;
     float ColorWarmth = 0.5f;
-    float GlowStrength = 0.28f;  // subdued backlight; crisp sprite owns the read
+    float GlowStrength = 0.28f;
     float GlowSize = 2.2f;
     float ShineThreshold = 0.84f;
 };
 
-// Apply the same per-field validation rules as kSettings in Settings.cpp.
 static void ClampParticle(ParticleSettings& p)
 {
     if (p.Count < 0)
@@ -1362,19 +1274,11 @@ TEST(ParticleSettings, InRangeValuesPreserved)
 
 TEST(ParticleSettings, SizeDefaultReconciled)
 {
-    // S2 reconciled INI/default/comment to 3.5; the visibility pass then
-    // raised the shared default to 4.2 so 16px sprites render at native size.
     particle_test::ParticleSettings p;
     EXPECT_FLOAT_EQ(p.Size, 4.2f);
 }
 
-// ============================================================================
-// NPC nameplate text colors
-// ============================================================================
-//
-// Mirrors Settings::NpcColorSettings defaults (the kSettings binding table
-// rows are the source of truth in production) and ClampAndValidate()'s
-// deriveColor step: start from white, ParseColor3, clamp to [0, 1].
+// mirrors Settings::NpcColorSettings defaults and ClampAndValidate color derivation.
 
 namespace npc_colors_test
 {
@@ -1388,7 +1292,6 @@ struct NpcColorSettings
     std::string TitleColorStr = "0.92, 0.93, 0.95";
 };
 
-// Mirror of ClampAndValidate's deriveColor lambda.
 static void DeriveColor(const std::string& str, float out[3])
 {
     out[0] = out[1] = out[2] = 1.0f;
@@ -1460,10 +1363,7 @@ TEST(NpcColors, MalformedStringFallsBackToWhite)
     EXPECT_FLOAT_EQ(c[2], 1.0f);
 }
 
-// ============================================================================
-// Registers -- When-token predicate parsing
-// (mirrors ParseWhenTokens in Settings.cpp; keep the logic in sync)
-// ============================================================================
+// keep in sync with ParseWhenTokens in Settings.cpp.
 
 namespace Context
 {
@@ -1571,10 +1471,7 @@ TEST(RegisterWhen, UnknownTokensAndEmptyAreIgnored)
     EXPECT_EQ(whenNot, 0u);
 }
 
-// ============================================================================
-// Registers -- profile matching / priority pick
-// (mirrors PickRegister in RendererSnapshot.cpp; keep the logic in sync)
-// ============================================================================
+// keep in sync with PickRegister in RendererSnapshot.cpp.
 
 struct TestRegister
 {
@@ -1634,11 +1531,7 @@ TEST(RegisterPick, NoMatchReturnsNone)
     EXPECT_EQ(PickRegister(Context::Night, regs), -1);
 }
 
-// ============================================================================
-// Deeds, Not Words -- faction spec parsing + priority pick
-// (mirrors ResolveFactionSpec splitting / ResolveHonorific priority logic
-//  in RendererSnapshot.cpp; keep in sync)
-// ============================================================================
+// mirrors ResolveFactionSpec splitting and ResolveHonorific priority in RendererSnapshot.cpp.
 
 struct FactionSpecParts
 {
@@ -1744,9 +1637,7 @@ TEST(HonorificPick, PlayerAndNpcOnlyFlags)
 
 TEST(RegisterPick, UnconfiguredBackfillNeverShadows)
 {
-    // [Register1] written without [Register0]: index 0 is a gap-filled
-    // default (empty When = matches everything) that must stay inert, or it
-    // would win priority ties against the user's real register.
+    // gap-filled registers must stay inert even when their empty predicate matches.
     std::vector<TestRegister> regs = {
         {0, 0, 0, false},              // phantom backfill
         {Context::Night, 0, 0, true},  // the user's register, priority 0
@@ -1783,7 +1674,7 @@ TEST(IconMutedAlpha, DefaultsToFullOpacityAndClampsToRange)
     EXPECT_NEAR(ClampRangeIcon(ParseFloat("-0.2", 1.0f), 0.0f, 1.0f), 0.0f, 1e-6f);
 }
 
-// Mirror of RendererEffects.cpp ParticleTypeWeight (per repo test convention).
+// mirrors ParticleTypeWeight in RendererEffects.cpp.
 static float ParticleTypeWeightT(const std::string& particleTypes, const char* token)
 {
     constexpr float kMinW = 0.1f, kMaxW = 10.0f;
@@ -1858,7 +1749,7 @@ TEST(ParticleTypeWeight, WeightClamped)
 }
 TEST(ParticleTypeWeight, MeanNormalizationIsIdentityForEqualWeights)
 {
-    // norm = enabledStyles / sumWeights; equal weights -> norm == 1 (legacy).
+    // norm = enabledStyles / sumWeights; equal weights give norm = 1.
     const float w[2] = {1.0f, 1.0f};
     const float norm = 2.0f / (w[0] + w[1]);
     EXPECT_FLOAT_EQ(w[0] * norm, 1.0f);
@@ -1871,9 +1762,7 @@ TEST(ParticleTypeWeight, MeanNormalizationIsIdentityForEqualWeights)
     EXPECT_FLOAT_EQ(v[2] * n3, 0.5f);
 }
 
-// Mirror of the Seat-of-Light optional-color rule added to Settings.cpp
-// ClampAndValidate: empty/whitespace string -> no value (derive at draw time);
-// non-empty -> parsed + clamped. Keep in sync with deriveOptionalColor there.
+// mirrors deriveOptionalColor in Settings.cpp. only empty values defer to draw-time derivation.
 static std::string SoL_Trim(const std::string& s)
 {
     size_t a = 0, b = s.size();
@@ -1926,9 +1815,7 @@ TEST(SeatOfLightColor, FilledStringPopulatesAndClamps)
     EXPECT_FLOAT_EQ((*over)[1], 0.0f);
 }
 
-// Mirrors the HorizontalOffset binding and scale-aware application in
-// RendererLayout.cpp. The neutral value must remain an exact opt-out for fonts
-// whose visible ink is already centered within its advance width.
+// mirrors HorizontalOffset in Settings.cpp and RendererLayout.cpp; zero disables the offset.
 static float ResolveHorizontalOffset(float configuredPixels, float textSizeScale)
 {
     configuredPixels = std::clamp(configuredPixels, -200.0f, 200.0f);
@@ -1954,8 +1841,7 @@ TEST(HorizontalOffset, ClampsExtremeConfiguration)
     EXPECT_FLOAT_EQ(ResolveHorizontalOffset(500.0f, 1.0f), 200.0f);
 }
 
-// Mirrors the Deck bindings in Settings.cpp. These bounds protect the
-// offscreen allocation while still allowing portrait and social-media sizes.
+// mirrors the Deck allocation bounds in Settings.cpp.
 static void ClampDeck(Settings::DeckSettings& deck)
 {
     deck.CardWidth = std::clamp(deck.CardWidth, 384, 2048);
