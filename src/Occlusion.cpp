@@ -43,15 +43,12 @@ bool IsBehindCamera(const RE::NiPoint3& worldPos,
     toTarget.y /= distance;
     toTarget.z /= distance;
 
-    // Below the threshold means behind the camera; the threshold sits past
-    // perpendicular, so it is not 0. See Occlusion.hpp.
     float dot =
         toTarget.x * cameraForward.x + toTarget.y * cameraForward.y + toTarget.z * cameraForward.z;
 
     return dot < Constants::BEHIND_CAMERA_DOT_THRESHOLD;
 }
 
-// Fail-open: returns true (visible) on any error, to avoid false occlusion.
 bool HasLineOfSightToActor(RE::Actor* actor)
 {
     auto* player = RE::PlayerCharacter::GetSingleton();
@@ -61,7 +58,7 @@ bool HasLineOfSightToActor(RE::Actor* actor)
     }
 
     bool losResult = true;
-    // HasLineOfSight returns success, losResult is set to true if LOS exists
+    // The return value reports query success; losResult reports visibility.
     if (player->HasLineOfSight(actor, losResult))
     {
         return losResult;
@@ -89,19 +86,16 @@ bool IsActorOccluded(RE::Actor* actor,
     RE::NiPoint3 toActor = actorWorldPos - cameraPos;
     float distance = toActor.Length();
 
-    // Very close actors are always visible
     if (distance < Constants::CLOSE_DISTANCE_THRESHOLD)
     {
         return false;
     }
 
-    // Check if actor is behind camera
     if (IsBehindCamera(actorWorldPos, cameraPos, cameraForward))
     {
         return true;
     }
 
-    // Use game's built-in line of sight check
     return !HasLineOfSightToActor(actor);
 }
 
