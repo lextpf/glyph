@@ -48,8 +48,7 @@ bool TrueHUDShowsBarFor(RE::Actor* actor)
     {
         return false;
     }
-    // Floating bars only: those sit over the actor's head, where a nameplate
-    // would stack against them. The docked boss bar does not count.
+
     return g_trueHUD->HasInfoBar(actor->GetHandle(), true);
 }
 
@@ -60,8 +59,7 @@ std::uint32_t CrosshairTargetFormID()
     {
         return 0;
     }
-    // Prefer the engine's actor-specific pick. The generic target can be a
-    // weapon, activator, or collision proxy sitting in front of the actor.
+    // Generic picks can select a weapon or collision proxy in front of the actor.
     if (const auto actorRef = pick->targetActor.get())
     {
         return actorRef->GetFormID();
