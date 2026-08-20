@@ -5,109 +5,51 @@
 /**
  * @namespace Occlusion
  * @brief Actor visibility and occlusion culling.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Occlusion
  *
- * Hides a nameplate when the game's built-in line-of-sight query fails or when the
- * actor sits behind the camera. A failed query resolves to visible, so a plate is
- * never hidden by a check that could not run.
+ * Hides a plate after a successful negative line-of-sight result or a behind-camera test.
+ * Missing inputs and failed engine queries leave the plate visible. This avoids hiding
+ * actors when a visibility check cannot run.
  *
- * ## :material-arrow-decision: Thread Affinity
+ * ### :material-arrow-decision: Thread affinity
  *
- * The function names carry no `_GameThread` / `RT` suffix, so the affinity is
- * stated here:
+ * Actor and player queries run on the game thread. The snapshot carries their result
+ * to the render thread. `GetCameraInfo` also permits the renderer's camera-only read
+ * exception; consumers accept a one-frame mismatch between camera and actor samples.
+ * `IsBehindCamera` uses only the supplied values and reads no engine state.
  *
- * - `HasLineOfSightToActor` and `IsActorOccluded` dereference `RE::Actor` and
- *   `RE::PlayerCharacter`. The game thread must call them, and it publishes the
- *   result into the snapshot for the render thread.
- * - `GetCameraInfo` and `IsBehindCamera` read camera data only and are safe from
- *   either thread. The render thread calls `GetCameraInfo` every frame for focus
- *   selection and Graffito targeting, where a torn read is a benign one-frame glitch.
- *
- * ## :material-eye-off-outline: Occlusion Pipeline
+ * ### :material-eye-off-outline: Occlusion flow
  *
  * ```mermaid
- * ---
- * config:
- *   theme: dark
- *   look: handDrawn
- * ---
  * flowchart LR
- *     classDef check fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
- *     classDef visible fill:#1a3a2a,stroke:#10b981,color:#e2e8f0
- *     classDef occluded fill:#3a1a1a,stroke:#ef4444,color:#e2e8f0
- *
- *     C[Visible]:::visible
- *     G0{Occlusion enabled and actor and player valid?}:::check
- *     G1{Camera data available?}:::check
- *
- *     G0 -->|No| C
- *     G0 -->|Yes| G1
- *     G1 -->|No| C
- *     G1 -->|Yes| A[Actor Position]:::check
- *     A --> B{Close to Camera?}
- *     B -->|Yes| C
- *     B -->|No| D{Behind Camera?}
- *     D -->|Yes| E[Occluded]:::occluded
- *     D -->|No| F{Line of Sight?}
- *     F -->|Yes| C
- *     F -->|No| E
+ *     Inputs{Enabled and inputs available?} -->|No| Visible[Visible]
+ *     Inputs -->|Yes| Near{Anchor within 100 units?}
+ *     Near -->|Yes| Visible
+ *     Near -->|No| Behind{Behind camera?}
+ *     Behind -->|Yes| Hidden[Hidden]
+ *     Behind -->|No| LOS{Successful negative LOS query?}
+ *     LOS -->|Yes| Hidden
+ *     LOS -->|No| Visible
  * ```
  *
- * ## :material-angle-acute: Behind-Camera Test
+ * The camera-to-anchor direction is normalized before its dot product with camera
+ * forward is compared to the threshold. A strict dot < -0.2 test permits about
+ * 11.5 degrees beyond the forward hemisphere and reduces flicker at screen edges.
+ * Line of sight starts at the player; distance and facing use the camera.
  *
- * **Step 1 - Direction vector.** From the camera world position $p_{cam}$ to the
- * actor world position $p_{actor}$:
- *
- * $$\vec{v} = p_{actor} - p_{cam}$$
- *
- * **Step 2 - Normalize**, so only orientation matters:
- *
- * $$\hat{d} = \frac{\vec{v}}{\|\vec{v}\|} = \frac{p_{actor} - p_{cam}}{\sqrt{v_x^2 + v_y^2 +
- * v_z^2}}$$
- *
- * **Step 3 - Dot product** against the camera unit forward vector $\hat{f}$, which is
- * the camera forward axis and not the player's facing:
- *
- * $$\hat{f} \cdot \hat{d} = f_x d_x + f_y d_y + f_z d_z = \cos\alpha$$
- *
- * where $\alpha$ is the angle between the camera's forward axis and the direction to
- * the actor. Key values:
- *
- * | $\cos\alpha$ | $\alpha$ | Meaning              |
- * |:------------:|:--------:|----------------------|
- * | $+1$         | $0$      | Directly in front    |
- * | $0$          | $90$     | Perpendicular (edge) |
- * | $-1$         | $180$    | Directly behind      |
- *
- * **Step 4 - Threshold test.** The actor counts as behind the camera when the dot
- * product falls below a threshold:
- *
- * $$\hat{f} \cdot \hat{d} < \theta_{behind}$$
- *
- * The threshold is $\theta_{behind} = -0.2$. Solving for the angle:
- *
- * $$\alpha = \arccos(\theta_{behind}) = \arccos(-0.2) \approx 101.5 deg$$
- *
- * A threshold of exactly $0$ would cut at $90 deg$, the geometric edge of the forward
- * hemisphere. The $-0.2$ extends the visible zone ${\approx}11.5 deg$ past
- * perpendicular, so actors slightly behind the camera stay visible. This keeps
- * nameplates from popping in and out at the screen border when the player turns.
- *
- * ## :material-ruler: Distance Units
- *
- * All distances are in Skyrim game units where $\approx 70$ units $= 1$ meter.
- *
- * |                      Constant | Value | Description                                        |
- * |-------------------------------|-------|----------------------------------------------------|
- * |    `CLOSE_DISTANCE_THRESHOLD` | 100.0 | Visible when the camera-to-anchor distance $< 100$ |
- * | `BEHIND_CAMERA_DOT_THRESHOLD` |  -0.2 | Behind camera past ~101.5 deg                      |
+ * | Test                | Boundary                                  |
+ * |---------------------|-------------------------------------------|
+ * | Close anchor        | Distance < 100 world units stays visible. |
+ * | Behind camera       | Dot < -0.2, about 101.5 degrees off-axis. |
+ * | Undefined direction | Distance < 0.001 never counts as behind.  |
  */
 namespace Occlusion
 {
 /**
  * @namespace Occlusion::Constants
  * @brief Constants for occlusion calculations.
+ * @author Alex (<https://github.com/lextpf>)
  */
 namespace Constants
 {
@@ -118,44 +60,26 @@ inline constexpr float BEHIND_CAMERA_DOT_THRESHOLD =
 }  // namespace Constants
 
 /**
- * @brief Check whether the player has line of sight to an actor.
+ * @fn bool HasLineOfSightToActor(RE::Actor* actor)
+ * @brief Query player-to-actor line of sight through world geometry.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Wraps the game's `Actor::HasLineOfSight`, which traces against world geometry.
- *
- * @note Game-thread only. It dereferences `RE::Actor` and `RE::PlayerCharacter`.
- *
- * @param actor The actor to check visibility for.
- *
- * @return `true` if the player can see the actor, `false` if blocked. Also `true`
- *         when @p actor is null, when the player singleton is unavailable, or when
- *         the engine query fails. This is fail-open, to avoid false occlusion.
+ * @return True for visible actors, null actors, absent player, or failed engine queries.
+ * @pre Game thread; dereferences actor and player.
  */
 bool HasLineOfSightToActor(RE::Actor* actor);
 
 /**
- * @brief Check if an actor should be considered occluded.
+ * @fn bool IsActorOccluded(RE::Actor* actor, RE::Actor* player, const RE::NiPoint3& actorWorldPos,
+ *     bool occlusionEnabled)
+ * @brief Combine camera distance, facing, and line of sight.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Combines the global occlusion setting, distance from the camera, the behind-camera
- * test, and line of sight through world geometry.
- *
- * @note Game-thread only. It dereferences `RE::Actor` and `RE::PlayerCharacter`.
- *       The game thread publishes the result into the snapshot for the render thread.
- * @note Fail-open. It returns `false` without evaluating any factor when occlusion
- *       is disabled, when @p actor or @p player is null, or when camera data is
- *       unavailable. `false` always means "do not hide", never "verified visible".
- *
- * @param actor The actor to check.
- * @param player The player actor. It is used only as a liveness guard: the
- *               line-of-sight query always starts from
- *               `RE::PlayerCharacter::GetSingleton()`, so a different actor here
- *               changes nothing.
- * @param actorWorldPos The world position to test. This is the nameplate anchor,
- *                      which can differ from the actor's root position. All
- *                      distances and angles are measured from the camera, not
- *                      from `player`.
- * @param occlusionEnabled Whether occlusion culling is enabled (from Settings).
- *
- * @return `true` if the actor is occluded and nameplate should be hidden.
+ * @param player Liveness guard only; LOS always starts from the player singleton.
+ * @param actorWorldPos Nameplate anchor in world units; tests measure from the camera.
+ * @return True to hide. False also covers disabled culling, null actors/player,
+ * or unavailable camera data; it does not prove visibility.
+ * @pre Game thread; publish the result to the render snapshot.
  */
 bool IsActorOccluded(RE::Actor* actor,
                      RE::Actor* player,
@@ -163,40 +87,27 @@ bool IsActorOccluded(RE::Actor* actor,
                      bool occlusionEnabled);
 
 /**
- * @brief Get camera position and forward direction.
+ * @fn bool GetCameraInfo(RE::NiPoint3& outPos, RE::NiPoint3& outForward)
+ * @brief Read camera position and its world-space unit forward axis.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @note Safe from either thread. The render thread calls it every frame for focus
- *       selection and Graffito targeting, where a torn read is a benign one-frame
- *       glitch.
- * @post On `false`, neither out-parameter is written. Callers must not use them.
- *
- * @param[out] outPos Camera world position.
- * @param[out] outForward Unit forward axis of the camera root node in world space
- *                        (column 1 of its rotation matrix). It is already
- *                        normalized. In third person it is the camera direction,
- *                        not the player's facing.
- *
- * @return `true` if camera data was retrieved successfully.
+ * @param[out] outPos Camera position, in world units.
+ * @param[out] outForward Rotation column 1, independent of player facing.
+ * @return False if unavailable; neither output is written on failure.
+ * @note Game-thread callers and render-thread camera consumers may call this function.
+ * The camera read has no engine lock; this exception permits no actor or cell reads.
  */
 bool GetCameraInfo(RE::NiPoint3& outPos, RE::NiPoint3& outForward);
 
 /**
- * @brief Check if a world position is behind the camera.
+ * @fn bool IsBehindCamera(const RE::NiPoint3& worldPos, const RE::NiPoint3& cameraPos, const
+ *     RE::NiPoint3& cameraForward)
+ * @brief Test whether a position lies past the camera visibility cone.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * The cone is widened ~11.5 deg past perpendicular (dot < -0.2, that is ~101.5 deg),
- * so actors just outside the frustum edge stay visible. Only positions beyond
- * ~101.5 deg count as behind.
- *
- * @pre `cameraForward` is a unit vector. The function normalizes only the
- *      camera-to-position vector, so a non-unit forward axis scales the dot product
- *      and moves the threshold angle. `GetCameraInfo` supplies a normalized axis.
- *
- * @param worldPos The position to check.
- * @param cameraPos Camera world position.
- * @param cameraForward Camera forward unit axis, as returned by `GetCameraInfo`.
- *
- * @return `true` if the position is behind the camera. A position closer than
- *         0.001 units to the camera has no usable direction, so it returns `false`.
+ * The threshold is dot < -0.2, about 101.5 degrees, to avoid popping at screen edges.
+ * @return False within 0.001 game units, where direction is undefined.
+ * @pre `cameraForward` is normalized; only the camera-to-position vector is normalized here.
  */
 bool IsBehindCamera(const RE::NiPoint3& worldPos,
                     const RE::NiPoint3& cameraPos,
