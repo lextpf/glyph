@@ -2,13 +2,12 @@
 
 /**
  * @namespace TRUEHUD_API
- * @brief Vendored TrueHUD API interface used for HUD compatibility.
+ * @brief TrueHUD API subset with the original vtable layout.
  * @author Ershin (https://github.com/ersh1)
  * @ingroup Utilities
  *
- * This interface is a condensed copy of `src/TrueHUDAPI.h` from TrueHUD. TrueHUD uses the MIT
- * license. glyph calls only `RequestPluginAPI` and `IVTrueHUD3::HasInfoBar`. The other virtual
- * functions preserve the original vtable layout. Do not reorder or remove them.
+ * TrueHUD uses the MIT license. glyph calls `RequestPluginAPI` and `IVTrueHUD3::HasInfoBar`;
+ * retain all other virtual functions in order to preserve the ABI.
  *
  * ```mermaid
  * ---
@@ -60,7 +59,7 @@ constexpr const auto TrueHUDPluginName = "TrueHUD";
 
 /**
  * @enum InterfaceVersion
- * @brief Available TrueHUD interface versions.
+ * @brief available TrueHUD interface versions.
  */
 enum class InterfaceVersion : uint8_t
 {
@@ -72,7 +71,7 @@ enum class InterfaceVersion : uint8_t
 
 /**
  * @enum APIResult
- * @brief Result codes returned by the TrueHUD API.
+ * @brief result codes returned by the TrueHUD API.
  */
 enum class APIResult : uint8_t
 {
@@ -87,7 +86,7 @@ enum class APIResult : uint8_t
 
 /**
  * @enum WidgetRemovalMode
- * @brief Available widget removal behaviors.
+ * @brief available widget removal behaviors.
  */
 enum class WidgetRemovalMode : uint8_t
 {
@@ -98,7 +97,7 @@ enum class WidgetRemovalMode : uint8_t
 
 /**
  * @enum BarColorType
- * @brief Bar color channels supported by TrueHUD interface version 2.
+ * @brief bar color channels supported by TrueHUD interface version 2.
  *
  * glyph does not use these color overrides.
  */
@@ -174,10 +173,7 @@ public:
 
 /**
  * @class IVTrueHUD2
- * @brief TrueHUD mod interface version 2.
- *
- * This version adds per-bar color overrides. glyph keeps the functions only to preserve the
- * vtable layout.
+ * @brief TrueHUD interface version 2 with per-bar color overrides.
  */
 class IVTrueHUD2 : public IVTrueHUD1
 {
@@ -198,9 +194,7 @@ public:
 
 /**
  * @class IVTrueHUD3
- * @brief TrueHUD mod interface version 3.
- *
- * This version adds debug drawing and `HasInfoBar`. glyph uses only `HasInfoBar`.
+ * @brief TrueHUD interface version 3 with debug drawing and HasInfoBar.
  */
 class IVTrueHUD3 : public IVTrueHUD2
 {
@@ -273,14 +267,10 @@ public:
                              float a_thickness = 1.f) noexcept = 0;
 
     /**
-     * @brief Report whether TrueHUD displays an info bar for an actor.
+     * @brief query actor bars that can overlap nameplates.
      *
-     * When `a_bFloatingOnly` is true, the query includes only bars that float above the
-     * actor's head and can overlap a nameplate.
-     *
-     * @param a_actorHandle    Actor to query.
-     * @param a_bFloatingOnly  Whether to include only floating bars.
-     * @return                 True when a matching info bar is visible.
+     * @param a_bFloatingOnly true restricts the query to bars above the actor's head.
+     * @return true when a matching bar is visible.
      */
     [[nodiscard]] virtual bool HasInfoBar(RE::ActorHandle a_actorHandle,
                                           bool a_bFloatingOnly = false) const noexcept = 0;
@@ -289,11 +279,9 @@ public:
 using _RequestPluginAPI = void* (*)(const InterfaceVersion interfaceVersion);
 
 /**
- * @brief Request a TrueHUD API interface.
+ * @brief request the specified TrueHUD interface version.
  *
- * @param a_interfaceVersion  Required interface version.
- * @return                    The interface pointer, or nullptr when TrueHUD is absent or does
- *                            not support the requested version.
+ * @return null when TrueHUD is absent or does not support the version.
  */
 [[nodiscard]] inline void* RequestPluginAPI(
     const InterfaceVersion a_interfaceVersion = InterfaceVersion::V3)
