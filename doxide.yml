@@ -1,4 +1,4 @@
-# Doxide Configuration for glyph
+# Doxide configuration for glyph
 # https://doxide.org
 
 title: glyph
@@ -12,12 +12,15 @@ files:
 
 groups:
   - name: Core
-    title: ":material-cube: Core Systems"
+    title: ":material-cube: Core systems"
     description: Plugin entry points and initialization.
     groups:
       - name: ConsoleCommands
         title: ConsoleCommands
         description: Console command registration and handlers.
+      - name: ActorOverrides
+        title: ActorOverrides
+        description: Per-actor session overrides for the title and the status icons.
 
   - name: Rendering
     title: ":material-palette: Rendering"
@@ -46,7 +49,7 @@ groups:
         description: GPU post-process passes for glow and divide compositing.
       - name: BadgeTextures
         title: BadgeTextures
-        description: Status badge and tier emblem textures rasterized from SVGs.
+        description: SVG status badges and PNG tier emblem textures.
 
   - name: Configuration
     title: ":material-cog: Configuration"
@@ -57,7 +60,7 @@ groups:
         description: Configuration management and INI parsing.
 
   - name: Hooks
-    title: ":material-hook: Engine Hooks"
+    title: ":material-hook: Engine hooks"
     description: SKSE hooks and game engine integration.
 
   - name: Utilities
