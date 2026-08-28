@@ -1,27 +1,10 @@
-"""Promote nested subgroup docs to top-level directories.
+"""
+@brief Copy nested class groups to top-level documentation paths.
+@author Alex (<https://github.com/lextpf>)
 
-Doxide generates top-level directories for C++ namespaces but not for
-classes.  When a project uses classes instead of namespaces, subgroup
-pages only exist nested under their parent group (e.g.,
-Core/ArchiveService/).  _clean_docs.py rewrites subgroup links with ../
-to point to top-level directories.  This script bridges the gap by
-copying nested subgroup directories to the top level so the links
-resolve correctly.
-
-When a subgroup directory contains a class page matching the subgroup
-name (e.g., ArchiveService/ArchiveService.md), the class content
-replaces the stub index.md so users land directly on the full
-documentation instead of an intermediate page.
-
-Reads doxide.yml to discover the group hierarchy, then for each
-subgroup copies ParentGroup/SubGroup/ -> SubGroup/ if the top-level
-directory does not already exist.
-
-No external dependencies - uses only the Python standard library.
-
-Usage:
-    python scripts/_promote_subgroups.py          # defaults to docs/
-    python scripts/_promote_subgroups.py path/    # custom docs directory
+`_clean_docs.py` links to these paths. Existing top-level destinations are skipped.
+The optional command-line path defaults to `docs/`; group names come from `doxide.yml`
+in the current working directory. Nested source directories remain available.
 """
 
 import re
@@ -31,10 +14,13 @@ from pathlib import Path
 
 
 def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
-    """Parse doxide.yml and return (parent, child) name pairs.
+    """
+    @fn parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]
+    @brief Read parent-child group pairs from the expected config indentation.
+    @author Alex (<https://github.com/lextpf>)
 
-    Uses a simple indent-aware line parser instead of PyYAML so the
-    script has zero external dependencies.
+    This recognizes the repository's group layout with line patterns; it is not a
+    YAML parser. Parent entries use two leading spaces, followed by nested groups.
     """
     text = config_path.read_text(encoding="utf-8")
     pairs = []
@@ -45,26 +31,22 @@ def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
         stripped = line.rstrip()
         indent = len(line) - len(line.lstrip())
 
-        # Top-level group: "  - name: Core" (indent 2-4)
         m = re.match(r"^  - name:\s+(.+)", stripped)
         if m:
             parent_name = m.group(1).strip()
             in_child_groups = False
             continue
 
-        # Child groups key: "    groups:" (indent 4-6)
         if re.match(r"^\s{4,6}groups:\s*$", stripped):
             in_child_groups = True
             continue
 
-        # Child group entry: "      - name: Logger" (indent 6+)
         if in_child_groups and indent >= 6:
             m = re.match(r"^\s+- name:\s+(.+)", stripped)
             if m:
                 pairs.append((parent_name, m.group(1).strip()))
                 continue
 
-        # Any non-indented or top-level key resets child context
         if indent < 4 and stripped and not stripped.startswith("#"):
             in_child_groups = False
 
@@ -72,11 +54,13 @@ def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
 
 
 def promote_class_to_index(top_level: Path, child_name: str) -> None:
-    """Replace stub index.md with the class page content if it exists.
+    """
+    @fn promote_class_to_index(top_level: Path, child_name: str) -> None
+    @brief Use the same-named class page as the subgroup index.
+    @author Alex (<https://github.com/lextpf>)
 
-    Doxide generates a stub index.md (just title + Types table) and a
-    separate ClassName.md with the full documentation.  This merges
-    the class content into index.md and removes the redundant file.
+    If the class page exists, overwrite `index.md` with its contents and delete the class
+    page. If it is absent, leave the directory unchanged.
     """
     class_page = top_level / f"{child_name}.md"
     index_page = top_level / "index.md"
@@ -90,6 +74,15 @@ def promote_class_to_index(top_level: Path, child_name: str) -> None:
 
 
 def main():
+    """
+    @fn main()
+    @brief Copy missing subgroup destinations and promote their class indexes.
+    @author Alex (<https://github.com/lextpf>)
+
+    Require the documentation directory and `doxide.yml`; missing inputs exit with status 1.
+    Existing destinations are skipped, so regenerate the documentation tree before using
+    this command to refresh promoted content.
+    """
     docs_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("docs")
     config_path = Path("doxide.yml")
 
