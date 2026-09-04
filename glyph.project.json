@@ -7,15 +7,24 @@
         "ornament": "glyph/fonts/050986eb-c23a-4891-a951-9fed313e44c2.otf"
     },
     "tierBadges": [
-        "glyph/badges/a2e05fb7-3c49-4fa9-ab74-08456ab730a5.png",
-        "glyph/badges/0eeb8a6b-d005-48c2-8072-05336b1f377b.png",
-        "glyph/badges/05ad019a-720b-4152-9f68-a6751361e688.png",
-        "glyph/badges/516aef1f-836b-4393-8e7b-be72f6ff7d89.png",
-        "glyph/badges/91edee24-93af-43c7-807f-bcd81042366f.png",
-        "glyph/badges/3dfe7c8f-663b-4500-8284-23e6e6704786.png",
-        "glyph/badges/25a82c40-486f-48d8-923f-0402b86328ca.png",
-        "glyph/badges/ce91252e-e44d-41d3-85fe-f16d326786aa.png",
-        "glyph/badges/ca1f6251-2c3f-44e7-9909-86a84b22a47f.png"
+        "glyph/badges/db3e81a8-906a-4c84-9324-b66ca1164113.png",
+        "glyph/badges/f8e9ff8c-b0ea-4a0b-9ed3-5327b4fd1374.png",
+        "glyph/badges/743c73ad-9b1f-4ec1-9e5c-0b6e1cb108a6.png",
+        "glyph/badges/96bccc77-f1c3-4ce7-b7c3-6b92ef1645d6.png",
+        "glyph/badges/d6eaf043-7b21-4937-8b10-ef903df1ef6b.png",
+        "glyph/badges/87ee4335-3ecf-433d-b031-12e8dfb064e3.png",
+        "glyph/badges/8d7f533c-be06-4525-8695-a05104a45fdb.png",
+        "glyph/badges/62aab207-58e1-433b-b7d0-78f9e181319d.png",
+        "glyph/badges/252f2d07-eccd-4dcf-885c-5928ec67aafe.png",
+        "glyph/badges/10167944-a1cc-4666-b449-7c814bc2f52f.png",
+        "glyph/badges/ae8e8587-0a9a-42f9-82e6-37444dc947a9.png",
+        "glyph/badges/acf981d7-001d-468b-9e9a-d66a7b08f740.png",
+        "glyph/badges/45bc17e1-0b74-4186-ba3d-5366262e7384.png",
+        "glyph/badges/64d46079-f3a5-435c-ba6a-e9e2776b7185.png",
+        "glyph/badges/05739d13-0b3c-401f-9c10-a6946d002901.png",
+        "glyph/badges/193a9cba-be5e-468e-b127-38a3763a8cc9.png",
+        "glyph/badges/524d5579-2dbc-4a7e-a3f4-660e07160c92.png",
+        "glyph/badges/f992a66b-4062-45a0-9474-f06fb8c2994d.png"
     ],
     "particles": {
         "firefly": ["glyph/particles/777902f0-83a3-4e4a-9b9f-a24f8d4486ca.png"],
