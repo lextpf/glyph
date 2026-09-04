@@ -1,10 +1,4 @@
-// Renderer - render-thread frame orchestration for the nameplate overlay: the
-// frame gates, the settings and actor snapshot copies, focus selection, the hot
-// reload driver, and the per-plate draw paths.
-//
-// Renderer.hpp documents the thread contract and the frame gates. What it does not
-// cover, and what is spread over three entry points here, is the life of one cached
-// plate: which draw path it takes, and when its ActorCache entry is released.
+// Render-thread frame orchestration. Cached plates follow this lifecycle:
 //
 //   in the snapshot, alive   -> DrawLabel: seed the cache entry, run the entrance
 //                               and the typewriter, smooth, project, draw
@@ -17,14 +11,9 @@
 //                               CACHE_GRACE_FRAMES idle frames, or 3x that while an
 //                               exit is still playing
 //
-// A rite and an exit never both play: the rite sets exitPhase to 1 when it ends. Both
-// replay lastDrawData, the last live snapshot record, so relationship color, badges
-// and title cannot change after the actor dies or leaves.
-//
-// Render thread only. The sole RE:: reads are the two camera singletons and the
-// BSGraphics renderer: the camera pose for projection, near-camera scaling,
-// pan-speed quieting and the aim ray, and the renderer for the screen size. Every
-// actor fact arrives as plain data in ActorDrawData.
+// Rites and exits replay lastDrawData; finishing a rite disables the exit.
+// Render-thread RE reads are limited to camera and BSGraphics singletons. Actor facts
+// arrive only through ActorDrawData.
 
 #include "Renderer.hpp"
 
@@ -41,6 +30,7 @@
 #include "RenderSampling.hpp"
 #include "SceneMeter.hpp"
 #include "TextPostProcess.hpp"
+#include "TierEmblem.hpp"
 
 #include <SKSE/SKSE.h>
 
@@ -50,9 +40,6 @@
 
 namespace Renderer
 {
-// ============================================================================
-// Singleton accessors (defined here, declared in RendererInternal.hpp)
-// ============================================================================
 
 RendererState& GetState()
 {
@@ -66,16 +53,11 @@ std::unordered_map<uint32_t, OcclusionCacheEntry>& GetOcclusionCache()
     return instance;
 }
 
-// Per-frame overlap Y offsets, keyed by form ID
 std::unordered_map<uint32_t, float>& OverlapOffsets()
 {
     static std::unordered_map<uint32_t, float> offsets;
     return offsets;
 }
-
-// ============================================================================
-// Public API
-// ============================================================================
 
 bool IsOverlayAllowedRT()
 {
@@ -108,13 +90,6 @@ void RequestIdentityRefresh()
     GetState().pendingIdentityRefresh.store(true, std::memory_order_release);
 }
 
-// ============================================================================
-// Font helper
-// ============================================================================
-
-// Return the font registered at index, or fonts[0] when the index is out of
-// range or that slot is null. Returns nullptr only when no font is loaded, so
-// every caller can treat nullptr as "the atlas is not built yet".
 ImFont* GetFontAt(int index)
 {
     auto& io = ImGui::GetIO();
@@ -131,10 +106,6 @@ ImFont* GetFontAt(int index)
     }
     return io.Fonts->Fonts[0];
 }
-
-// ============================================================================
-// Cache management
-// ============================================================================
 
 void PruneCacheToSnapshot(const std::vector<ActorDrawData>& snap)
 {
@@ -157,9 +128,7 @@ void PruneCacheToSnapshot(const std::vector<ActorDrawData>& snap)
 
         if (!inSnapshot)
         {
-            // Keep an entry past the grace period while it is actively exiting
-            // (0 < exitPhase < 1), up to a hard ceiling so a mid-exit entry
-            // cannot leak if the exit animation is turned off.
+            // Bound exit retention even when exit animation is disabled mid-transition.
             const uint32_t framesSinceLastSeen = GetState().frame - it->second.lastSeenFrame;
             const bool midExit = it->second.exitPhase > .0f && it->second.exitPhase < 1.0f;
             if (framesSinceLastSeen > CACHE_GRACE_FRAMES &&
@@ -174,8 +143,6 @@ void PruneCacheToSnapshot(const std::vector<ActorDrawData>& snap)
     }
 }
 
-// Blend factor for frame-rate independent exponential smoothing. Returns alpha
-// in [0,1] for use with: current = lerp(current, target, alpha)
 float ExpApproachAlpha(float dt, float settleTime, float epsilon)
 {
     dt = std::max(.0f, dt);
@@ -183,10 +150,13 @@ float ExpApproachAlpha(float dt, float settleTime, float epsilon)
     return std::clamp(1.0f - std::pow(epsilon, dt / settleTime), .0f, 1.0f);
 }
 
-// Refill the world-space trail ring with one point. A seeded reset keeps that
-// point as sample 0 and leaves the write cursor at 1, so the next push already
-// gives the two samples a trail needs; an unseeded reset leaves the cursor at 0
-// and needs two pushes.
+/**
+ * @fn static void ResetTrailHistory(ActorCache& entry, const RE::NiPoint3* seedWorldPos = nullptr)
+ * @brief Clear the world-position trail and optionally seed its first sample.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Seeded resets leave sample 0 valid; the next push can draw a trail.
+ */
 static void ResetTrailHistory(ActorCache& entry, const RE::NiPoint3* seedWorldPos = nullptr)
 {
     const RE::NiPoint3 initPos = seedWorldPos ? *seedWorldPos : RE::NiPoint3{};
@@ -198,18 +168,18 @@ static void ResetTrailHistory(ActorCache& entry, const RE::NiPoint3* seedWorldPo
     entry.trailFilled = false;
 }
 
-// ============================================================================
-// Distance and smoothing helpers (file-local)
-// ============================================================================
-
-// Compute distance-based visual factors (fade, LOD, scale).
+/**
+ * @fn static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Resolve distance fade, text scale, and effect detail factors.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d,
                                               const RenderSettingsSnapshot& snap)
 {
     DistanceFactors df{};
     const float dist = d.distToPlayer;
 
-    // The active scene profile can pull the fade envelope in or push it out.
     const float regFade = GetState().regFadeMul;
     const float fadeStart = snap.fadeStartDistance * regFade;
     const float fadeEnd = snap.fadeEndDistance * regFade;
@@ -221,7 +191,6 @@ static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d,
     df.alphaTarget = 1.0f - fadeT;
     df.alphaTarget = df.alphaTarget * df.alphaTarget;
 
-    // LOD factors
     df.lodTitleFactor = 1.0f;
     df.lodEffectsFactor = 1.0f;
 
@@ -235,14 +204,12 @@ static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d,
         df.lodEffectsFactor = 1.0f - TextEffects::SmoothStep(effectsFadeT);
     }
 
-    // Font size scale with sqrt falloff
     const float scaleRange = std::max(1.0f, snap.scaleEndDistance - snap.scaleStartDistance);
     float scaleT = TextEffects::Saturate((dist - snap.scaleStartDistance) / scaleRange);
     constexpr float SCALE_GAMMA = .5f;
     scaleT = std::pow(scaleT, SCALE_GAMMA);
     df.textScaleTarget = 1.0f + (snap.minimumScale - 1.0f) * scaleT;
 
-    // Also factor in camera distance for more accurate near-camera scaling
     if (auto pc = RE::PlayerCamera::GetSingleton(); pc && pc->cameraRoot)
     {
         RE::NiPoint3 cameraPos = pc->cameraRoot->world.translate;
@@ -256,7 +223,6 @@ static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d,
         df.textScaleTarget = std::min(df.textScaleTarget, camTextScale);
     }
 
-    // Enforce minimum readable size
     if (snap.visual.MinimumPixelHeight > .0f)
     {
         float minScale = snap.visual.MinimumPixelHeight / snap.nameFontSize;
@@ -266,8 +232,6 @@ static DistanceFactors ComputeDistanceFactors(const ActorDrawData& d,
     return df;
 }
 
-// Project world position to screen coordinates.
-// Single shared definition; declared in RendererInternal.hpp.
 bool WorldToScreen(const RE::NiPoint3& worldPos,
                    RE::NiPoint3& screenPos,
                    RE::NiPoint3* cameraPosOut)
@@ -307,13 +271,13 @@ bool WorldToScreen(const RE::NiPoint3& worldPos,
     return true;
 }
 
-// ============================================================================
-// Camera-motion quieting
-// ============================================================================
-
-// Map camera angular speed (deg/s) onto a [0,1] quiet target: untouched below
-// `lo`, fully quiet above `hi`, smoothstepped between.  Pure function --
-// mirrored in tests/test_utils.cpp; keep the logic in sync.
+/**
+ * @fn static float QuietTarget(float degPerSec, float lo, float hi)
+ * @brief Map camera angular speed to a bounded quieting target.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Camera speed in deg/s maps to [0,1]. Mirrored in tests/test_utils.cpp; keep in sync.
+ */
 static float QuietTarget(float degPerSec, float lo, float hi)
 {
     if (hi <= lo)
@@ -323,15 +287,14 @@ static float QuietTarget(float degPerSec, float lo, float hi)
     return TextEffects::SmoothStep(TextEffects::Saturate((degPerSec - lo) / (hi - lo)));
 }
 
-// During fast camera pans part of the plate folds away, while the name, level,
-// and particles stay full so the core readout never blinks. The live and exit
-// draw paths fold the title and the status-badge strip above the name; the death
-// rite folds the information row and the badges instead. All three read
-// quietSub. The envelope is asymmetric: fast attack toward quiet, slow release.
-//
-// quietName is advanced below and QuietNameReleaseTime shapes its release, but
-// nothing downstream consumes it, and QuietNameFloor is unreferenced by the
-// renderer. Both exist so the name can opt into thinning.
+/**
+ * @fn static void UpdateQuietFrame(const RenderSettingsSnapshot& snap, float dt)
+ * @brief Advance the camera-motion envelope for secondary plate elements.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * quietSub folds title/badges on live and exit plates, info/badges during rites.
+ * Attack is faster than release. quietName advances but has no draw consumer.
+ */
 static void UpdateQuietFrame(const RenderSettingsSnapshot& snap, float dt)
 {
     auto& st = GetState();
@@ -375,16 +338,14 @@ static void UpdateQuietFrame(const RenderSettingsSnapshot& snap, float dt)
     st.quietSub += (target - st.quietSub) * ExpApproachAlpha(dt, subSettle);
 }
 
-// ============================================================================
-// Per-pixel depth occlusion
-// ============================================================================
-
-// Determine the depth-buffer convention from the game's own projection:
-// project two probe points at different view depths and compare their
-// viewport z.  +1 = standard (farther is larger), -1 = reversed, 0 =
-// indeterminate (skip clipping this frame).  WorldToScreen uses the same
-// matrices the rasterizer wrote depth with, so this is exact by
-// construction - no readback or calibration pass needed.
+/**
+ * @fn static float ComputeDepthPolarity()
+ * @brief Resolve standard or reversed depth from two camera-space probes.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Compare two projected depths: +1 standard, -1 reversed, 0 indeterminate.
+ * Indeterminate depth skips clipping for this frame.
+ */
 static float ComputeDepthPolarity()
 {
     RE::NiPoint3 camPos{};
@@ -412,10 +373,14 @@ static float ComputeDepthPolarity()
     return delta > .0f ? 1.0f : -1.0f;
 }
 
-// Bracket the current plate's draws (all splitter channels) with the
-// depth-clip shader.  Channel streams are contiguous per label, so one
-// Apply per channel re-establishes the shader + this plate's constants for
-// exactly this plate's content in that channel.
+/**
+ * @fn static void BracketPlateDepthClip(ImDrawList* drawList, ImDrawListSplitter* splitter, void*
+ *     params, const RenderSettingsSnapshot& snap)
+ * @brief Start plate depth clipping on each active draw channel.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Each channel needs its own depth shader and plate constants after splitting.
+ */
 static void BracketPlateDepthClip(ImDrawList* drawList,
                                   ImDrawListSplitter* splitter,
                                   void* params,
@@ -430,6 +395,12 @@ static void BracketPlateDepthClip(ImDrawList* drawList,
     }
 }
 
+/**
+ * @fn static void EndPlateDepthClip(ImDrawList* drawList, ImDrawListSplitter* splitter, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Restore neutral depth clipping on each active draw channel.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void EndPlateDepthClip(ImDrawList* drawList,
                               ImDrawListSplitter* splitter,
                               const RenderSettingsSnapshot& snap)
@@ -443,16 +414,17 @@ static void EndPlateDepthClip(ImDrawList* drawList,
     }
 }
 
-// Converts font design pixels into Skyrim world units (roughly 70 units per
-// metre), so Graffito holds a physical type size and the configured multiplier
-// stays a relative scale.
+// Font design pixels to Skyrim world units (roughly 70 units per metre).
 inline constexpr float GRAFFITO_WORLD_UNITS_PER_PIXEL = .10f;
 inline constexpr std::size_t GRAFFITO_RELIEF_LAYERS = Graffito::Math::FOLIO_RELIEF_STEPS.size();
-// The player plate always faces the camera, so its wrap arc and fisheye lens
-// would show at full strength every frame. Scale both down for the player only;
-// actor-facing NPC plates keep the full treatment.
+// Reduce player wrap and lens strength because the player always faces the camera.
 inline constexpr float PLAYER_GRAFFITO_DIMENSIONAL_SCALE = .12f;
 
+/**
+ * @struct GraffitoSurface
+ * @brief One projected folio face with matching source and depth parameters.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct GraffitoSurface
 {
     bool active = false;
@@ -464,6 +436,11 @@ struct GraffitoSurface
     void* callbackParams = nullptr;
 };
 
+/**
+ * @struct GraffitoPlate
+ * @brief World anchors and measured surfaces for one projected plate.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct GraffitoPlate
 {
     bool requested = false;  // Setting applies to this actor.
@@ -489,35 +466,54 @@ struct GraffitoPlate
     std::array<GraffitoSurface, GRAFFITO_RELIEF_LAYERS> relief{};
     GraffitoSurface facet{};
 
-    // The falling-inscription pose resolves its exact top-edge hinge only after
-    // layout bounds are known. Prepare uses the same pose with a zero local
-    // hinge, so facing and screen anchoring already follow the falling plane.
+    // Use a provisional zero hinge until layout supplies the inscription top edge.
     float epitaphProgress = .0f;
     double poseYaw = .0;
     Graffito::Math::Vec3 uprightOrigin{};
     Graffito::Math::Vec3 groundHinge{};
 };
 
+/**
+ * @fn static Graffito::Math::Vec3 ToGraffitoMath(const RE::NiPoint3& point)
+ * @brief Copy world coordinates into the double-precision geometry type.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static Graffito::Math::Vec3 ToGraffitoMath(const RE::NiPoint3& point)
 {
     return {
         static_cast<double>(point.x), static_cast<double>(point.y), static_cast<double>(point.z)};
 }
 
+/**
+ * @fn static RE::NiPoint3 ToEnginePoint(const Graffito::Math::Vec3& point)
+ * @brief Convert geometry coordinates to the engine float value type.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static RE::NiPoint3 ToEnginePoint(const Graffito::Math::Vec3& point)
 {
     return {static_cast<float>(point.x), static_cast<float>(point.y), static_cast<float>(point.z)};
 }
 
+/**
+ * @fn static double PoseClockSeconds()
+ * @brief Read steady-clock seconds shared by pose capture and prediction.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static double PoseClockSeconds()
 {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
 
-// Several high-refresh render frames can reuse one game-thread snapshot. Bridge
-// that gap in WORLD space, so the current camera projects one coherent plate
-// instead of repeatedly projecting a stale player root.
+/**
+ * @fn static void ResolvePlayerRenderPose(ActorCache& entry, ActorDrawData& d)
+ * @brief Extrapolate the player pose between game-thread samples.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Uses steady-clock sample age, independent of the ImGui animation clock. The predicted
+ * head offset also moves the feet so a plate keeps its shape. New samples after a gap
+ * above 0.25 seconds or a jump above 256 world units reset the velocity estimate.
+ */
 static void ResolvePlayerRenderPose(ActorCache& entry, ActorDrawData& d)
 {
     if (!d.isPlayer || !std::isfinite(d.poseSampleTime) || d.poseSampleTime <= .0)
@@ -525,13 +521,8 @@ static void ResolvePlayerRenderPose(ActorCache& entry, ActorDrawData& d)
         return;
     }
 
-    // SAMPLE_EPSILON and MAX_SAMPLE_GAP are seconds, read from the steady clock
-    // through PoseClockSeconds(). TELEPORT_DISTANCE is Skyrim world units.
-    // VELOCITY_RESPONSE is a unitless blend weight. A gap above 0.25 s or a jump
-    // above 256 units re-seeds the tracker instead of extrapolating; that is the
-    // same teleport bar the trail block uses, which only a teleport can clear.
-    // The interval clamp below keeps the assumed sample cadence between 20 and
-    // 1000 Hz, also in seconds.
+    // Sample times and gaps are steady-clock seconds; velocity response is unitless.
+    // A gap > 0.25 s or jump > 256 world units reseeds. Cadence clamps to 20-1000 Hz.
     constexpr double SAMPLE_EPSILON = 1e-6;
     constexpr double MAX_SAMPLE_GAP = .25;
     constexpr double VELOCITY_RESPONSE = .82;
@@ -592,14 +583,17 @@ static void ResolvePlayerRenderPose(ActorCache& entry, ActorDrawData& d)
     d.feetPos += ToEnginePoint(offset);
 }
 
-// Build the actor-bound world plane for one plate, before layout is known:
-// resolve the plate yaw, project the anchor, and evaluate range and facing
-// visibility. The returned plate stays inactive when Graffito is off or not
-// initialized, when the anchor cannot project (behind the camera), or when
-// visibility collapses. A caller that requested Graffito and found it
-// initialized must then skip the actor; an inactive plate because Graffito is
-// off or uninitialized leaves the caller on the billboard path.
-// FinalizeGraffitoPlate completes the faces once layout bounds exist.
+/**
+ * @fn static GraffitoPlate PrepareGraffitoPlate(const ActorDrawData& d, ActorCache& entry, const
+ *     RenderSettingsSnapshot& snap, float dt, float epitaphProgress = .0f, bool forceReadableFront
+ *     = false)
+ * @brief Resolve a world anchor and visibility before plate measurement.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Prepare yaw, anchor and visibility before layout. Inactive Graffito falls back
+ * to billboards only when disabled or uninitialized; projection/visibility failures
+ * skip the actor. FinalizeGraffitoPlate builds faces after measurement.
+ */
 static GraffitoPlate PrepareGraffitoPlate(const ActorDrawData& d,
                                           ActorCache& entry,
                                           const RenderSettingsSnapshot& snap,
@@ -623,9 +617,7 @@ static GraffitoPlate PrepareGraffitoPlate(const ActorDrawData& d,
     plate.cameraPosition = ToGraffitoMath(cameraPos);
     plate.headSourceAnchor = ImVec2(plate.headScreenPos.x, plate.headScreenPos.y);
 
-    // The player plate and an aimed actor must be legible at once, so turn the
-    // actor-bound plane toward the camera instead of waiting for the actor's
-    // world heading to change.
+    // Make the player and aimed actor readable without waiting for actor yaw.
     forceReadableFront = forceReadableFront || d.isPlayer;
     float targetYaw = d.headingRadians;
     if (forceReadableFront)
@@ -699,8 +691,13 @@ static GraffitoPlate PrepareGraffitoPlate(const ActorDrawData& d,
     return plate;
 }
 
-// Screen-pixel rectangle the plate occupies before any effect padding: the text
-// bounds unioned with the nameplate box.
+/**
+ * @fn static Graffito::SourceBounds ComputeGraffitoContentBounds(const LabelLayout& layout)
+ * @brief Enclose the text and nameplate geometry before effect padding.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Screen-pixel union of text and nameplate bounds, before effect padding.
+ */
 static Graffito::SourceBounds ComputeGraffitoContentBounds(const LabelLayout& layout)
 {
     const ImVec2 textMin = layout.startPos + layout.textBoundsMin;
@@ -710,10 +707,14 @@ static Graffito::SourceBounds ComputeGraffitoContentBounds(const LabelLayout& la
         {std::max(textMax.x, layout.nameplateRight), std::max(textMax.y, layout.nameplateBottom)}};
 }
 
-// Grow the content rectangle by everything drawn outside the glyph boxes:
-// outlines, outline glow, the inner outline, the wave displacement, and either
-// the soft shadow or the two hard shadow offsets. The projected source rect must
-// cover them, or the plane sampler clips an effect at the plate edge.
+/**
+ * @fn static Graffito::SourceBounds ComputeGraffitoSourceBounds(const LabelLayout& layout, const
+ *     LabelStyle& style, const RenderSettingsSnapshot& snap)
+ * @brief Pad plate bounds to retain all projected effect extents.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Include all effect extents so the plane sampler cannot clip them.
+ */
 static Graffito::SourceBounds ComputeGraffitoSourceBounds(const LabelLayout& layout,
                                                           const LabelStyle& style,
                                                           const RenderSettingsSnapshot& snap)
@@ -788,10 +789,13 @@ static Graffito::SourceBounds ComputeGraffitoSourceBounds(const LabelLayout& lay
             {content.max.x + right, content.max.y + bottom}};
 }
 
-// Fisheye magnification makes the inner edge of each typography band taller.
-// Add spacing around the principal name so the enlarged glyphs do not crowd the
-// title or information line. Badges and the emblem move with the upper text as
-// one group, keeping their internal gaps.
+/**
+ * @fn static void SpreadGraffitoRows(LabelLayout& layout, float dimensionalScale)
+ * @brief Separate rows around the lens-enlarged name without detaching badges.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Separate rows around the lens-enlarged name; move badges with the upper text.
+ */
 static void SpreadGraffitoRows(LabelLayout& layout, float dimensionalScale)
 {
     const float gap = std::clamp(layout.nameFontSize * .035f, 3.0f, 8.0f) *
@@ -832,12 +836,15 @@ static void SpreadGraffitoRows(LabelLayout& layout, float dimensionalScale)
     layout.nameplateCenter.y = (layout.nameplateTop + layout.nameplateBottom) * .5f;
 }
 
-// Second Graffito stage, run once the layout is measured: spread the rows for
-// the lens, pad the source bounds, re-hinge a falling epitaph on the text,
-// derive the wrap arc and its tessellation, then build one projection per
-// physical face. It mutates the layout (row spread), so it must run after
-// measurement and before any draw. Returns false when no face survived, and the
-// caller then draws nothing for this actor.
+/**
+ * @fn static bool FinalizeGraffitoPlate(GraffitoPlate& plate, LabelLayout& layout, const
+ *     LabelStyle& style, const RenderSettingsSnapshot& snap)
+ * @brief Build plate faces from measured bounds and advance the epitaph hinge.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Finalize projections after measurement and before drawing. Mutates row spacing
+ * and the epitaph hinge. False means no face survived; skip the actor.
+ */
 static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
                                   LabelLayout& layout,
                                   const LabelStyle& style,
@@ -854,9 +861,7 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
     plate.contentBounds = ComputeGraffitoContentBounds(layout);
     if (plate.epitaphProgress > .0f)
     {
-        // Project the full badge-expanded plate, but hinge on the text. Status
-        // marks fade during the drain, so their top row would pivot the
-        // inscription around empty space.
+        // Hinge on text: fading status marks must not leave the pivot in empty space.
         const ImVec2 textMin = layout.startPos + layout.textBoundsMin;
         const ImVec2 textMax = layout.startPos + layout.textBoundsMax;
         const Graffito::Math::Vec2 sourceHinge{
@@ -887,11 +892,8 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
     const float cameraDistance = static_cast<float>(
         std::sqrt(Graffito::Math::LengthSquared(plate.cameraPosition - plate.pose.origin)));
 
-    // The requested arc is a real cylinder, not a distance-scaled recession.
-    // As the view approaches a side facet, narrow it continuously before an
-    // outer chord can turn edge-on and mirror. Each chord gets its own true
-    // depth in the vertex shader; DepthClip uses one least-squares whole-plate
-    // approximation until its optional per-fragment phase is enabled.
+    // Narrow the cylinder near side views before an outer chord mirrors. Each chord
+    // has true vertex depth; DepthClip approximates the whole plate unless per-fragment.
     constexpr double WRAP_EDGE_ON_GUARD_RADIANS = 80.0 * Graffito::Math::PI / 180.0;
     const double azimuth = std::abs(std::atan2(rightDot, frontDot));
     const double requestedArc =
@@ -933,9 +935,7 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
         {layout.startPos.x, layout.startPos.y + layout.infoLineY + layout.infoLineHeight * .5f},
         layout.infoLineWidth);
 
-    // Marks use the same segmented cylindrical projection as the text but keep
-    // their authored proportions. The lens is a typography effect; applying it
-    // to icon quads stretches badges.
+    // Marks share the cylinder but omit the typography lens to preserve proportions.
     constexpr Graffito::FisheyeWarp markFisheye{};
 
     int targetSegments = 1;
@@ -954,19 +954,11 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
             screenWidth = std::hypot(static_cast<double>(rightScreen.x - leftScreen.x),
                                      static_cast<double>(rightScreen.y - leftScreen.y));
         }
-        // Tessellation estimate. The sagitta (chord) error of one segment grows
-        // with the square of its arc, so the count needed to hold a fixed pixel
-        // error grows as the square root of (projected width * arc):
+        // The segment estimate bounds pixel sagitta error:
         //     segments ~ sqrt(k * screenWidth * obliqueness)
         //     k = .32 * arcDegrees / 70
-        // .32 is the chord-error coefficient at a 70-degree reference arc; a
-        // wider arc raises k in proportion. .30 is an obliqueness floor, so a
-        // head-on plate still gets curvature in depth instead of collapsing to
-        // the minimum. 4 is the smallest count that keeps the silhouette smooth.
-        // The un-estimated path keeps targetSegments at 1: with no effective arc
-        // the plate is flat and one quad is exact. setPlane treats this value as
-        // a contract - requireExactSegments drops the whole surface when the
-        // built projection returns a different segment count.
+        // .30 floors obliqueness; four segments preserve curvature head-on. A flat plate
+        // uses one exact quad. requireExactSegments rejects any count mismatch.
         const double arcDegrees = effectiveArc * 180.0 / Graffito::Math::PI;
         const double errorCoefficient = .32 * (arcDegrees / 70.0);
         const double viewObliqueness = std::sqrt(std::clamp(1.0 - frontDot * frontDot, .0, 1.0));
@@ -1024,11 +1016,8 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
         surface.callbackParams = Graffito::MakeCallbackParams(surface.projection, surface.material);
         surface.active = surface.callbackParams != nullptr;
     };
-    // Role separation foreshortens like the wrap arc, so it scales with view
-    // distance.  Each layer is a whole pose that resolves its own base depth
-    // plane and hands it to DepthClip, so a runaway offset would let a wall
-    // behind the actor slice the title away while its name stays lit.  The cap
-    // keeps the stack inside roughly one line height of relief.
+    // Cap relief to roughly one line height; larger offsets let scene walls
+    // clip a title independently of its name.
     constexpr double LAYER_DEPTH_CAP_LINES = 1.0;
     const double layerDepthWorld =
         std::min(static_cast<double>(snap.graffito.LayerDepth) * cameraDistance,
@@ -1080,9 +1069,7 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
                      true);
         }
 
-        // Even with LayerDepth=0, keep one callback per role. Each typography
-        // row needs its own normalized lens band; sharing the main row's band
-        // flattens short title and info rows.
+        // Each row needs its own normalized lens band, even with LayerDepth=0.
         if (!plate.recessedInk.active)
         {
             cloneWithFisheye(plate.recessedInk, plate.front, titleFisheye);
@@ -1095,9 +1082,7 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
         cloneWithFisheye(plate.raisedEmblem, plate.raisedMarks, markFisheye);
     };
 
-    // Once the death rite starts hinging the inscription, the plate is one
-    // physical surface. Auxiliary faces would otherwise stand upright from the
-    // landed text.
+    // The falling inscription is one surface; auxiliary faces would remain upright.
     const bool useFolio = snap.graffito.FolioEnabled && plate.epitaphProgress <= .0f;
     if (!useFolio)
     {
@@ -1142,16 +1127,12 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
              false);
     const int frontSegments = plate.front.active ? plate.front.projection.segmentCount : 1;
 
-    // Typography roles occupy nearby physical layers instead of one flat sheet:
-    // title and info sit just behind the principal name, badges and the tier
-    // mark sit proud, and all of them follow the wrap arc.
+    // Roles follow the wrap arc: title/info behind the name, marks in front.
     const Graffito::InkMaterial frontMaterial{
         .0f, 1.0f, static_cast<float>(folio.front), edgeSheen};
     setFrontLayers(frontMaterial, frontSegments);
 
-    // Repeat the ink of a flat font atlas on three planes behind the crisp
-    // front to get real parallax. Head-on, the slices register as one glyph;
-    // oblique views expose the dark steps as shallow letter relief.
+    // Three recessed ink copies create letter relief through oblique parallax.
     const auto facetMetrics =
         Graffito::Math::ComputeFolioFacetMetrics(layout.nameFontSize, snap.graffito.FolioDepth);
     const float spacingPixels = static_cast<float>(facetMetrics.reliefSpacing);
@@ -1176,9 +1157,7 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
         }
     }
 
-    // One camera-facing mark serves every non-front angle. It is pinned to the
-    // head with a font-derived clearance above it, so side and rear views share
-    // a single stable surface.
+    // One head-pinned mark serves side and rear views with font-derived clearance.
     const float facetHeight = static_cast<float>(facetMetrics.height);
     const float facetWidth = static_cast<float>(facetMetrics.rearWidth);
     const float facetLift = static_cast<float>(facetMetrics.markerLift);
@@ -1188,8 +1167,7 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
     plate.facetDrawBounds = {{centerX - facetWidth * .5f, facetBottom - facetHeight},
                              {centerX + facetWidth * .5f, facetBottom}};
 
-    // The oversized rank extends beyond the glass silhouette, so leave
-    // projection room for its halo and shadow.
+    // Reserve projection space for the oversized rank halo and shadow.
     constexpr float FACET_PROJECTION_GUARD_PX = 20.0f;
     const Graffito::SourceBounds facetProjectionBounds{
         {plate.facetDrawBounds.min.x - FACET_PROJECTION_GUARD_PX,
@@ -1226,11 +1204,22 @@ static bool FinalizeGraffitoPlate(GraffitoPlate& plate,
     return plate.active;
 }
 
+/**
+ * @fn static int GraffitoInkChannel(const RenderSettingsSnapshot& snap)
+ * @brief Select the front draw channel for the active glow pipeline.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static int GraffitoInkChannel(const RenderSettingsSnapshot& snap)
 {
     return snap.enableGlow && TextPostProcess::IsInitialized() ? 2 : 1;
 }
 
+/**
+ * @fn static void BeginReducedGraffitoSurfaceOnChannel(ImDrawList* drawList, ImDrawListSplitter*
+ *     splitter, const GraffitoSurface& surface, int channel)
+ * @brief Select a channel and begin its projected depth bracket.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void BeginReducedGraffitoSurfaceOnChannel(ImDrawList* drawList,
                                                  ImDrawListSplitter* splitter,
                                                  const GraffitoSurface& surface,
@@ -1247,6 +1236,12 @@ static void BeginReducedGraffitoSurfaceOnChannel(ImDrawList* drawList,
     }
 }
 
+/**
+ * @fn static void BeginReducedGraffitoSurface(ImDrawList* drawList, ImDrawListSplitter* splitter,
+ *     const GraffitoSurface& surface, const RenderSettingsSnapshot& snap)
+ * @brief Begin a projected surface with its own depth parameters.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void BeginReducedGraffitoSurface(ImDrawList* drawList,
                                         ImDrawListSplitter* splitter,
                                         const GraffitoSurface& surface,
@@ -1255,6 +1250,11 @@ static void BeginReducedGraffitoSurface(ImDrawList* drawList,
     BeginReducedGraffitoSurfaceOnChannel(drawList, splitter, surface, GraffitoInkChannel(snap));
 }
 
+/**
+ * @fn static void EndReducedGraffitoSurface(ImDrawList* drawList)
+ * @brief Close the projected surface and restore neutral depth parameters.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void EndReducedGraffitoSurface(ImDrawList* drawList)
 {
     if (GetState().depthClipFrame)
@@ -1264,6 +1264,12 @@ static void EndReducedGraffitoSurface(ImDrawList* drawList)
     drawList->AddCallback(Graffito::RestoreCallback, nullptr);
 }
 
+/**
+ * @fn static void EndReducedGraffitoSurfaceOnChannel(ImDrawList* drawList, ImDrawListSplitter*
+ *     splitter, int channel)
+ * @brief Select a channel and close its projected depth bracket.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void EndReducedGraffitoSurfaceOnChannel(ImDrawList* drawList,
                                                ImDrawListSplitter* splitter,
                                                int channel)
@@ -1272,6 +1278,11 @@ static void EndReducedGraffitoSurfaceOnChannel(ImDrawList* drawList,
     EndReducedGraffitoSurface(drawList);
 }
 
+/**
+ * @struct FolioRankVisual
+ * @brief Borrowed rank texture and its tint mode for a facet marker.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct FolioRankVisual
 {
     ImTextureID texture = 0;
@@ -1279,6 +1290,11 @@ struct FolioRankVisual
     bool fullColor = false;
 };
 
+/**
+ * @fn static FolioRankVisual FindFolioRank(const LabelLayout& layout)
+ * @brief Find the emblem or rank badge to repeat on the folio facet.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static FolioRankVisual FindFolioRank(const LabelLayout& layout)
 {
     if (layout.tierEmblemShown && layout.tierEmblemTex != 0)
@@ -1295,6 +1311,12 @@ static FolioRankVisual FindFolioRank(const LabelLayout& layout)
     return {};
 }
 
+/**
+ * @fn static void DrawFolioRank(ImDrawList* drawList, const FolioRankVisual& rank, const ImVec2&
+ *     center, float size, float alpha)
+ * @brief Draw the retained rank texture with the facet opacity.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawFolioRank(ImDrawList* drawList,
                           const FolioRankVisual& rank,
                           const ImVec2& center,
@@ -1309,8 +1331,7 @@ static void DrawFolioRank(ImDrawList* drawList,
                                        : ImVec4(rank.color.r, rank.color.g, rank.color.b, alpha);
     const ImVec2 half{size * .5f, size * .5f};
 
-    // A texture-shaped shadow lets the rank sit proud of the translucent marker
-    // without enclosing differently shaped rank art in a hard disk.
+    // Shape the shadow from rank alpha so irregular art needs no enclosing disk.
     const float shadowSize = size * 1.16f;
     const ImVec2 shadowHalf{shadowSize * .5f, shadowSize * .5f};
     const ImVec2 shadowCenter{center.x, center.y + size * .045f};
@@ -1330,6 +1351,11 @@ static void DrawFolioRank(ImDrawList* drawList,
     RenderSampling::PopSampler(drawList);
 }
 
+/**
+ * @fn static ImU32 ReliefInk(const ImVec4& support, float alpha)
+ * @brief Pack a darkened support tint for recessed folio ink.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static ImU32 ReliefInk(const ImVec4& support, float alpha)
 {
     return ImGui::ColorConvertFloat4ToU32(ImVec4(.025f + support.x * .16f,
@@ -1338,9 +1364,15 @@ static ImU32 ReliefInk(const ImVec4& support, float alpha)
                                                  std::clamp(alpha, .0f, 1.0f)));
 }
 
-// Repeat the main-row glyph silhouettes on successively recessed planes. The
-// front draw follows and masks the registered portions, so only the
-// view-dependent parallax stays visible, such as the sides of the letters.
+/**
+ * @fn static void DrawGraffitoRelief(ImDrawList* drawList, ImDrawListSplitter* splitter, const
+ *     LabelStyle& style, const LabelLayout& layout, const GraffitoPlate& plate, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Draw recessed ink layers that expose parallax around the front text.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The front draw masks aligned ink; recessed copies expose only parallax.
+ */
 static void DrawGraffitoRelief(ImDrawList* drawList,
                                ImDrawListSplitter* splitter,
                                const LabelStyle& style,
@@ -1389,9 +1421,16 @@ static void DrawGraffitoRelief(ImDrawList* drawList,
     }
 }
 
-// Draw the readable face as three nearby physical layers. Each bracket carries
-// its own world projection and scene-depth plane; a failed auxiliary projection
-// falls back to the principal face so no typography disappears.
+/**
+ * @fn static void DrawGraffitoFrontInk(ImDrawList* drawList, ImDrawListSplitter* splitter, const
+ *     LabelStyle& style, const LabelLayout& layout, const GraffitoPlate& plate, float
+ *     lodTitleFactor, float time, const RenderSettingsSnapshot& snap)
+ * @brief Draw each text role through its projected folio surface.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Each role has its own projection/depth bracket. Failed auxiliary projections
+ * use the principal face so text remains visible.
+ */
 static void DrawGraffitoFrontInk(ImDrawList* drawList,
                                  ImDrawListSplitter* splitter,
                                  const LabelStyle& style,
@@ -1436,11 +1475,16 @@ static void DrawGraffitoFrontInk(ImDrawList* drawList,
                   [&]() { DrawTierEmblem(drawList, style, layout, time, splitter, snap, true); });
 }
 
-// Player tier decorations are part of the actor-bound world plate. Particles use
-// the back channel and ornament glyphs use the front channel, so each channel
-// needs its own balanced projection/depth bracket after the splitter merge.
-// Both use the non-fisheye marks surface: the wrap arc carries their position,
-// while sprite and ornament proportions stay as authored.
+/**
+ * @fn static void DrawGraffitoDecorations(ImDrawList*, ImDrawListSplitter*, const ActorDrawData&,
+ *     const LabelStyle&, const LabelLayout&, const GraffitoPlate&, float, float, const
+ *     RenderSettingsSnapshot&)
+ * @brief Project particles and ornaments through the marks surface.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Particles and ornaments need separate balanced projection/depth brackets
+ * after channel merge. Use the marks surface to preserve authored proportions.
+ */
 static void DrawGraffitoDecorations(ImDrawList* drawList,
                                     ImDrawListSplitter* splitter,
                                     const ActorDrawData& d,
@@ -1482,6 +1526,12 @@ static void DrawGraffitoDecorations(ImDrawList* drawList,
     }
 }
 
+/**
+ * @fn static Settings::Color3 FolioRelationshipColor(const ActorDrawData& d, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Resolve the relationship tint for the folio facet.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static Settings::Color3 FolioRelationshipColor(const ActorDrawData& d,
                                                const RenderSettingsSnapshot& snap)
 {
@@ -1499,14 +1549,24 @@ static Settings::Color3 FolioRelationshipColor(const ActorDrawData& d,
     return snap.icons.colNeutral;
 }
 
+/**
+ * @fn static ImVec2 LerpPoint(const ImVec2& from, const ImVec2& to, float t)
+ * @brief Interpolate two screen positions without clamping the factor.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static ImVec2 LerpPoint(const ImVec2& from, const ImVec2& to, float t)
 {
     return {from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t};
 }
 
-// Draw one tapered corner arm as short, progressively dimmer strokes. Geometry
-// rather than a uniform outline: the weight stays at the corner and fades out
-// before it becomes a border around the glass.
+/**
+ * @fn static void DrawFadingCornerArm(ImDrawList* drawList, const ImVec2& corner, const ImVec2&
+ *     along, const ImVec4& color, float alpha)
+ * @brief Fade a facet corner arm before it completes the glass border.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Fade corner arms before they form a complete glass border.
+ */
 static void DrawFadingCornerArm(ImDrawList* drawList,
                                 const ImVec2& corner,
                                 const ImVec2& along,
@@ -1530,6 +1590,12 @@ static void DrawFadingCornerArm(ImDrawList* drawList,
     }
 }
 
+/**
+ * @fn static void DrawFadingTriangleCorners(ImDrawList* drawList, const ImVec2& tip, const ImVec2&
+ *     baseA, const ImVec2& baseB, const ImVec4& leftColor, const ImVec4& rightColor, float alpha)
+ * @brief Draw separate fading arms at each triangle corner.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawFadingTriangleCorners(ImDrawList* drawList,
                                       const ImVec2& tip,
                                       const ImVec2& baseA,
@@ -1546,9 +1612,15 @@ static void DrawFadingTriangleCorners(ImDrawList* drawList,
     DrawFadingCornerArm(drawList, baseB, baseA, rightColor, alpha);
 }
 
-// The marker is a single head-pinned pane shared by every side and rear angle.
-// Dark relationship-tinted glass forms the body; an oversized rank and
-// tier-colored tapered corners carry the read.
+/**
+ * @fn static void DrawGraffitoFacet(ImDrawList*, ImDrawListSplitter*, const GraffitoSurface&,
+ *     const Graffito::SourceBounds&, float, const ActorDrawData&, const LabelStyle&, const
+ *     LabelLayout&, const RenderSettingsSnapshot&)
+ * @brief Draw the head-anchored pane visible from the side or rear.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * One head-pinned pane serves side/rear views; relationship tints its glass.
+ */
 static void DrawGraffitoFacet(ImDrawList* drawList,
                               ImDrawListSplitter* splitter,
                               const GraffitoSurface& surface,
@@ -1591,6 +1663,13 @@ static void DrawGraffitoFacet(ImDrawList* drawList,
     EndReducedGraffitoSurface(drawList);
 }
 
+/**
+ * @fn static void DrawGraffitoFacetMarker(ImDrawList* drawList, ImDrawListSplitter* splitter, const
+ *     ActorDrawData& d, const LabelStyle& style, const LabelLayout& layout, const GraffitoPlate&
+ *     plate, const RenderSettingsSnapshot& snap)
+ * @brief Repeat the rank marker on the projected facet.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawGraffitoFacetMarker(ImDrawList* drawList,
                                     ImDrawListSplitter* splitter,
                                     const ActorDrawData& d,
@@ -1610,6 +1689,11 @@ static void DrawGraffitoFacetMarker(ImDrawList* drawList,
                       snap);
 }
 
+/**
+ * @fn static void TranslateLayout(LabelLayout& layout, const ImVec2& delta)
+ * @brief Move plate bounds and absolute badge positions with the text anchor.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void TranslateLayout(LabelLayout& layout, const ImVec2& delta)
 {
     layout.startPos += delta;
@@ -1629,14 +1713,13 @@ static void TranslateLayout(LabelLayout& layout, const ImVec2& delta)
     }
 }
 
-// ============================================================================
-// Context-conditional scene profiles
-// ============================================================================
-
-// Ease the effective register knobs toward the active register's values, or
-// toward the 1/1/1/0 base state when none matches.  The game thread publishes
-// the active index each snapshot; easing here keeps scene transitions
-// continuous instead of snapping between profiles.
+/**
+ * @fn static void UpdateRegisters(const RenderSettingsSnapshot& snap, float dt)
+ * @brief Ease published register values toward their active profile.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Ease published register values toward their targets, or 1/1/1/0 when none matches.
+ */
 static void UpdateRegisters(const RenderSettingsSnapshot& snap, float dt)
 {
     auto& st = GetState();
@@ -1662,11 +1745,15 @@ static void UpdateRegisters(const RenderSettingsSnapshot& snap, float dt)
     st.regHideNeutral += (hideT - st.regHideNeutral) * k;
 }
 
-// Advance one cache entry's smoothed state and report whether the label is
-// still worth drawing. The first call seeds alpha, text scale, screen position
-// and the occlusion factor from their targets, so a new plate starts settled
-// instead of easing in from zero. Visible means smoothed alpha times the
-// occlusion factor stays above 0.02.
+/**
+ * @fn static bool UpdateCacheSmoothing(ActorCache& entry, const ActorDrawData& d, const
+ *     DistanceFactors& df, const RE::NiPoint3& screenPos, float dt, const RenderSettingsSnapshot&
+ *     snap)
+ * @brief Advance position, scale, opacity, and occlusion smoothing for a plate.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Seed first-frame values from targets. Draw while alpha * occlusion > 0.02.
+ */
 static bool UpdateCacheSmoothing(ActorCache& entry,
                                  const ActorDrawData& d,
                                  const DistanceFactors& df,
@@ -1697,10 +1784,7 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
     }
     else
     {
-        // Settle times are seconds. The player uses a near-instant 0.015 s
-        // instead of PositionSettleTime: ResolvePlayerRenderPose already
-        // extrapolates the player pose every render frame, so smoothing it a
-        // second time would only add lag to the self-plate.
+        // 0.015 s avoids adding lag to the already-extrapolated player pose.
         float aLerp = ExpApproachAlpha(dt, snap.alphaSettleTime);
         float sLerp = ExpApproachAlpha(dt, snap.scaleSettleTime);
         float pLerp = d.isPlayer ? ExpApproachAlpha(dt, .015f)
@@ -1729,10 +1813,7 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
 
         if (moveDist > snap.visual.LargeMovementThreshold)
         {
-            // Snap the head so it never lags a hard screen jump.  The trail is
-            // NOT wiped here: it stores world-space points, so a camera-induced
-            // screen jump leaves them untouched and they reproject onto the
-            // head.  Genuine world teleports are handled in the trail block.
+            // Keep world-space trails across camera jumps; only world teleports reseed them.
             entry.smooth.x += (smoothedPos.x - entry.smooth.x) * snap.visual.LargeMovementBlend;
             entry.smooth.y += (smoothedPos.y - entry.smooth.y) * snap.visual.LargeMovementBlend;
         }
@@ -1753,10 +1834,13 @@ static bool UpdateCacheSmoothing(ActorCache& entry,
     return alpha > .02f;
 }
 
-// ============================================================================
-// Per-actor label orchestrator
-// ============================================================================
-
+/**
+ * @fn static void DrawLabel(const ActorDrawData& snapshotData, ImDrawList* drawList,
+ *     ImDrawListSplitter* splitter, const RenderSettingsSnapshot& snap, uint32_t focusedFormID,
+ *     uint32_t aimedFormID)
+ * @brief Advance a live actor cache entry and draw its resolved plate.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawLabel(const ActorDrawData& snapshotData,
                       ImDrawList* drawList,
                       ImDrawListSplitter* splitter,
@@ -1776,7 +1860,6 @@ static void DrawLabel(const ActorDrawData& snapshotData,
     ResolvePlayerRenderPose(entry, d);
     const uint32_t prevLastSeenFrame = entry.lastSeenFrame;
 
-    // Detect name changes and reset typewriter
     if (entry.cachedName != d.name)
     {
         entry.cachedName = d.name;
@@ -1789,8 +1872,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         entry.typewriterComplete = false;
     }
 
-    // Reset typewriter and entrance on re-entry (actor reappearing or becoming
-    // unoccluded). The threshold counts rendered frames, about 0.5 s at 60 fps.
+    // Re-entry threshold counts rendered frames (~0.5 s at 60 fps).
     constexpr uint32_t REENTRY_THRESHOLD = 30;
     if (entry.initialized)
     {
@@ -1817,12 +1899,10 @@ static void DrawLabel(const ActorDrawData& snapshotData,
     entry.lastSeenFrame = GetState().frame;
     entry.sawAlive = true;  // The death rite plays only for actors seen alive
 
-    // Capture live draw data and cancel any pending exit: a present actor is
-    // never mid-exit. The exit pass replays this snapshot after the actor leaves.
+    // Retain the last live facts for exit replay.
     GetState().lastDrawData[d.formID] = d;
     entry.exitPhase = .0f;
 
-    // Compute distance-based visual factors
     DistanceFactors df = ComputeDistanceFactors(d, snap);
 
     const float dt = ImGui::GetIO().DeltaTime;
@@ -1830,9 +1910,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
     const bool heldReadable = cameraRayFacing || d.isPlayer;
     if (entry.graffitoForcedFront && !heldReadable)
     {
-        // Releasing the ray restores the actor's own heading at once. Easing
-        // out of the temporary camera-facing yaw would hold the full plate on
-        // screen until it finally reached the triangle.
+        // Restore actor yaw immediately after aim release to avoid lingering front text.
         entry.graffitoYaw = d.headingRadians;
         entry.graffitoYawInitialized = true;
     }
@@ -1841,8 +1919,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
     const bool graffitoMode = graffito.requested && Graffito::IsInitialized();
     if (graffitoMode && !graffito.active)
     {
-        // Outside range, or crossing the camera plane: drop the plate instead
-        // of popping back to a billboard.
+        // A range or projection failure must not switch a world plate back to a billboard.
         return;
     }
     RE::NiPoint3 screenPos{};
@@ -1860,29 +1937,23 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         return;
     }
 
-    // Advance entrance/exit animation
     float entranceAlphaMul = 1.0f;
     float entranceScaleMul = 1.0f;
     float entranceYOffset = .0f;
     if (d.isPlayer || cameraRayFacing)
     {
-        // The player plate and an explicit camera-ray hit skip the entrance
-        // delay and the partial typewriter reveal: the player is reading them
-        // right now.
+        // Player and ray targets skip reveal delays unless a console edit rearmed them.
         entry.entranceDone = true;
         entry.entrancePhase = 1.0f;
         entry.entranceDelay = .0f;
-        if (cameraRayFacing)
+        if (cameraRayFacing && !entry.revealArmed)
         {
             entry.typewriterComplete = true;
         }
     }
     else if (snap.enableEntrance && !entry.entranceDone)
     {
-        // Each entrance starting this frame claims the next stagger slot.  The
-        // snapshot is ordered player -> camera-ray target -> Deck target ->
-        // nearest first, so entrances run near-to-far; a lone actor entering
-        // range claims slot 0 and starts immediately.
+        // Stagger slots follow snapshot order: player, ray target, Deck target, distance.
         if (entry.entranceDelay < .0f)
         {
             entry.entranceDelay = std::min(
@@ -1893,7 +1964,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         if (entry.entranceDelay > .0f)
         {
             entry.entranceDelay = std::max(.0f, entry.entranceDelay - dt);
-            entry.typewriterTime = .0f;  // reveal starts with the entrance, not the wait
+            entry.typewriterTime = .0f;  // Reveal starts with the entrance, not the wait
             return;
         }
         entry.entrancePhase += dt / std::max(snap.entranceDuration, .05f);
@@ -1903,40 +1974,32 @@ static void DrawLabel(const ActorDrawData& snapshotData,
             entry.entranceDone = true;
         }
         const float t = entry.entrancePhase;
-        // Front-loaded ease-out that never overshoots.  Every style fades in
-        // and rises into place; only the scale treatment differs.
+        // Ease-out without overshoot; only scale differs between entrance styles.
         const float ease = TextEffects::EaseOutCubic(t);
 
         entranceAlphaMul = ease;
 
-        // Upward settle for every style: the label covers most of the travel
-        // immediately, then eases the final pixels.  The Y-offset block below
-        // applies it.
         entranceYOffset = RenderConstants::ENTRANCE_RISE_PX * (1.0f - TextEffects::EaseOutExpo(t));
 
         if (snap.entranceStyle == 1)  // SlideDown: rise + fade only, no scale
         {
             entranceScaleMul = 1.0f;
         }
-        else  // PopIn (0) / Expand (2): gentle scale settle, no overshoot
+        else  // PopIn (0) / expand (2): gentle scale settle, no overshoot
         {
             const float scaleStart = snap.entranceStyle == 2 ? .88f : .90f;
             entranceScaleMul = scaleStart + ease * (1.0f - scaleStart);
         }
     }
 
-    // Drive a per-actor focusSmooth in [0,1]: it dims ambient (non-focused)
-    // actors and fades in the title/info rows for the focused actor.  The
-    // player is exempt and always treated as focused, so the player plate keeps
-    // full alpha and full content.
+    // Focus fades ambient sub-lines; the player always keeps full content.
     const bool isFocused =
         snap.focus.Enabled && (d.formID == focusedFormID || cameraRayFacing) && !d.isPlayer;
     const bool focusAppliesToActor = snap.focus.Enabled && !d.isPlayer;
     const float focusTarget = focusAppliesToActor ? (isFocused ? 1.0f : .0f) : 1.0f;
     if (cameraRayFacing && focusAppliesToActor)
     {
-        // A direct ray hit is a deliberate read request, not a focus-cone
-        // transition; expose auxiliary rows on the same frame.
+        // Ray hits expose auxiliary rows immediately.
         entry.focusSmooth = 1.0f;
     }
     else if (snap.focus.SettleTime <= .0f)
@@ -1953,9 +2016,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
                                    : snap.focus.AmbientDimFactor +
                                          (1.0f - snap.focus.AmbientDimFactor) * entry.focusSmooth;
 
-    // The scene profile applies an overlay-wide alpha and can hide neutral and
-    // ally plates entirely in matching scenes (crowded cities).  Followers,
-    // hostiles, and the player always keep their plates.
+    // Register hiding applies only to neutral/allied NPCs.
     float registerMul = GetState().regAlphaMul;
     if (!d.isPlayer &&
         (d.relationship == RelationshipKind::Neutral || d.relationship == RelationshipKind::Ally))
@@ -1963,21 +2024,15 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         registerMul *= 1.0f - GetState().regHideNeutral;
     }
 
-    // While another HUD mod floats a widget over this actor, the plate fades to
-    // the configured yield alpha, and fades back on the same curve when the
-    // widget goes away.
+    // Yield to another HUD widget and restore alpha on the same settle curve.
     entry.yieldSmooth += ((d.yieldPlate ? 1.0f : .0f) - entry.yieldSmooth) *
                          ExpApproachAlpha(dt, snap.compatYieldSettleTime);
     const float yieldMul = 1.0f - (1.0f - snap.compatTrueHUDYieldAlpha) * entry.yieldSmooth;
 
-    // Compose the plate alpha from every independent fade.  The camera-motion
-    // quiet factor is deliberately absent here: name, level, and particles all
-    // derive from this alpha and must stay full through a pan.  Only the title
-    // and badge strip fold, below.
+    // Omit quietSub: pans fold auxiliary content without fading name or particles.
     const float alpha = entry.alphaSmooth * entry.occlusionSmooth * entranceAlphaMul *
                         mainAlphaMul * registerMul * yieldMul * graffito.visibility;
-    // A world plane already shrinks with distance through perspective.  Reusing
-    // the billboard scale falloff would apply distance scaling twice.
+    // Perspective already supplies distance scaling for world planes.
     const float textSizeScale = (graffito.active ? 1.0f : entry.textSizeScale) * entranceScaleMul;
 
     auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
@@ -1985,9 +2040,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
     {
         return;
     }
-    // Cull the plate when the anchor leaves the viewport depth range [0,1] or
-    // sits more than 100 px outside the screen.  The margin keeps a plate whose
-    // anchor is just off-screen but whose text still reaches into view.
+    // Keep a 100 px margin because text can remain visible past its anchor.
     const auto viewSize = renderer->GetScreenSize();
     if (screenPos.z < 0 || screenPos.z > 1.0f || screenPos.x < -100.0f ||
         screenPos.x > viewSize.width + 100.0f || screenPos.y < -100.0f ||
@@ -1996,13 +2049,11 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         return;
     }
 
-    // Compute style, layout, and dispatch to sub-renderers
     const float time = (float)ImGui::GetTime();
     LabelStyle style = ComputeLabelStyle(d, entry.cachedNameLower, alpha, time, snap);
     if (graffito.active)
     {
-        // Keep the physical type plain, and stop CPU-glow reset callbacks from
-        // replacing the plane/depth shaders in the middle of a channel.
+        // CPU glow resets would replace the plane/depth shaders mid-channel.
         style.tierAllowsGlow = false;
         style.outlineGlowAllowed = false;
     }
@@ -2019,9 +2070,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
     style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale, snap);
     style.outlineWidth = style.nameOutlineWidth;
 
-    // Tint this plate's ink by the scene light measured behind it.  The sample
-    // is smoothed per actor, so exposure changes settle at the same rate as
-    // every other transition.
+    // Smooth scene samples per actor to avoid abrupt exposure changes.
     if (snap.candleEnabled && SceneMeter::IsInitialized())
     {
         float lum = .0f;
@@ -2053,14 +2102,8 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         }
     }
 
-    // Fade title and info rows to zero on ambient (non-focused) actors so only
-    // the main line remains.  Focus transitions crossfade through the same
-    // focusSmooth that drives the main-alpha dim.
-    //
-    // The camera-pan fold (paneFold) folds ONLY the title and the status-badge
-    // strip above the name - the name, level, and particles stay full so the
-    // core readout never blinks during a pan.  regSubLineMul (the scene-profile
-    // dimming knob) is a separate feature and composes on every sub-line.
+    // Focus fades title/info. Camera pans fold title/badges only; register
+    // sub-line dimming multiplies both independently.
     const float paneFold = 1.0f - GetState().quietSub;  // 1 = settled, 0 = folded on a pan
     const float regSub = GetState().regSubLineMul;
     const float auxAlphaMul = focusAppliesToActor ? entry.focusSmooth : 1.0f;
@@ -2071,10 +2114,8 @@ static void DrawLabel(const ActorDrawData& snapshotData,
 
     LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap);
 
-    // Screen-space position smoothing and overlap relaxation suit billboards,
-    // but would make a physical plane swim when the camera moves.  Re-anchor
-    // all resolved geometry to the plane's exact projection, keeping local
-    // typography offsets and the entrance animation.
+    // Anchor world geometry to its exact projection; screen smoothing and overlap
+    // relaxation would make it drift during camera motion.
     if (graffito.active)
     {
         TranslateLayout(
@@ -2082,7 +2123,6 @@ static void DrawLabel(const ActorDrawData& snapshotData,
             ImVec2(graffito.screenPos.x - entry.smooth.x, graffito.screenPos.y - entry.smooth.y));
     }
 
-    // Apply the entrance rise Y offset (all styles)
     if (entranceYOffset != .0f)
     {
         TranslateLayout(layout, ImVec2(.0f, entranceYOffset));
@@ -2103,17 +2143,11 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         BracketPlateDepthClip(drawList, splitter, DepthClip::MakePlateParams(screenPos.z), snap);
     }
 
-    // Motion trail: store the actor's WORLD position each frame and draw ghost
-    // copies reprojected through the CURRENT camera.  A pure camera pan
-    // reprojects every stored world point with the same transform, so the
-    // ghosts collapse onto the head and leave no smear; only actor movement
-    // spreads them into a trail.
+    // World-space trails use the current camera so stationary actors leave no smear.
     if (!graffito.active && snap.visual.EnableMotionTrail &&
         style.tierIdx >= snap.visual.TrailMinTier && entry.entranceDone)
     {
-        // Reseed across a world-space teleport (scripted move, same-pass fast
-        // travel) so the trail never stretches across the jump. A camera pan
-        // never trips this - the stored positions are world space, not screen.
+        // Reseed only on world-space teleports.
         const int lastIdx = (entry.trailIndex - 1 + ActorCache::TRAIL_HISTORY_SIZE) %
                             ActorCache::TRAIL_HISTORY_SIZE;
         if (entry.trailFilled || entry.trailIndex > 0)
@@ -2122,8 +2156,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
             const float wdx = d.worldPos.x - prevWorld.x;
             const float wdy = d.worldPos.y - prevWorld.y;
             const float wdz = d.worldPos.z - prevWorld.z;
-            // Far beyond any locomotion speed even at low frame rates; only a
-            // teleport clears this bar.
+            // Above locomotion speed even at low frame rates.
             constexpr float kTeleportDist = 256.0f;
             if (wdx * wdx + wdy * wdy + wdz * wdz > kTeleportDist * kTeleportDist)
             {
@@ -2141,21 +2174,14 @@ static void DrawLabel(const ActorDrawData& snapshotData,
         const int count = entry.trailFilled ? ActorCache::TRAIL_HISTORY_SIZE : entry.trailIndex;
         const int trailLen = std::min(count, snap.visual.TrailLength);
 
-        // Reproject the head (this frame's world pos).  The drawn plate sits at
-        // layout.startPos, which differs from the raw projection only by layout
-        // offsets (horizontal optical centering, overlap relaxation, entrance
-        // rise); carry that same offset onto every ghost so head and trail stay
-        // coincident.
+        // Carry layout offsets onto every reprojected ghost to align it with the head.
         RE::NiPoint3 headScreen{};
         if (trailLen > 1 && WorldToScreen(d.worldPos, headScreen))
         {
             const ImVec2 trailTransientOffset(layout.startPos.x - headScreen.x,
                                               layout.startPos.y - headScreen.y);
 
-            // Camera-compensated distance gate: measure the reprojected screen
-            // span between the oldest sample and the head.  Still in pixels, so
-            // TrailMinDistance keeps its meaning; a static actor projects to
-            // ~one point (span 0) and no trail renders even under a hard pan.
+            // Measure reprojected span in pixels to retain TrailMinDistance semantics.
             const int oldest = (entry.trailIndex - trailLen + ActorCache::TRAIL_HISTORY_SIZE) %
                                ActorCache::TRAIL_HISTORY_SIZE;
             RE::NiPoint3 oldestScreen{};
@@ -2170,7 +2196,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
                 const int chBack = gpuGlow ? 1 : 0;
                 splitter->SetCurrentChannel(drawList, chBack);
 
-                // Draw ghosts from oldest to newest (skip i=0 - the head draws it).
+                // Oldest first; skip the head sample.
                 for (int i = trailLen - 1; i >= 1; --i)
                 {
                     const int idx = (entry.trailIndex - 1 - i + ActorCache::TRAIL_HISTORY_SIZE) %
@@ -2178,7 +2204,7 @@ static void DrawLabel(const ActorDrawData& snapshotData,
                     RE::NiPoint3 ghostScreen{};
                     if (!WorldToScreen(entry.trailHistory[idx], ghostScreen))
                     {
-                        continue;  // behind the camera after a hard pan
+                        continue;  // Behind the camera after a hard pan
                     }
                     const ImVec2 ghostPos(ghostScreen.x + trailTransientOffset.x,
                                           ghostScreen.y + trailTransientOffset.y);
@@ -2193,7 +2219,6 @@ static void DrawLabel(const ActorDrawData& snapshotData,
                         continue;
                     }
 
-                    // Render ghost text for each main line segment
                     float ghostCursorX = ghostPos.x - layout.totalWidth * .5f;
                     float ghostY = ghostPos.y + layout.mainLineY;
                     for (const auto& seg : layout.segments)
@@ -2223,7 +2248,6 @@ static void DrawLabel(const ActorDrawData& snapshotData,
                     }
                 }
 
-                // Restore to front channel
                 const int chFront = gpuGlow ? 2 : 1;
                 splitter->SetCurrentChannel(drawList, chFront);
             }
@@ -2269,19 +2293,26 @@ static void DrawLabel(const ActorDrawData& snapshotData,
     }
 }
 
-// ============================================================================
-// Death rite
-// ============================================================================
-
-// Rite phase math (pure - mirrored in tests/test_utils.cpp; keep in sync).
-// t in [0,1]:  hold [0,0.22)  drain [0.22,0.55)  farewell [0.55,1].  During
-// the hold the plate is untouched; the drain pulls the ink toward its rite
-// color; the farewell fades it out, and per creature crumbles or drifts it.
+/**
+ * @struct DeathRitePhases
+ * @brief Normalized ink-drain and farewell progress for a death animation.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Rite phase math (pure - mirrored in tests/test_utils.cpp; keep in sync).
+ * T in [0,1]:  hold [0,0.22)  drain [0.22,0.55)  farewell [0.55,1].  During
+ * the hold the plate is untouched; the drain pulls the ink toward its rite
+ * color; the farewell fades it out, and per creature crumbles or drifts it.
+ */
 struct DeathRitePhases
 {
     float drainT;     // Ink drain progress [0,1]
     float dissolveT;  // Farewell progress [0,1]
 };
+/**
+ * @fn static DeathRitePhases ComputeDeathRitePhases(float t)
+ * @brief Resolve the ink-drain and farewell progress after the initial hold.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static DeathRitePhases ComputeDeathRitePhases(float t)
 {
     constexpr float kHoldEnd = .22f;
@@ -2292,8 +2323,14 @@ static DeathRitePhases ComputeDeathRitePhases(float t)
     return p;
 }
 
-// Total revealed characters across a computed layout (main row -> info row ->
-// title, matching the typewriter's accounting order).
+/**
+ * @fn static int CountLayoutChars(const LabelLayout& layout)
+ * @brief Count revealed UTF-8 characters in the typewriter accounting order.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Total revealed characters across a computed layout (main row -> info row ->
+ * title, matching the typewriter's accounting order).
+ */
 static int CountLayoutChars(const LabelLayout& layout)
 {
     size_t total = Utf8CharCount(layout.titleStr.c_str());
@@ -2308,13 +2345,16 @@ static int CountLayoutChars(const LabelLayout& layout)
     return static_cast<int>(total);
 }
 
-// Render the one-shot death rite for an actor that died in view.  The anchor
-// holds at the last living world position, so a ragdoll cannot drag it around,
-// while Graffito reprojects that frozen point as the camera moves.  The ink
-// drains, then the farewell is keyed to the creature: undead crumble letter by
-// letter, dragons sear bright and go dark, everything else fades and sinks.
-// Replays the last live draw data, so the styling (relationship color, badges)
-// never flips post-mortem.
+/**
+ * @fn static void DrawDyingLabel(ActorCache& entry, const ActorDrawData& d, ImDrawList* drawList,
+ *     ImDrawListSplitter* splitter, const RenderSettingsSnapshot& snap)
+ * @brief Replay the last live plate through its one-shot death animation.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Freeze the last live world anchor and yaw for the one-shot rite. Graffito
+ * reprojects them as the camera moves; ragdoll motion cannot drag the inscription.
+ * Undead crumble, dragons sear, others fade and sink.
+ */
 static void DrawDyingLabel(ActorCache& entry,
                            const ActorDrawData& d,
                            ImDrawList* drawList,
@@ -2327,7 +2367,7 @@ static void DrawDyingLabel(ActorCache& entry,
     if (entry.deathPhase >= 1.0f)
     {
         entry.deathDone = true;
-        entry.exitPhase = 1.0f;  // the rite is the exit - never replay one
+        entry.exitPhase = 1.0f;  // The rite is the exit - never replay one
         return;
     }
     const DeathRitePhases ph = ComputeDeathRitePhases(entry.deathPhase);
@@ -2336,8 +2376,7 @@ static void DrawDyingLabel(ActorCache& entry,
     const bool crumble = d.creatureKind == CreatureKind::Undead;
 
     const float epitaphProgress = snap.graffito.FallenEpitaphEnabled ? ph.drainT : .0f;
-    // Freeze the last live yaw while the inscription falls; a continuing
-    // orientation settle would make the landed epitaph swivel on the floor.
+    // Freeze yaw so the landed inscription cannot swivel.
     GraffitoPlate graffito = PrepareGraffitoPlate(d, entry, snap, .0f, epitaphProgress);
     const bool graffitoMode = graffito.requested && Graffito::IsInitialized();
     if (graffitoMode && !graffito.active)
@@ -2347,8 +2386,6 @@ static void DrawDyingLabel(ActorCache& entry,
     const bool fallenEpitaphMode = graffito.active && snap.graffito.FallenEpitaphEnabled;
 
     const float fade = sear ? std::pow(ph.dissolveT, 1.35f) : ph.dissolveT;
-    // The camera-motion quiet factor does not touch the name or level during a
-    // rite either - the drain below governs how the sub-lines fade.
     const float alpha = entry.alphaSmooth * entry.occlusionSmooth * GetState().regAlphaMul *
                         (1.0f - fade) * graffito.visibility;
     if (alpha < .01f)
@@ -2377,7 +2414,6 @@ static void DrawDyingLabel(ActorCache& entry,
     style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale, snap);
     style.outlineWidth = style.nameOutlineWidth;
 
-    // Ink treatment.
     if (sear)
     {
         constexpr ImVec4 kSearBright{1.0f, .92f, .78f, 1.0f};
@@ -2401,7 +2437,6 @@ static void DrawDyingLabel(ActorCache& entry,
     style.badgeAlphaMul = subMul;
     style.levelAlpha *= 1.0f - ph.drainT * .5f;
 
-    // Creature-keyed farewell: reverse-typewriter crumble for the undead.
     int forcedChars = -1;
     if (crumble && ph.dissolveT > .0f)
     {
@@ -2420,8 +2455,7 @@ static void DrawDyingLabel(ActorCache& entry,
             ImVec2(graffito.screenPos.x - entry.smooth.x, graffito.screenPos.y - entry.smooth.y));
     }
 
-    // Vertical drift: dragons rise, the crumbling undead stay put, and every
-    // other creature sinks.
+    // Dragons rise; undead stay fixed; other creatures sink.
     float yOffset = .0f;
     if (!fallenEpitaphMode)
     {
@@ -2448,8 +2482,7 @@ static void DrawDyingLabel(ActorCache& entry,
         DrawGraffitoRelief(drawList, splitter, style, layout, graffito, snap);
     }
 
-    // Depth clipping: billboards use one anchor depth, while Graffito's layered
-    // renderer brackets each physical surface with its own plane depth.
+    // Billboards share anchor depth; Graffito brackets each physical surface.
     const bool frontDepthBracket = GetState().depthClipFrame && !graffito.active;
     if (frontDepthBracket)
     {
@@ -2459,8 +2492,7 @@ static void DrawDyingLabel(ActorCache& entry,
         BracketPlateDepthClip(drawList, splitter, params, snap);
     }
 
-    // No particles, ornaments, or trail during a rite - only the inscription
-    // and its informational marks remain.
+    // Rites retain only text and informational marks.
     if (!graffito.active)
     {
         DrawBackgroundGlow(drawList, style, layout, df.lodTitleFactor, splitter, snap);
@@ -2489,9 +2521,14 @@ static void DrawDyingLabel(ActorCache& entry,
     }
 }
 
-// Render a nameplate that has just left the snapshot, fading and sinking out of
-// view over snap.exitDuration. Billboards reuse the last smoothed screen point;
-// Graffito reprojects the cached world anchor and yaw without actor reads.
+/**
+ * @fn static void DrawExitingLabel(ActorCache& entry, const ActorDrawData& d, ImDrawList* drawList,
+ *     ImDrawListSplitter* splitter, const RenderSettingsSnapshot& snap)
+ * @brief Replay the last plate while its exit animation completes.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Exit replays a smoothed billboard anchor or reprojected Graffito world pose.
+ */
 static void DrawExitingLabel(ActorCache& entry,
                              const ActorDrawData& d,
                              ImDrawList* drawList,
@@ -2546,9 +2583,7 @@ static void DrawExitingLabel(ActorCache& entry,
     style.titleOutlineWidth = style.CalcOutlineWidth(titleFont->FontSize * textSizeScale, snap);
     style.outlineWidth = style.nameOutlineWidth;
 
-    // Preserve the last focus state so an ambient label keeps its dimmed title.
-    // Exiting ghosts fold on a camera pan like live plates: only the title and
-    // badge strip fold; name, level, and particles stay full.
+    // Keep ambient focus dimming and the live plate camera-pan fold.
     const float paneFold = 1.0f - GetState().quietSub;
     const float regSub = GetState().regSubLineMul;
     const bool focusApplies = snap.focus.Enabled && !d.isPlayer;
@@ -2558,7 +2593,6 @@ static void DrawExitingLabel(ActorCache& entry,
     style.levelAlpha *= regSub;
     style.badgeAlphaMul = regSub * paneFold;
 
-    // Reuse distance-derived LOD factors from the cached distance.
     DistanceFactors df = ComputeDistanceFactors(d, snap);
 
     LabelLayout layout = ComputeLabelLayout(d, entry, style, textSizeScale, snap);
@@ -2580,9 +2614,8 @@ static void DrawExitingLabel(ActorCache& entry,
         DrawGraffitoRelief(drawList, splitter, style, layout, graffito, snap);
     }
 
-    // Depth clipping: ghosts reproject their last world position; if that fails
-    // (behind the camera) they render unclipped rather than inheriting the
-    // previous plate's depth. Graffito brackets each physical layer itself.
+    // Failed ghost projection draws unclipped to avoid inheriting another plate
+    // depth. Graffito brackets each layer independently.
     const bool frontDepthBracket = GetState().depthClipFrame && !graffito.active;
     if (frontDepthBracket)
     {
@@ -2592,8 +2625,6 @@ static void DrawExitingLabel(ActorCache& entry,
         BracketPlateDepthClip(drawList, splitter, params, snap);
     }
 
-    // No motion trail on exit (the label is not moving); everything else renders
-    // as a fading, sinking copy of the last live frame.
     if (!graffito.active)
     {
         DrawBackgroundGlow(drawList, style, layout, df.lodTitleFactor, splitter, snap);
@@ -2633,10 +2664,11 @@ static void DrawExitingLabel(ActorCache& entry,
     }
 }
 
-// ============================================================================
-// Debug overlay
-// ============================================================================
-
+/**
+ * @fn static void DrawDebugOverlay(const RenderSettingsSnapshot& snap)
+ * @brief Publish renderer state to the enabled diagnostic overlay.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawDebugOverlay(const RenderSettingsSnapshot& snap)
 {
     if (!snap.enableDebugOverlay)
@@ -2676,15 +2708,29 @@ static void DrawDebugOverlay(const RenderSettingsSnapshot& snap)
     DebugOverlay::Render(ctx);
 }
 
-// ============================================================================
-// Hot reload
-// ============================================================================
-
+/**
+ * @fn static void HandleHotReload()
+ * @brief Coordinate settings reload with snapshot tasks and render-owned caches.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * A key edge latches the request. Later frames retry while snapshot work is active;
+ * the render thread does not wait for that work. Pause is checked again before loading.
+ * Completion clears the render cache and requests a game-thread occlusion-cache clear.
+ *
+ * ```mermaid
+ * flowchart LR
+ *     Request[Request latched] --> Idle{Snapshot tasks idle?}
+ *     Idle -->|No| Request
+ *     Idle -->|Yes| Pause[Pause and recheck]
+ *     Pause --> Load[Load settings]
+ *     Load --> Finish[Render thread clears cache and resumes snapshots]
+ * ```
+ *
+ * Without the SKSE task interface, loading runs synchronously on the render thread.
+ */
 static void HandleHotReload()
 {
-    // Complete an async reload that the game thread finished on a prior frame.
-    // cache.clear() must stay on the render thread since the cache is only
-    // accessed here.
+    // Finalize reload here: only the render thread may clear its cache.
     if (GetState().reloadCompleted.exchange(false, std::memory_order_acq_rel))
     {
         GetState().lastReloadTime = static_cast<float>(ImGui::GetTime());
@@ -2727,9 +2773,8 @@ static void HandleHotReload()
         return;
     }
 
-    // seq_cst: the pause-flag store and the in-flight loads target *different*
-    // atomics, so a release/acquire pair alone establishes no happens-before
-    // on weakly-ordered archs. seq_cst gives the global ordering we need.
+    // seq_cst orders the pause store against loads of different in-flight atomics;
+    // release/acquire alone supplies no cross-atomic ordering.
     GetState().pauseSnapshotUpdates.store(true, std::memory_order_seq_cst);
     const bool queuedAfterPause = GetState().updateQueued.load(std::memory_order_seq_cst);
     const bool runningAfterPause = GetState().snapshotUpdateRunning.load(std::memory_order_seq_cst);
@@ -2740,9 +2785,7 @@ static void HandleHotReload()
         return;
     }
 
-    // Queue Settings::Load() to the game thread to avoid a frame hitch
-    // from synchronous file I/O on the render thread.  The render thread
-    // stays paused (pauseSnapshotUpdates) until reloadCompleted is set.
+    // Game-thread file I/O keeps the render thread paused until reloadCompleted.
     if (auto* task = SKSE::GetTaskInterface())
     {
         task->AddTask(
@@ -2750,7 +2793,6 @@ static void HandleHotReload()
             {
                 Settings::Load();
 
-                // Signal the render thread to finalize the reload on the next frame.
                 GetState().reloadCompleted.store(true, std::memory_order_release);
             });
     }
@@ -2769,10 +2811,11 @@ static void HandleHotReload()
     GetState().reloadKeyWasDown = keyDown;
 }
 
-// ============================================================================
-// Debug stats
-// ============================================================================
-
+/**
+ * @fn static void UpdateDebugStats(const std::vector<ActorDrawData>& snap, bool hidePlayer)
+ * @brief Refresh diagnostic counts from the frame snapshot at a bounded rate.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void UpdateDebugStats(const std::vector<ActorDrawData>& snap, bool hidePlayer)
 {
     GetState().debugStats.actorCount = 0;
@@ -2803,17 +2846,15 @@ static void UpdateDebugStats(const std::vector<ActorDrawData>& snap, bool hidePl
     ++GetState().updateCounter;
 }
 
-// ============================================================================
-// Focus-target selection
-// ============================================================================
-
-// Cast straight out of the camera, perpendicular to its image plane, and pick
-// the nearest actor whose bounding sphere (raycastCenter and raycastRadius,
-// both measured on the game thread) the ray enters. This is evaluated on every
-// render frame from plain snapshot data, so it does not inherit the HUD
-// crosshair target's reference filtering or game-thread presentation lag.
-// Returns 0 when Graffito is off, the snapshot is empty, the camera pose is
-// unavailable, or every candidate is filtered out.
+/**
+ * @fn static uint32_t RaycastCameraActor(const std::vector<ActorDrawData>& snap, const
+ *     RenderSettingsSnapshot& snapSettings)
+ * @brief Select the nearest eligible snapshot sphere along the current camera ray.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Ray-test snapshot actor bounds each render frame, independent of HUD target
+ * filtering and game-thread lag. Zero means unavailable or no eligible hit.
+ */
 static uint32_t RaycastCameraActor(const std::vector<ActorDrawData>& snap,
                                    const RenderSettingsSnapshot& snapSettings)
 {
@@ -2854,12 +2895,6 @@ static uint32_t RaycastCameraActor(const std::vector<ActorDrawData>& snap,
     return bestID;
 }
 
-// Pick the formID of the actor whose direction from the camera lies inside the
-// configured cone with the smallest angular offset. Returns 0 if nothing
-// qualifies: focus disabled, empty snapshot, camera pose unavailable, or every
-// candidate filtered out.
-// Tiebreakers: smaller player distance, then smaller formID for determinism.
-// The player is never picked.
 uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
                             const RenderSettingsSnapshot& snapSettings)
 {
@@ -2875,10 +2910,7 @@ uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
         return 0;
     }
 
-    // Resolve max distance: 0 = no additional bound here, so an effectively
-    // infinite 1e9 stands in.  (The snapshot already filtered actors beyond
-    // MaxScanDistance on the game thread; FocusMaxDistance only shrinks the
-    // cone further.)
+    // Zero adds no bound beyond the game-thread MaxScanDistance filter.
     const float focusMaxDist =
         snapSettings.focus.MaxDistance > .0f ? snapSettings.focus.MaxDistance : 1e9f;
     const float maxDistSq = focusMaxDist * focusMaxDist;
@@ -2924,7 +2956,6 @@ uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
             continue;  // Outside cone.
         }
 
-        // Higher dot wins; ties broken by closer-to-player; then formID.
         const bool better = dot > bestDot || (dot == bestDot && d.distToPlayer < bestDist) ||
                             (dot == bestDot && d.distToPlayer == bestDist && d.formID < bestID);
         if (better)
@@ -2938,10 +2969,12 @@ uint32_t SelectFocusedActor(const std::vector<ActorDrawData>& snap,
     return bestID;
 }
 
-// ============================================================================
-// Overlap resolution
-// ============================================================================
-
+/**
+ * @fn static void ResolveOverlaps(const std::vector<ActorDrawData>& localSnap, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Assign vertical offsets that separate projected plate rectangles.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void ResolveOverlaps(const std::vector<ActorDrawData>& localSnap,
                             const RenderSettingsSnapshot& snap)
 {
@@ -2972,9 +3005,7 @@ static void ResolveOverlaps(const std::vector<ActorDrawData>& localSnap,
             continue;
         }
 
-        // The real plate height is not built yet (ComputeLabelLayout runs
-        // later), so a 1.5x font-size box stands in for it. Resolved spacing
-        // therefore does not match nameplateHeight exactly.
+        // Layout runs later; approximate height as 1.5x font size.
         float approxHeight = snap.nameFontSize * entry.textSizeScale * 1.5f;
         labelRects.push_back(
             {i, entry.smooth.y, approxHeight * .5f, d.distToPlayer, .0f, d.isPlayer});
@@ -3011,9 +3042,7 @@ static void ResolveOverlaps(const std::vector<ActorDrawData>& localSnap,
         }
     }
 
-    // Store offsets for ComputeLabelLayout to apply while DrawLabel builds the
-    // plate. Offsets below 0.01 px are dropped rather than stored, so the layout
-    // pass finds no entry for them.
+    // Layout applies stored offsets; discard shifts below 0.01 px.
     for (const auto& lr : labelRects)
     {
         if (std::abs(lr.yOffset) > .01f)
@@ -3023,13 +3052,6 @@ static void ResolveOverlaps(const std::vector<ActorDrawData>& localSnap,
     }
 }
 
-// ============================================================================
-// Settings snapshot factory
-// ============================================================================
-
-// Copy every render-relevant setting under one shared settings lock, so a frame
-// can never mix values from two generations. Called only when the settings
-// generation changed, never per frame.
 RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
 {
     RenderSettingsSnapshot snap;
@@ -3157,7 +3179,6 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.infoFormat = Settings::InfoFormat();
     snap.specialTitles = Settings::SpecialTitles();
 
-    // Contextual label tokens + classification thresholds.
     const auto& lb = Settings::Labels();
     snap.labels.relFollower = lb.RelationshipFollower;
     snap.labels.relAlly = lb.RelationshipAlly;
@@ -3176,7 +3197,6 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.labels.deltaStrongAbove = lb.StrongAtOrAbove;
     snap.labels.deltaDeadlyAbove = lb.DeadlyAtOrAbove;
 
-    // Status icon badges - colors pre-derived in ClampAndValidate.
     const auto& ic = Settings::Icons();
     snap.icons.enabled = ic.Enabled && !ic.Folder.empty();
     snap.icons.scale = ic.Scale;
@@ -3199,7 +3219,6 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.icons.colStrong = ic.StrongColor;
     snap.icons.colDeadly = ic.DeadlyColor;
     snap.icons.colCreature = ic.CreatureColor;
-    // Always-on slots (further NPC and player indicators).
     snap.icons.icoNeutral = ic.NeutralIcon;
     snap.icons.icoHumanoid = ic.HumanoidIcon;
     snap.icons.icoEven = ic.EvenIcon;
@@ -3239,6 +3258,22 @@ RenderSettingsSnapshot RenderSettingsSnapshot::CaptureFromSettings()
     snap.icons.tierBadgeGamma = ic.TierBadgeGamma;
     snap.icons.tierBadgeScale = ic.TierBadgeScale;
     snap.icons.tierImageCount = BadgeTextures::TierImageCount();
+    // Warn once per settings generation about a Badge key the manifest cannot satisfy.
+    if (snap.icons.tierImageCount > 0)
+    {
+        for (std::size_t i = 0; i < snap.tiers.size(); ++i)
+        {
+            if (snap.tiers[i].badgeIndex > snap.icons.tierImageCount)
+            {
+                SKSE::log::warn(
+                    "Tier{}: Badge = {} exceeds the {} loaded emblems; falls back to the "
+                    "TierBadgeGamma curve",
+                    i,
+                    snap.tiers[i].badgeIndex,
+                    snap.icons.tierImageCount);
+            }
+        }
+    }
     snap.icons.colNeutral = ic.NeutralColor;
     snap.icons.colHumanoid = ic.HumanoidColor;
     snap.icons.colCommoner = ic.CommonerColor;
@@ -3335,23 +3370,33 @@ void RenderSettingsSnapshot::PopulateSortedSpecialTitles()
               [](const auto* a, const auto* b) { return a->priority > b->priority; });
 }
 
-// ============================================================================
-// Main entry points
-// ============================================================================
-
-// Rebuild the per-frame settings copy only when Settings::Generation() moved.
-// The generation is compared once without the lock, so the common frame stays
-// lock-free, then again under the shared lock before the copy runs.
+/**
+ * @fn static void RefreshCachedSettingsSnapshot()
+ * @brief Recapture settings when their published generation or the emblem count changes.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The generation covers an INI reload. The emblem count covers a texture rebuild that keeps the
+ * generation: the badge textures are refreshed before the frame draws, so a reload that publishes
+ * between that refresh and this call captures the old count, and the rebuilt count then never
+ * reaches the cache. A stale `icons.tierImageCount` selects emblems against the wrong slot count,
+ * on plates and on Deck cards, for the rest of the generation. The count query is lock-free.
+ *
+ * Check both triggers again under the lock; unchanged frames need no lock or copy.
+ */
 static void RefreshCachedSettingsSnapshot()
 {
     uint32_t currentGen = Settings::Generation().load(std::memory_order_acquire);
-    if (currentGen == GetState().lastSnapGeneration)
+    int tierImageCount = BadgeTextures::TierImageCount();
+    if (currentGen == GetState().lastSnapGeneration &&
+        tierImageCount == GetState().cachedSnap.icons.tierImageCount)
     {
         return;
     }
     const std::shared_lock<std::shared_mutex> settingsReadLock(Settings::Mutex());
     currentGen = Settings::Generation().load(std::memory_order_acquire);
-    if (currentGen == GetState().lastSnapGeneration)
+    tierImageCount = BadgeTextures::TierImageCount();
+    if (currentGen == GetState().lastSnapGeneration &&
+        tierImageCount == GetState().cachedSnap.icons.tierImageCount)
     {
         return;
     }
@@ -3360,6 +3405,11 @@ static void RefreshCachedSettingsSnapshot()
     GetState().lastSnapGeneration = currentGen;
 }
 
+/**
+ * @fn static float DistanceToSegmentSquared(const ImVec2& point, const ImVec2& a, const ImVec2& b)
+ * @brief Measure squared pixel distance to the nearest point on a segment.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static float DistanceToSegmentSquared(const ImVec2& point, const ImVec2& a, const ImVec2& b)
 {
     const ImVec2 ab = b - a;
@@ -3376,6 +3426,11 @@ static float DistanceToSegmentSquared(const ImVec2& point, const ImVec2& a, cons
     return delta.x * delta.x + delta.y * delta.y;
 }
 
+/**
+ * @fn static Deck::RarityArchetype ToDeckArchetype(CreatureKind kind)
+ * @brief Map the snapshot creature category to a card rarity archetype.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static Deck::RarityArchetype ToDeckArchetype(CreatureKind kind)
 {
     switch (kind)
@@ -3394,11 +3449,14 @@ static Deck::RarityArchetype ToDeckArchetype(CreatureKind kind)
     }
 }
 
-// Each capture of the same actor must roll differently, so the steady clock and
-// a monotonic serial are mixed into the formID before the phase helper runs.
-// The roll is deliberately not deterministic per actor, despite the helper
-// name. 0x9E3779B9 is the golden-ratio constant, used only to disperse bits.
-// The mutable static makes this helper render-thread only.
+/**
+ * @fn static float NextDeckRarityRoll(std::uint32_t formID)
+ * @brief Generate a new rarity sample for a render-thread card capture.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Clock and serial randomize repeat captures of one FormID. Render-thread only
+ * because the serial is mutable; 0x9E3779B9 disperses bits.
+ */
 static float NextDeckRarityRoll(std::uint32_t formID)
 {
     static std::uint32_t serial = 0;
@@ -3466,8 +3524,7 @@ void PrepareDeckCaptureRT()
         }
     }
 
-    // CrosshairPickData can be empty for distant actors and third-person
-    // camera angles. Fall back to the closest projected head-to-feet segment.
+    // Distant and third-person targets can lack CrosshairPickData; use projected bounds.
     if (!target)
     {
         const ImVec2 center(screenWidth * .5f, screenHeight * .5f);
@@ -3564,8 +3621,14 @@ void PrepareDeckCaptureRT()
     request.formID = target->formID;
     request.name = target->name.empty() ? "Unknown Actor" : target->name;
     request.level = target->level;
-    request.tierIndex = treatmentTierIdx;
-    request.tierCount = tierCount;
+    // Resolve from the card's treatment tier so a rarity bump moves the emblem with the frame.
+    request.tierImageIndex = snapSettings.icons.tierBadgeImages
+                                 ? TierEmblem::Select(tier.badgeIndex,
+                                                      treatmentTierIdx,
+                                                      tierCount,
+                                                      snapSettings.icons.tierImageCount,
+                                                      snapSettings.icons.tierBadgeGamma)
+                                 : -1;
     request.tierName = tier.title;
     request.outputFolder = deckSettings.OutputFolder;
     request.width = deckSettings.CardWidth;
@@ -3588,7 +3651,9 @@ void PrepareDeckCaptureRT()
     request.particleCount =
         tier.particleCount > 0 ? tier.particleCount : snapSettings.particleCount;
 
-    request.title = style.specialTitle
+    // Same precedence as the plate: console override, special title, honorific, tier.
+    request.title = (target->overrides && target->overrides->title) ? *target->overrides->title
+                    : style.specialTitle
                         ? style.specialTitle->displayTitle
                         : (!target->honorific.empty() ? target->honorific : tier.title);
     request.leftOrnaments = style.specialTitle && !style.specialTitle->leftOrnaments.empty()
@@ -3600,8 +3665,7 @@ void PrepareDeckCaptureRT()
 
     if (rarity == Deck::Rarity::Common)
     {
-        // Common cards keep the plain NPC ink and no animated treatment, even
-        // when Tier0 itself defines Wander.
+        // Common stays plain even when tier0 defines an animated effect.
         request.nameLeft = fromVec(style.LcName);
         request.nameRight = request.nameLeft;
         request.titleLeft = fromVec(style.LcTitle);
@@ -3647,31 +3711,40 @@ void Draw()
 {
     HandleHotReload();
 
-    // While a hot reload is in flight (Settings::Load() running on game thread),
-    // skip rendering to avoid reading non-POD Settings concurrently with mutation.
+    // Skip while Settings::Load mutates non-POD values.
     if (GetState().reloadRequested.load(std::memory_order_acquire))
     {
         return;
     }
 
-    // Re-capture settings snapshot only when generation changes (i.e. after Load()).
-    // This avoids per-frame heap allocations for vectors/strings that rarely change.
     RefreshCachedSettingsSnapshot();
 
-    // A RaceMenu rename fires this: drop the player's cache entry so the live
-    // name (re-read every snapshot) re-reveals via the typewriter. Safe here --
-    // the cache is render-thread-only. Clearing pauseSnapshotUpdates guarantees
-    // the next game-thread update runs and republishes the new name.
+    // Consume rename requests on the cache-owning thread and allow a fresh snapshot.
     if (GetState().pendingIdentityRefresh.exchange(false, std::memory_order_acq_rel))
     {
-        GetState().cache.erase(0x14);  // player FormID
+        GetState().cache.erase(0x14);  // Player FormID
         GetState().pauseSnapshotUpdates.store(false, std::memory_order_release);
     }
     const RenderSettingsSnapshot& snap = GetState().cachedSnap;
 
-    // Gate on the game-thread-published atomic rather than calling
-    // GameState::CanDrawOverlay() here: Draw() runs on the render thread, where a
-    // direct player->GetParentCell() read can race with cell teardown.
+    // Console edits restart only reveal state, preserving pose smoothing.
+    // The override store mutex is a leaf lock.
+    {
+        std::vector<uint32_t> dirty;
+        ActorOverrides::DrainDirty(dirty);
+        for (const uint32_t formID : dirty)
+        {
+            auto it = GetState().cache.find(formID);
+            if (it != GetState().cache.end())
+            {
+                it->second.typewriterTime = .0f;
+                it->second.typewriterComplete = false;
+                it->second.revealArmed = snap.enableTypewriter;
+            }
+        }
+    }
+
+    // Use the published gate; live cell reads can race with streaming teardown.
     if (!GetState().allowOverlay.load(std::memory_order_acquire))
     {
         GetState().wasInInvalidState = true;
@@ -3681,14 +3754,9 @@ void Draw()
     if (GetState().wasInInvalidState)
     {
         GetState().wasInInvalidState = false;
-        // 300 rendered frames (about 5 s at 60 fps, longer at low frame rates)
-        // of drawing suppression while the cell and actor lists settle after a
-        // load, a menu, or a combat exit. The early return below skips Draw()'s
-        // own snapshot queue call, but TickRT() still queues one update per
-        // frame from the hook, so the snapshot stays current during the wait.
+        // Suppress 300 render frames after wake; TickRT keeps snapshots current.
         GetState().postLoadCooldown = 300;
-        // Replay every entrance on the first frame drawn after the overlay
-        // wakes, so the scene re-enters as a staggered cascade.
+        // Replay entrances as a staggered cascade after wake.
         GetState().wakeReplayPending = true;
     }
 
@@ -3732,9 +3800,8 @@ void Draw()
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
-    // Sample the composed scene before any overlay draws land on it - the
-    // meter must never read glyph's own text back.  Pure copies; this alters no
-    // pipeline state, so no ResetRenderState is needed.
+    // Capture before overlay draws so the meter cannot sample its own text.
+    // Copy-only work needs no render-state reset.
     if (snap.candleEnabled && SceneMeter::IsInitialized())
     {
         drawList->AddCallback(SceneMeter::CaptureCallback, nullptr);
@@ -3745,21 +3812,16 @@ void Draw()
         UpdateDebugStats(localSnap, snap.hidePlayer && !snap.graffito.Enabled);
     }
 
-    // Advance the camera-motion quiet factors once per frame.
     UpdateQuietFrame(snap, ImGui::GetIO().DeltaTime);
 
-    // Ease the effective scene-profile knobs.
     UpdateRegisters(snap, ImGui::GetIO().DeltaTime);
 
-    // Pull last frame's scene sample into the CPU grid.
     if (snap.candleEnabled && SceneMeter::IsInitialized())
     {
         SceneMeter::CollectResults();
     }
 
-    // Arm per-pixel depth clipping for this frame when the game's depth buffer
-    // is reachable and the projection's depth convention is determinate.  On
-    // failure the frame renders exactly as it would without the feature.
+    // Unavailable depth or indeterminate polarity leaves this frame unclipped.
     GetState().depthClipFrame = false;
     if (snap.depthClipEnabled && DepthClip::IsInitialized())
     {
@@ -3768,14 +3830,10 @@ void Draw()
             polarity != .0f && DepthClip::BeginFrame(snap.depthClipFeather, polarity);
     }
 
-    // Clear the per-frame projection arena and forget the stock ImGui VS/CB;
-    // the first Graffito callback captures the fresh backend state lazily.
+    // Discard per-frame projections and lazily recapture ImGui VS/CB state.
     Graffito::BeginFrame();
 
-    // Wake pass: the overlay resumed after suppression (combat end, menu close,
-    // cell load).  Re-arm every visible plate's entrance and typewriter; the
-    // entrance block below then hands out stagger slots in snapshot order --
-    // player, camera-ray target, Deck target, then nearest first.
+    // Rearm entrances in snapshot order after suppression.
     GetState().entrancesStartedThisFrame = 0;
     if (GetState().wakeReplayPending)
     {
@@ -3788,8 +3846,7 @@ void Draw()
                 continue;
             }
             auto& entry = cIt->second;
-            // Deaths that happened while the overlay was suppressed (player
-            // combat) are not replayed as stale rites after the fact.
+            // Do not replay deaths that occurred while the overlay was suppressed.
             if (d.isDead)
             {
                 entry.deathPhase = 1.0f;
@@ -3822,18 +3879,15 @@ void Draw()
     const uint32_t aimedFormID =
         snap.graffito.Enabled ? RaycastCameraActor(localSnap, snap) : crosshairFormID;
 
-    // Channel layout follows GPU glow. With glow: [0]=glow capture/backplate,
-    // [1]=particles, [2]=text+shadow+outline. Without glow the capture channel
-    // is dropped and the rest shift down: [0]=particles, [1]=text+shadow+outline.
-    // Every channel index below, and GraffitoInkChannel, follows that shift.
+    // Channels with GPU glow: 0 capture/backplate, 1 particles, 2 text.
+    // Without glow: 0 particles, 1 text. GraffitoInkChannel follows this shift.
     const bool gpuGlow = snap.enableGlow && TextPostProcess::IsInitialized();
     const bool gpuDivide = snap.glowDivideStrength > .0f && TextPostProcess::IsInitialized();
     const int channelCount = gpuGlow ? 3 : 2;
     ImDrawListSplitter splitter;
     splitter.Split(drawList, channelCount);
 
-    // Each channel receives its own balanced font-sampler scope because the
-    // splitter merges channels into separate command streams.
+    // Each merged channel stream needs a balanced sampler scope.
     for (int channel = 0; channel < channelCount; ++channel)
     {
         splitter.SetCurrentChannel(drawList, channel);
@@ -3848,8 +3902,7 @@ void Draw()
         drawList->AddCallback(TextPostProcess::BeginGlowCapture, nullptr);
     }
 
-    // Color-divide capture: snapshot the back-buffer before any nametag text
-    // so the divide shader can read the original scene behind the text.
+    // Divide needs the scene captured before nametag text.
     if (gpuDivide)
     {
         TextPostProcess::SetDivideParams(snap.glowDivideStrength);
@@ -3858,21 +3911,15 @@ void Draw()
 
     for (auto& d : localSnap)
     {
-        // Deck-only actors are private to a card capture and never get a plate.
-        // HidePlayer suppresses the billboard self-plate only: Graffito always
-        // keeps a readable self-plate. That mirrors the snapshot's
-        // playerPlateVisible rule; the snapshot can still publish a player
-        // record that Deck alone needs, and this skip keeps that record off
-        // screen.
+        // Deck-only entries never draw plates. HidePlayer hides billboards only;
+        // Graffito keeps the self-plate, matching playerPlateVisible in collection.
         if (d.deckOnly || (snap.hidePlayer && !snap.graffito.Enabled && d.isPlayer))
         {
             continue;
         }
         if (d.isDead)
         {
-            // The death rite plays once, and only for actors this overlay saw
-            // alive.  A corpse first seen dead, or one whose rite already
-            // finished, never renders.
+            // Rites require a cached live frame and cannot replay after completion.
             auto cIt = GetState().cache.find(d.formID);
             if (!snap.deathRiteEnabled || cIt == GetState().cache.end() || !cIt->second.sawAlive ||
                 cIt->second.deathDone)
@@ -3891,9 +3938,7 @@ void Draw()
         DrawLabel(d, drawList, &splitter, snap, focusedFormID, aimedFormID);
     }
 
-    // Exit pass: actors that just left the snapshot fade + sink out of view over
-    // snap.exitDuration before their cache entry is pruned. Ghosts replay their
-    // last live draw data and never participate in focus/overlap (live-only).
+    // Exit ghosts replay live facts and do not participate in focus or overlap.
     if (snap.enableExit)
     {
         std::unordered_set<uint32_t> visible;
@@ -3918,17 +3963,14 @@ void Draw()
         }
     }
 
-    // Close every channel's font sampler before its trailing post-process or
-    // render-state callback. The merged stream then restores ImGui sampling
-    // before anything outside the overlay renders.
+    // Restore sampling before trailing post-process/render-state callbacks.
     for (int channel = 0; channel < channelCount; ++channel)
     {
         splitter.SetCurrentChannel(drawList, channel);
         RenderSampling::PopSampler(drawList);
     }
 
-    // The front channel executes last, so its trailing reset returns the ImGui
-    // backend to its own shaders before debug HUD and other windows render.
+    // The final channel reset restores ImGui shaders for subsequent windows.
     if (GetState().depthClipFrame || (snap.graffito.Enabled && Graffito::IsInitialized()))
     {
         splitter.SetCurrentChannel(drawList, gpuGlow ? 2 : 1);
@@ -3944,8 +3986,6 @@ void Draw()
 
     splitter.Merge(drawList);
 
-    // Color-divide composite: blend nametag text with the pre-snapshot using
-    // the Photoshop-style divide blend for a light-emission look.
     if (gpuDivide)
     {
         drawList->AddCallback(TextPostProcess::EndDivideAndComposite, nullptr);
@@ -3969,11 +4009,8 @@ void TickRT()
                     deckSettings.Key,
                     GetState().allowDeck.load(std::memory_order_acquire));
 
-    // Must queue snapshot updates here too, not just in Draw(): Draw() runs only
-    // when shouldRenderOverlay is true, but allowOverlay (which gates that
-    // flag) is set inside UpdateSnapshot_GameThread. Without this call the
-    // overlay never bootstraps - allowOverlay stays false because the
-    // snapshot update is never scheduled.
+    // TickRT must queue updates on hidden frames; otherwise allowOverlay
+    // never bootstraps and drawing cannot resume.
     QueueSnapshotUpdate_RenderThread();
 }
 }  // namespace Renderer
