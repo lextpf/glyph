@@ -74,6 +74,8 @@ nav:
       - SettingEntry: Core/SettingEntry.md
       - ConsoleCommands:
         - Core/ConsoleCommands/index.md
+      - ActorOverrides:
+        - Core/ActorOverrides/index.md
 
     - Rendering:
       - Rendering/index.md
@@ -146,11 +148,29 @@ nav:
     - Utilities:
       - Utilities/index.md
 
+    - ActorOverrides:
+      - ActorOverrides/index.md
+      - ExtraBadge: ActorOverrides/ExtraBadge.md
+      - IconCommand: ActorOverrides/IconCommand.md
+      - ModifyResult: ActorOverrides/ModifyResult.md
+      - Record: ActorOverrides/Record.md
+      - Slot: ActorOverrides/Slot.md
+      - SlotOverride: ActorOverrides/SlotOverride.md
+      - TitleCommand: ActorOverrides/TitleCommand.md
+      - IconCommand:
+        - Kind: ActorOverrides/IconCommand/Kind.md
+      - TitleCommand:
+        - Kind: ActorOverrides/TitleCommand/Kind.md
+
     - BadgeTextures:
       - BadgeTextures/index.md
 
     - ConsoleCommands:
       - ConsoleCommands/index.md
+
+    - ConsoleParse:
+      - ConsoleParse/index.md
+      - TriState: ConsoleParse/TriState.md
 
     - DebugOverlay:
       - DebugOverlay/index.md
