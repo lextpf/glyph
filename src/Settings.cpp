@@ -1,11 +1,5 @@
-// Settings - the glyph.ini parser, the kSettings scalar binding table, and the
-// accessors that publish the parsed values.
-//
-// Load() is the only function that parses glyph.ini. It holds a unique lock on
-// Mutex() for its whole body, and runs on three different threads over the plugin's
-// life: the SKSE plugin-load thread (main.cpp), the game thread (Renderer queues a
-// hot reload as an SKSE task), and the render thread (fallback used when the SKSE
-// task interface is null). A caller must not already hold a lock on Mutex().
+// Load() holds Mutex() uniquely; callers must not already hold it. The parser
+// dereferences no game objects, including during the render-thread reload fallback.
 //
 // Load() pipeline, in order:
 //
@@ -19,14 +13,14 @@
 //        |              Format/InfoFormat, then to the kSettings map keyed on the raw
 //        |              INI key. Anything left over is counted and warned about.
 //        v
-//   ClampAndValidate()  Per-row validation rules, then cross-field constraints, then
+//   ClampAndValidate()  per-row validation rules, then cross-field constraints, then
 //        |              the string-to-Color3 derivations.
 //        v
-//   Generation()++      Release store. The render thread re-captures its
+//   Generation()++      release store. The render thread re-captures its
 //                       RenderSettingsSnapshot when this counter changes.
 //
 // A missing glyph.ini short-circuits after ResetToDefaults() and ClampAndValidate(),
-// and does NOT advance Generation().
+// and does not advance Generation().
 
 #include "Settings.hpp"
 
@@ -50,7 +44,7 @@
 
 namespace Settings
 {
-// Single source of truth for EffectType <-> lowercase string mapping.
+
 static constexpr Stl::EnumStringMap<EffectType, 18> kEffectTypeMap{{
     {{"none", EffectType::None},
      {"gradient", EffectType::Gradient},
@@ -72,12 +66,53 @@ static constexpr Stl::EnumStringMap<EffectType, 18> kEffectTypeMap{{
      {"electric", EffectType::Electric}},
 }};
 
-// Parser helper forward declarations (used before definitions).
+/**
+ * @fn std::string Trim(const std::string& str)
+ * @brief Remove surrounding spaces, tabs, carriage returns, and line feeds.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static std::string Trim(const std::string& str);
+/**
+ * @fn std::string ToLowerAscii(std::string_view input)
+ * @brief Fold key bytes with the current C locale.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static std::string ToLowerAscii(std::string_view input);
+/**
+ * @fn float ParseFloat(const std::string& str, float defaultVal)
+ * @brief Parse a floating-point prefix or use the supplied fallback.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Numeric prefixes are accepted: `2.5px` gives 2.5. No prefix or float overflow uses
+ * `defaultVal`. Non-finite values accepted by `std::stof` pass through unchanged.
+ */
 static float ParseFloat(const std::string& str, float defaultVal);
+/**
+ * @fn int ParseInt(const std::string& str, int defaultVal)
+ * @brief Parse a decimal integer prefix or use the supplied fallback.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Numeric prefixes are accepted: `10 plates` gives 10 and `1.9` gives 1.
+ * No prefix or integer overflow uses `defaultVal`.
+ */
 static int ParseInt(const std::string& str, int defaultVal);
+/**
+ * @fn bool ParseBool(const std::string& str)
+ * @brief Accept the case-insensitive true tokens used by INI settings.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Accept `true`, `1`, `yes`, `on`, and `enabled`. Every other value is false.
+ */
 static bool ParseBool(const std::string& str);
+/**
+ * @fn void ParseColor3(const std::string& str, Color3& out)
+ * @brief Update up to three RGB channels from comma-separated text.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Missing channels retain their input values. Invalid present channels become 1.0;
+ * ignore channels after the third. For example, `0.5,,0.2` sets green to 1.0.
+ * Callers apply clamping.
+ */
 static void ParseColor3(const std::string& str, Color3& out);
 
 std::shared_mutex& Mutex()
@@ -91,12 +126,6 @@ std::atomic<uint32_t>& Generation()
     static std::atomic<uint32_t> gen{0};
     return gen;
 }
-
-// Every accessor below returns a reference to a function-local static. First-call
-// initialization is thread-safe, but the referenced object is not: a reader must hold
-// a shared lock on Mutex() and a writer a unique lock. Load() rewrites the whole set.
-// ConsoleCommands.cpp is the only other writer: it sets Display().EnableDebugOverlay
-// under a unique lock and then bumps Generation() itself.
 
 std::string& TitleFormat()
 {
@@ -146,7 +175,6 @@ RegisterSettings& RegisterConfig()
     return s;
 }
 
-// Category struct accessors (function-local statics)
 DistanceSettings& Distance()
 {
     static DistanceSettings s;
@@ -291,10 +319,7 @@ DepthClipSettings& DepthClipConfig()
     return s;
 }
 
-// Default font paths. Referenced only by the kSettings rows below; ResetToDefaults()
-// applies them through ResetTableDefaults(). The names are GUID-obfuscated assets. An
-// entry in glyph.project.json overrides the path at font-load time (see Hooks.cpp), so
-// these are the fallback used when the manifest has no entry for that role.
+// Font fallbacks when the manifest has no role entry.
 static constexpr auto kDefaultNameFontPath =
     "Data/SKSE/Plugins/glyph/fonts/bd1aab18-7649-4946-9f7b-6ddd6a81311d.ttf";
 static constexpr auto kDefaultLevelFontPath =
@@ -306,15 +331,9 @@ static constexpr auto kDefaultOrnamentFontPath =
 
 // clang-format off
 
-// Single source of truth for all scalar settings.
-// Each row: key, alias, target ptr, default value, validation rule.
-// Lookup does not depend on row order: GetKeyMap() indexes the table by lowercase key
-// and lowercase alias, so a duplicated key or alias resolves to the last row that
-// declares it.
-// The default's variant alternative must match the target pointee type; see the
-// SettingEntry warning in SettingsBinding.hpp.
+// Scalar defaults and validation; duplicate keys or aliases keep the last row.
+// Default variant types must match target pointees; see SettingEntry.
 static const auto kSettings = std::to_array<SettingEntry>({
-    // Distance & Visibility
     {"FadeStartDistance",       "", &Distance().FadeStartDistance,     200.0f,   MinFloat{.0f}},
     {"FadeEndDistance",         "", &Distance().FadeEndDistance,       2500.0f,  MinFloat{.0f}},
     {"ScaleStartDistance",      "", &Distance().ScaleStartDistance,    200.0f,   MinFloat{.0f}},
@@ -322,12 +341,10 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"MinimumScale",           "", &Distance().MinimumScale,          .1f,      ClampFloat{.01f, 5.0f}},
     {"MaxScanDistance",         "", &Distance().MaxScanDistance,       3000.0f,  MinFloat{.0f}},
 
-    // Occlusion
     {"EnableOcclusionCulling",  "", &Occlusion().Enabled,              true,    NoClamping{}},
     {"OcclusionSettleTime",     "", &Occlusion().SettleTime,           .58f,    MinFloat{.01f}},
     {"OcclusionCheckInterval",  "", &Occlusion().CheckInterval,        3,       MinInt{1}},
 
-    // Shadow & Outline
     {"TitleShadowOffsetX",     "", &ShadowOutline().TitleShadowOffsetX,    2.0f,     NoClamping{}},
     {"TitleShadowOffsetY",     "", &ShadowOutline().TitleShadowOffsetY,    2.0f,     NoClamping{}},
     {"MainShadowOffsetX",      "", &ShadowOutline().MainShadowOffsetX,     4.0f,     NoClamping{}},
@@ -336,7 +353,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OutlineWidthMax",        "", &ShadowOutline().OutlineWidthMax,       2.5f,     MinFloat{.0f}},
     {"FastOutlines",           "", &ShadowOutline().FastOutlines,          false,    NoClamping{}},
 
-    // Outline Glow
     {"EnableOutlineGlow",      "", &ShadowOutline().OutlineGlowEnabled,    false,    NoClamping{}},
     {"OutlineGlowScale",       "", &ShadowOutline().OutlineGlowScale,      1.4f,     ClampFloat{1.0f, 4.0f}},
     {"OutlineGlowAlpha",       "", &ShadowOutline().OutlineGlowAlpha,      .1f,      ClampFloat{.0f, 1.0f}},
@@ -345,7 +361,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OutlineGlowG",           "", &ShadowOutline().OutlineGlowG,          1.0f,     ClampFloat{.0f, 1.0f}},
     {"OutlineGlowB",           "", &ShadowOutline().OutlineGlowB,          1.0f,     ClampFloat{.0f, 1.0f}},
     {"OutlineGlowTierTint",    "", &ShadowOutline().OutlineGlowTierTint,   false,    NoClamping{}},
-    // Dual-Tone Directional Outline
     {"EnableDualOutline",      "", &ShadowOutline().DualOutlineEnabled,    false,    NoClamping{}},
     {"InnerOutlineTint",       "", &ShadowOutline().InnerOutlineTint,      .3f,      ClampFloat{.0f, 1.0f}},
     {"InnerOutlineAlpha",      "", &ShadowOutline().InnerOutlineAlpha,     .5f,      ClampFloat{.0f, 1.0f}},
@@ -356,7 +371,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OutlineColorTint",       "", &ShadowOutline().OutlineColorTint,      .0f,      ClampFloat{.0f, .25f}},
     {"ShadowColorTint",        "", &ShadowOutline().ShadowColorTint,       .0f,      ClampFloat{.0f, .25f}},
 
-    // Soft Directional Drop-Shadow
     {"EnableSoftShadow",       "", &ShadowOutline().SoftShadowEnabled,     false,    NoClamping{}},
     {"SoftShadowDistance",     "", &ShadowOutline().SoftShadowDistance,    4.0f,     ClampFloat{.0f, 16.0f}},
     {"SoftShadowSoftness",     "", &ShadowOutline().SoftShadowSoftness,    3.0f,     ClampFloat{.0f, 12.0f}},
@@ -364,25 +378,21 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"SoftShadowAngle",        "", &ShadowOutline().SoftShadowAngle,       45.0f,    ClampFloat{.0f, 360.0f}},
     {"SoftShadowSamples",      "", &ShadowOutline().SoftShadowSamples,     12,       ClampInt{4, 24}},
 
-    // Glow
     {"EnableGlow",             "", &Glow().Enabled,                   false,    NoClamping{}},
     {"GlowRadius",             "", &Glow().Radius,                    4.0f,     MinFloat{.0f}},
     {"GlowIntensity",          "", &Glow().Intensity,                 .5f,      ClampFloat{.0f, 1.0f}},
     {"GlowSamples",            "", &Glow().Samples,                   8,        ClampInt{1, 64}},
     {"GlowDivideStrength",     "", &Glow().DivideStrength,            .0f,      ClampFloat{.0f, 1.0f}},
 
-    // Shine Overlay
     {"EnableShine",            "", &Shine().Enabled,                  false,    NoClamping{}},
     {"ShineIntensity",         "", &Shine().Intensity,                .35f,     ClampFloat{.0f, 1.0f}},
     {"ShineFalloff",           "", &Shine().Falloff,                  2.0f,     ClampFloat{.5f, 8.0f}},
     {"TextGlowAlpha",          "", &Shine().TextGlowAlpha,            .0f,      ClampFloat{.0f, 1.0f}},
 
-    // Typewriter
     {"EnableTypewriter",       "", &Typewriter().Enabled,             false,    NoClamping{}},
     {"TypewriterSpeed",        "", &Typewriter().Speed,               30.0f,    MinFloat{.0f}},
     {"TypewriterDelay",        "", &Typewriter().Delay,               .0f,      MinFloat{.0f}},
 
-    // Entrance/Exit Transitions
     {"EnableEntranceAnimation","", &Transition().EnableEntrance,      false,    NoClamping{}},
     {"EntranceStyle",          "", &Transition().EntranceStyle,       0,        ClampInt{0, 2}},
     {"EntranceDuration",       "", &Transition().EntranceDuration,    .35f,     ClampFloat{.05f, 3.0f}},
@@ -391,17 +401,14 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"EntranceStaggerStep",    "", &Transition().EntranceStaggerStep, .06f,     ClampFloat{.0f, .5f}},
     {"EntranceStaggerMax",     "", &Transition().EntranceStaggerMax,  .8f,      ClampFloat{.0f, 3.0f}},
 
-    // Debug
     {"EnableDebugOverlay",     "", &Display().EnableDebugOverlay,     false,    NoClamping{}},
 
-    // Ornaments
     {"EnableOrnaments",        "EnableFlourishes",   &Ornament().Enabled,      true,     NoClamping{}},
     {"OrnamentScale",          "FlourishScale",      &Ornament().Scale,        1.0f,     NoClamping{}},
     {"OrnamentSpacing",        "FlourishSpacing",    &Ornament().Spacing,      3.0f,     NoClamping{}},
     {"OrnamentAnchorToMainLine", "",                  &Ornament().AnchorToMainLine, true, NoClamping{}},
     {"OrnamentOffsetY",        "FlourishOffsetY",    &Ornament().OffsetY,      .0f,      NoClamping{}},
 
-    // Particle Aura
     {"EnableParticleAura",     "", &Particle().Enabled,               true,     NoClamping{}},
     {"UseParticleTextures",    "", &Particle().UseParticleTextures,   true,     NoClamping{}},
     {"ParticleCount",          "", &Particle().Count,                 8,        MinInt{0}},
@@ -416,7 +423,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"ParticleGlowSize",       "", &Particle().GlowSize,              2.2f,     ClampFloat{1.0f, 4.0f}},
     {"ParticleShineThreshold", "", &Particle().ShineThreshold,        .84f,     ClampFloat{.0f, .99f}},
 
-    // Display Options
     {"VerticalOffset",         "", &Display().VerticalOffset,         8.0f,     NoClamping{}},
     {"HorizontalOffset",       "", &Display().HorizontalOffset,      -10.0f,    ClampFloat{-200.0f, 200.0f}},
     {"HidePlayer",             "", &Display().HidePlayer,             false,    NoClamping{}},
@@ -429,7 +435,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
                                                                                        RenderConstants::MAX_SCAN_ACTORS}},
     {"ReloadKey",              "", &Display().ReloadKey,              0,        NoClamping{}},
 
-    // Character card capture
     {"DeckEnabled",            "", &Deck().Enabled,                    true,     NoClamping{}},
     {"DeckKey",                "", &Deck().Key,                        119,      NoClamping{}},
     {"DeckOutputFolder",       "", &Deck().OutputFolder,               std::string("Data/SKSE/Plugins/glyph/cards"), NoClamping{}},
@@ -439,14 +444,12 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"DeckPlayerFallback",     "", &Deck().PlayerFallback,             true,     NoClamping{}},
     {"DeckRarityRolls",        "", &Deck().RarityRolls,                true,     NoClamping{}},
 
-    // Smoothing
     {"AlphaSettleTime",        "", &AnimColor().AlphaSettleTime,      .46f,     MinFloat{.01f}},
     {"ScaleSettleTime",        "", &AnimColor().ScaleSettleTime,      .46f,     MinFloat{.01f}},
     {"PositionSettleTime",     "", &AnimColor().PositionSettleTime,   .38f,     MinFloat{.01f}},
     {"InnerTextAlpha",         "", &AnimColor().InnerTextAlpha,        1.0f,     ClampFloat{.0f, 1.0f}},
     {"OutlineAlpha",           "", &AnimColor().OutlineAlpha,          1.0f,     ClampFloat{.0f, 1.0f}},
 
-    // Visual sub-settings (via Visual() singleton)
     {"EnableDistanceOutlineScale", "", &Visual().EnableDistanceOutlineScale, false, NoClamping{}},
     {"OutlineDistanceMin",     "", &Visual().OutlineDistanceMin,   .8f,     NoClamping{}},
     {"OutlineDistanceMax",     "", &Visual().OutlineDistanceMax,   1.5f,    NoClamping{}},
@@ -463,7 +466,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"PositionSmoothingBlend", "", &Visual().PositionSmoothingBlend, 1.0f, ClampFloat{.0f, 1.0f}},
     {"LargeMovementThreshold", "", &Visual().LargeMovementThreshold, 50.0f, MinFloat{.0f}},
     {"LargeMovementBlend",     "", &Visual().LargeMovementBlend,  .5f,     ClampFloat{.0f, 1.0f}},
-    // Motion Trail
     {"EnableMotionTrail",      "", &Visual().EnableMotionTrail,      false,   NoClamping{}},
     {"TrailLength",            "", &Visual().TrailLength,             4,       ClampInt{1, 8}},
     {"TrailAlpha",             "", &Visual().TrailAlpha,              .3f,     ClampFloat{.0f, 1.0f}},
@@ -471,7 +473,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"TrailMinDistance",        "", &Visual().TrailMinDistance,        2.0f,    MinFloat{.0f}},
     {"TrailMinTier",           "", &Visual().TrailMinTier,            0,       MinInt{0}},
 
-    // Wave Displacement
     {"EnableWave",             "", &Visual().EnableWave,             false,   NoClamping{}},
     {"WaveAmplitude",          "", &Visual().WaveAmplitude,          1.5f,    ClampFloat{.0f, 10.0f}},
     {"WaveFrequency",          "", &Visual().WaveFrequency,          3.0f,    ClampFloat{.5f, 20.0f}},
@@ -483,7 +484,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"ParticleMinTier",        "", &Visual().ParticleMinTier,     10,      NoClamping{}},
     {"OrnamentMinTier",        "", &Visual().OrnamentMinTier,     10,      NoClamping{}},
 
-    // Fonts
     {"NameFontPath",           "", &Font().NameFontPath,           std::string(kDefaultNameFontPath),    NoClamping{}},
     {"NameFontSize",           "", &Font().NameFontSize,           122.0f,   NoClamping{}},
     {"LevelFontPath",          "", &Font().LevelFontPath,          std::string(kDefaultLevelFontPath),   NoClamping{}},
@@ -493,9 +493,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"OrnamentFontPath",       "", &Ornament().FontPath,           std::string(kDefaultOrnamentFontPath), NoClamping{}},
     {"OrnamentFontSize",       "", &Ornament().FontSize,           64.0f,    NoClamping{}},
 
-    // Contextual Label Tokens - %r relationship, %d level delta, %c creature kind.
-    // Empty defaults render as nothing; pair with a trailing "?" in Format/InfoFormat
-    // to drop the surrounding segment when the token expands to whitespace.
+    // Empty label defaults pair with a trailing ? To drop blank Format/InfoFormat segments.
     {"RelationshipFollower",   "", &Labels().RelationshipFollower,  std::string("Follower"), NoClamping{}},
     {"RelationshipAlly",       "", &Labels().RelationshipAlly,      std::string("Ally"),     NoClamping{}},
     {"RelationshipNeutral",    "", &Labels().RelationshipNeutral,   std::string(),           NoClamping{}},
@@ -510,12 +508,10 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"CreatureTypeDaedra",     "", &Labels().CreatureTypeDaedra,    std::string("Daedra"),   NoClamping{}},
     {"CreatureTypeDragon",     "", &Labels().CreatureTypeDragon,    std::string("Dragon"),   NoClamping{}},
 
-    // Level-delta classification thresholds (actor level minus player level).
     {"WeakAtOrBelow",          "", &Labels().WeakAtOrBelow,         -5,                      NoClamping{}},
     {"StrongAtOrAbove",        "", &Labels().StrongAtOrAbove,        5,                      NoClamping{}},
     {"DeadlyAtOrAbove",        "", &Labels().DeadlyAtOrAbove,       10,                      NoClamping{}},
 
-    // Focus-target expanded nameplate
     {"FocusEnabled",           "", &Focus().Enabled,                 false,                  NoClamping{}},
     {"FocusConeAngleDegrees",  "", &Focus().ConeAngleDegrees,        8.0f,                   ClampFloat{.5f, 45.0f}},
     {"FocusMaxDistance",       "", &Focus().MaxDistance,             .0f,                    MinFloat{.0f}},
@@ -523,7 +519,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"FocusSettleTime",        "", &Focus().SettleTime,              .25f,                   ClampFloat{.0f, 2.0f}},
     {"FocusIgnoreOccluded",    "", &Focus().IgnoreOccluded,          true,                   NoClamping{}},
 
-    // Graffito - actor-bound, perspective-correct world-plane text.
     {"GraffitoEnabled",               "", &Graffito().Enabled,               false,   NoClamping{}},
     {"GraffitoScale",                 "", &Graffito().Scale,                 1.0f,    ClampFloat{.25f, 4.0f}},
     {"GraffitoPlayerScale",           "", &Graffito().PlayerScale,           .72f,    ClampFloat{.25f, 2.0f}},
@@ -544,7 +539,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"GraffitoFallenEpitaphEnabled",  "", &Graffito().FallenEpitaphEnabled,  true,    NoClamping{}},
     {"GraffitoEpitaphGroundLift",     "", &Graffito().EpitaphGroundLift,     2.0f,    ClampFloat{.0f, 16.0f}},
 
-    // Status icon badges - duotone SVG folder, behavior, icon names, colors.
     {"IconFolder",             "", &Icons().Folder,           std::string("Data/SKSE/Plugins/glyph/duotone"), NoClamping{}},
     {"IconsEnabled",           "", &Icons().Enabled,          true,                             NoClamping{}},
     {"IconScale",              "", &Icons().Scale,            1.0f,                             ClampFloat{.5f, 2.0f}},
@@ -567,7 +561,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconDeadlyColor",        "", &Icons().DeadlyColorStr,   std::string("0.90, 0.28, 0.24"),  NoClamping{}},
     {"IconCreatureColor",      "", &Icons().CreatureColorStr, std::string("0.80, 0.74, 0.62"),  NoClamping{}},
 
-    // Always-on badge slots - icon names, each needing a matching SVG.
     {"IconNeutral",            "", &Icons().NeutralIcon,       std::string("circle"),            NoClamping{}},
     {"IconHumanoid",           "", &Icons().HumanoidIcon,      std::string("user"),              NoClamping{}},
     {"IconEven",               "", &Icons().EvenIcon,          std::string("equals"),            NoClamping{}},
@@ -592,7 +585,7 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconTierHigh",           "", &Icons().TierHighIcon,      std::string("crown"),             NoClamping{}},
     {"TierBadgeImages",        "", &Icons().TierBadgeImages,   true,                             NoClamping{}},
     {"TierBadgeFolder",        "", &Icons().TierBadgeFolder,   std::string("Data/SKSE/Plugins/glyph/badges"), NoClamping{}},
-    {"TierBadgeGamma",         "", &Icons().TierBadgeGamma,    1.8f,                             ClampFloat{.5f, 4.0f}},
+    {"TierBadgeGamma",         "", &Icons().TierBadgeGamma,    1.0f,                             ClampFloat{.5f, 4.0f}},
     {"TierBadgeScale",         "", &Icons().TierBadgeScale,    1.7f,                             ClampFloat{1.0f, 4.0f}},
 
     {"PlayerStripBedEnabled",   "", &Icons().PlayerStripBedEnabled,   true,             NoClamping{}},
@@ -620,7 +613,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"EmblemKeyColor",          "", &Icons().EmblemKeyColorStr,      std::string(""),  NoClamping{}},
     {"EmblemFillColor",         "", &Icons().EmblemFillColorStr,     std::string(""),  NoClamping{}},
 
-    // Always-on slots - lit (active) colors.
     {"IconGuardColor",         "", &Icons().GuardColorStr,         std::string("0.60, 0.68, 0.84"),  NoClamping{}},
     {"IconMerchantColor",      "", &Icons().MerchantColorStr,      std::string("0.84, 0.74, 0.42"),  NoClamping{}},
     {"IconEssentialColor",     "", &Icons().EssentialColorStr,     std::string("0.86, 0.78, 0.46"),  NoClamping{}},
@@ -634,7 +626,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconTierLowColor",       "", &Icons().TierLowColorStr,       std::string("0.70, 0.62, 0.52"),  NoClamping{}},
     {"IconTierMidColor",       "", &Icons().TierMidColorStr,       std::string("0.62, 0.70, 0.80"),  NoClamping{}},
     {"IconTierHighColor",      "", &Icons().TierHighColorStr,      std::string("0.86, 0.74, 0.46"),  NoClamping{}},
-    // Always-on slots - per-slot resting colors (each muted slot's own hue).
     {"IconNeutralColor",       "", &Icons().NeutralColorStr,      std::string("0.56, 0.62, 0.70"),  NoClamping{}},
     {"IconHumanoidColor",      "", &Icons().HumanoidColorStr,     std::string("0.74, 0.68, 0.58"),  NoClamping{}},
     {"IconCommonerColor",      "", &Icons().CommonerColorStr,     std::string("0.60, 0.68, 0.54"),  NoClamping{}},
@@ -646,7 +637,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconBountyClearColor",   "", &Icons().BountyClearColorStr,  std::string("0.50, 0.70, 0.68"),  NoClamping{}},
     {"IconMutedColor",         "", &Icons().MutedColorStr,         std::string("0.62, 0.64, 0.68"),  NoClamping{}},
 
-    // Always-on slots - per-slot enables.
     {"IconRelationshipEnabled","", &Icons().RelationshipEnabled, true,                            NoClamping{}},
     {"IconCreatureEnabled",    "", &Icons().CreatureEnabled,     true,                            NoClamping{}},
     {"IconThreatEnabled",      "", &Icons().ThreatEnabled,       true,                            NoClamping{}},
@@ -661,38 +651,30 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"IconBountyEnabled",      "", &Icons().BountyEnabled,       true,                            NoClamping{}},
     {"IconTierEnabled",        "", &Icons().TierEnabled,         true,                            NoClamping{}},
 
-    // Always-on slots - muted styling.
     {"IconMutedAlpha",         "", &Icons().MutedAlpha,          1.0f,             ClampFloat{.0f, 1.0f}},
     {"IconMutedDesat",         "", &Icons().MutedDesat,          0.18f,            ClampFloat{.0f, 1.0f}},
     {"IconOpacity",            "", &Icons().Opacity,             0.92f,            ClampFloat{.5f, 2.0f}},
 
-    // One-shot death animation.
     {"DeathRiteEnabled",       "", &DeathRite().Enabled,          true,     NoClamping{}},
     {"DeathRiteDuration",      "", &DeathRite().Duration,         1.6f,     ClampFloat{.4f, 4.0f}},
 
-    // TrueHUD / moreHUD deconfliction.
     {"CompatYieldToTrueHUD",     "", &Compat().YieldToTrueHUD,     true,   NoClamping{}},
     {"CompatTrueHUDYieldAlpha",  "", &Compat().TrueHUDYieldAlpha,  .0f,    ClampFloat{.0f, 1.0f}},
     {"CompatYieldLevelToMoreHUD","", &Compat().YieldLevelToMoreHUD,true,   NoClamping{}},
     {"CompatYieldSettleTime",    "", &Compat().YieldSettleTime,    .3f,    ClampFloat{.01f, 2.0f}},
 
-    // Register system globals. The profiles themselves live in [RegisterN]
-    // sections.
     {"RegistersEnabled",         "", &RegisterConfig().Enabled,          true,   NoClamping{}},
     {"RegisterTransitionTime",   "", &RegisterConfig().TransitionTime,   1.2f,   ClampFloat{.05f, 5.0f}},
     {"RegisterCrowdedThreshold", "", &RegisterConfig().CrowdedThreshold, 12,     MinInt{2}},
 
-    // Per-pixel depth occlusion.
     {"DepthClipEnabled",       "", &DepthClipConfig().Enabled,    true,     NoClamping{}},
     {"DepthClipFeather",       "", &DepthClipConfig().Feather,    2.5f,     ClampFloat{.0f, 8.0f}},
 
-    // Exposure-adaptive text brightness.
     {"CandlelightEnabled",     "", &Candlelight().Enabled,        true,     NoClamping{}},
     {"CandlelightStrength",    "", &Candlelight().Strength,       .08f,     ClampFloat{.0f, .15f}},
     {"CandlelightWarmth",      "", &Candlelight().Warmth,         .5f,      ClampFloat{.0f, 1.0f}},
     {"CandlelightSettleTime",  "", &Candlelight().SettleTime,     .6f,      ClampFloat{.05f, 3.0f}},
 
-    // Camera-motion quieting (asymmetric envelope).
     {"QuietFrameEnabled",      "", &Quiet().Enabled,              true,     NoClamping{}},
     {"QuietPanThresholdLo",    "", &Quiet().PanThresholdLo,       40.0f,    ClampFloat{1.0f, 720.0f}},
     {"QuietPanThresholdHi",    "", &Quiet().PanThresholdHi,       160.0f,   ClampFloat{2.0f, 1440.0f}},
@@ -701,9 +683,6 @@ static const auto kSettings = std::to_array<SettingEntry>({
     {"QuietSubReleaseTime",    "", &Quiet().SubReleaseTime,       .50f,     ClampFloat{.01f, 3.0f}},
     {"QuietNameFloor",         "", &Quiet().NameFloor,            .35f,     ClampFloat{.0f, 1.0f}},
 
-    // NPC support-layer tints. The name fill stays white and the title and level
-    // fills take the matched tier's level-role gradient, so these colors only tint
-    // the support layer (see ResolveNpcStyleColors in RendererLayout.cpp).
     {"NpcNeutralColor",        "", &NpcColors().NeutralColorStr,  std::string("1.0, 1.0, 1.0"),    NoClamping{}},
     {"NpcHostileColor",        "", &NpcColors().HostileColorStr,  std::string("1.0, 0.86, 0.84"),  NoClamping{}},
     {"NpcFollowerColor",       "", &NpcColors().FollowerColorStr, std::string("0.86, 0.91, 1.0"),  NoClamping{}},
@@ -713,10 +692,14 @@ static const auto kSettings = std::to_array<SettingEntry>({
 
 // clang-format on
 
-// Lazily-built lookup map: lowercase key -> SettingEntry pointer. Built on the first
-// call and never rebuilt, so it stays valid across hot reloads. An alias maps to the
-// same entry as its key. Load() looks the map up with the lowercased raw INI key, so
-// scalar matching is case-insensitive and CanonicalizeStructKey() does not affect it.
+/**
+ * @fn const std::unordered_map<std::string, const SettingEntry*>& GetKeyMap()
+ * @brief Index scalar keys and aliases for case-insensitive lookup.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Built once; accessor targets remain stable across reloads. Raw lowercase keys bypass
+ * CanonicalizeStructKey, so indexed-field spelling rules cannot rename scalars.
+ */
 static const std::unordered_map<std::string, const SettingEntry*>& GetKeyMap()
 {
     static const auto map = []
@@ -736,11 +719,13 @@ static const std::unordered_map<std::string, const SettingEntry*>& GetKeyMap()
     return map;
 }
 
-// Apply a parsed string value to the correct typed target.
-// Text that does not parse gives 0.0f / 0 / false, not the row's default value, so a
-// typo in a numeric key reads as zero rather than as the shipped default. A string
-// target takes the text verbatim: it is already trimmed and comment-stripped, but any
-// surrounding quotes are kept.
+/**
+ * @fn void ApplySettingValue(const SettingEntry& entry, const std::string& val)
+ * @brief Write a scalar value through its typed table binding.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Invalid numeric text becomes zero before validation; strings retain surrounding quotes.
+ */
 static void ApplySettingValue(const SettingEntry& entry, const std::string& val)
 {
     std::visit(
@@ -753,7 +738,11 @@ static void ApplySettingValue(const SettingEntry& entry, const std::string& val)
         entry.target);
 }
 
-// Reset all table-driven settings to their defaults.
+/**
+ * @fn void ResetTableDefaults()
+ * @brief Restore each scalar target from its matching default variant.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void ResetTableDefaults()
 {
     for (const auto& s : kSettings)
@@ -768,10 +757,13 @@ static void ResetTableDefaults()
     }
 }
 
-// Apply validation rules from the table.
-// Only float and int targets are validated. A bool or string target, and a rule whose
-// type does not match the target (ClampInt on a float, for example), is skipped with
-// no diagnostic.
+/**
+ * @fn void ValidateTableSettings()
+ * @brief Apply each numeric validation rule to its matching target type.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Ignore mismatched rules and bool/string targets without diagnostics.
+ */
 static void ValidateTableSettings()
 {
     for (const auto& s : kSettings)
@@ -804,10 +796,13 @@ static void ValidateTableSettings()
     }
 }
 
-// Baseline tier used when the INI defines none, and the shape a back-filled tier
-// takes. The values match the TierDefinition member initializers (levels 1-250, title
-// "Unknown", white colors, Gradient effects), so a tier created by the
-// Tiers().emplace_back() growth path in Load() is equivalent to this one.
+/**
+ * @fn TierDefinition MakeDefaultTier()
+ * @brief Build the fallback style used for missing tiers.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Default and gap tiers cover levels 1-250; first-match lookup can shadow later tiers.
+ */
 static TierDefinition MakeDefaultTier()
 {
     TierDefinition tier{};
@@ -824,6 +819,7 @@ static TierDefinition MakeDefaultTier()
     tier.rightOrnaments.clear();
     tier.particleTypes.clear();
     tier.particleCount = 0;
+    tier.badgeIndex = 0;
     return tier;
 }
 
@@ -837,14 +833,14 @@ static std::string ToLowerAscii(std::string_view input)
     return out;
 }
 
-// Canonicalize a key that the kSettings table does not cover: the fields of the four
-// indexed sections ([TierN], [SpecialTitleN], [HonorificN], [RegisterN]) plus the
-// global Format key. The map below is what makes those names case-insensitive, and it
-// folds two spellings onto one name (the INI key "Title" becomes "Name").
-// A key that is not in the map is returned trimmed but otherwise unchanged, so the
-// tier fields that ParseTierField() handles but the map omits (TitleLeftColor,
-// TitleRightColor, LevelLeftColor, LevelRightColor, ParticleColor) must be spelled
-// with exactly that casing in the INI.
+/**
+ * @fn std::string CanonicalizeStructKey(const std::string& rawKey)
+ * @brief Normalize known indexed-field names and format keys.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Canonicalize indexed fields and Format; title aliases Name. Unmapped names retain case,
+ * so the optional tier color keys omitted here remain case-sensitive.
+ */
 static std::string CanonicalizeStructKey(const std::string& rawKey)
 {
     static const std::unordered_map<std::string, std::string> kStructKeys = {
@@ -861,6 +857,7 @@ static std::string CanonicalizeStructKey(const std::string& rawKey)
         {"ornaments", "Ornaments"},
         {"particletypes", "ParticleTypes"},
         {"particlecount", "ParticleCount"},
+        {"badge", "Badge"},
         {"ornamentleftcolor", "OrnamentLeftColor"},
         {"ornamentrightcolor", "OrnamentRightColor"},
         {"keyword", "Keyword"},
@@ -891,12 +888,16 @@ static std::string CanonicalizeStructKey(const std::string& rawKey)
     return Trim(rawKey);
 }
 
+/**
+ * @fn void ResetToDefaults()
+ * @brief Reset formats, indexed records, and scalar settings before parsing.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void ResetToDefaults()
 {
     TitleFormat() = "%t";
     DisplayFormat() = {{"%n", false, false}, {" Lv.%l", true, false}};
-    // Status icon badges take the place of the text info row by default. An
-    // explicit InfoFormat in the INI still wins and restores the text row.
+    // An explicit InfoFormat restores the text row alongside badges.
     InfoFormat().clear();
 
     Tiers().clear();
@@ -905,24 +906,21 @@ static void ResetToDefaults()
     Honorifics().clear();
     Registers().clear();
 
-    // All scalar settings are reset from the descriptor table.
     ResetTableDefaults();
 }
 
-// Bring the whole settings set back into a usable state. Called at the end of Load()
-// and also on the missing-file path, so it must tolerate pure defaults. Three phases
-// run in order: the per-row table rules, then the fixes the table cannot express
-// (cross-field constraints plus the per-tier, per-special-title, per-honorific and
-// per-register clamps), then the string-to-Color3 derivations. The first two phases
-// are order-dependent, because the cross-field fixes read values that the per-row
-// rules already clamped. The derivations read only the INI color strings, which no
-// earlier phase changes.
+/**
+ * @fn void ClampAndValidate()
+ * @brief Apply numeric limits, cross-field constraints, and derived colors.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Validate rows before cross-field constraints, which read clamped values. Color
+ * derivation follows; this also runs on the missing-file path with pure defaults.
+ */
 static void ClampAndValidate()
 {
-    // Apply per-setting validation from the descriptor table.
     ValidateTableSettings();
 
-    // Cross-field constraints that cannot be expressed per-setting.
     auto& dist = Distance();
     dist.FadeEndDistance = std::max(dist.FadeStartDistance + 1.0f, dist.FadeEndDistance);
     dist.ScaleEndDistance = std::max(dist.ScaleStartDistance + 1.0f, dist.ScaleEndDistance);
@@ -935,9 +933,7 @@ static void ClampAndValidate()
     display.MaxPlates = actorLimits.maxPlates;
     display.MaxScanActors = actorLimits.maxScanActors;
 
-    // Level-delta thresholds must be strictly ordered: Weak < Strong < Deadly.
-    // Out-of-order values fall back to the defaults instead of producing
-    // unreachable buckets.
+    // Invalid weak < strong < deadly ordering restores defaults to keep every bucket reachable.
     auto& lb = Labels();
     if (lb.WeakAtOrBelow >= lb.StrongAtOrAbove || lb.StrongAtOrAbove >= lb.DeadlyAtOrAbove)
     {
@@ -964,9 +960,10 @@ static void ClampAndValidate()
             std::swap(tier.maxLevel, tier.minLevel);
         }
         tier.particleCount = std::max(0, tier.particleCount);
-        // Only the three required colors are clamped. The optional per-element
-        // overrides (title/level/ornament pairs and particleColor) keep whatever the
-        // INI supplied.
+        // No upper bound: the manifest emblem count is unknown here, so the renderer
+        // falls back to the TierBadgeGamma curve when the index exceeds it.
+        tier.badgeIndex = std::max(0, tier.badgeIndex);
+        // Optional per-element colors retain INI values; only required colors are clamped.
         tier.leftColor.clamp01();
         tier.rightColor.clamp01();
         tier.highlightColor.clamp01();
@@ -994,10 +991,7 @@ static void ClampAndValidate()
         reg.subLineMul = std::clamp(reg.subLineMul, .0f, 1.0f);
     }
 
-    // Derive icon colors from their INI string forms. An empty or unparsable string
-    // resolves to white: deriveColor seeds the output with white, ParseColor3 leaves an
-    // absent component untouched, and a present component that does not parse becomes
-    // 1.0.
+    // Missing components retain white; invalid present components become 1.0.
     auto& ic = Icons();
     const auto deriveColor = [](const std::string& str, Color3& out)
     {
@@ -1036,10 +1030,8 @@ static void ClampAndValidate()
     deriveColor(ic.BountyClearColorStr, ic.BountyClearColor);
     deriveColor(ic.MutedColorStr, ic.MutedColor);
 
-    // Player-only accent colors: an empty INI string leaves the optional empty,
-    // so the render thread derives the color from the tier Name color at draw
-    // time; a non-empty string is parsed, clamped and honored. Do not route
-    // these through deriveColor above, which resolves an empty string to white.
+    // Empty accents remain unset for tier-derived colors at draw time. Nonempty values
+    // are parsed and clamped; deriveColor would incorrectly force empty values to white.
     const auto deriveOptionalColor = [](const std::string& str, std::optional<Color3>& out)
     {
         if (Trim(str).empty())
@@ -1058,7 +1050,6 @@ static void ClampAndValidate()
     deriveOptionalColor(ic.EmblemKeyColorStr, ic.EmblemKeyColor);
     deriveOptionalColor(ic.EmblemFillColorStr, ic.EmblemFillColor);
 
-    // Derive NPC text colors from their INI string forms.
     auto& nc = NpcColors();
     deriveColor(nc.NeutralColorStr, nc.NeutralColor);
     deriveColor(nc.HostileColorStr, nc.HostileColor);
@@ -1067,7 +1058,6 @@ static void ClampAndValidate()
     deriveColor(nc.TitleColorStr, nc.TitleColor);
 }
 
-// Remove leading and trailing whitespace.
 static std::string Trim(const std::string& str)
 {
     size_t first = str.find_first_not_of(" \t\r\n");
@@ -1079,11 +1069,14 @@ static std::string Trim(const std::string& str)
     return str.substr(first, (last - first + 1));
 }
 
-// Strip an inline ; or # comment. A ; or # inside a double-quoted run is literal, so
-// a Format string may contain either. Quotes and backslash escapes are only read to
-// steer the scan: the returned text still holds them, which is what lets
-// ParseQuotedSegments see the segment quotes. An unterminated quote suppresses comment
-// stripping for the rest of the line.
+/**
+ * @fn std::string StripInlineComment(const std::string& str)
+ * @brief Remove comment text outside double-quoted runs.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Strip ; and # outside quoted runs. Retain quotes and escapes for ParseQuotedSegments;
+ * an unterminated quote keeps the rest of the line literal.
+ */
 static std::string StripInlineComment(const std::string& str)
 {
     bool inQuote = false;
@@ -1114,8 +1107,13 @@ static std::string StripInlineComment(const std::string& str)
     return Trim(str);
 }
 
-// Remove a leading UTF-8 byte order mark. Applied to the first line only, so the
-// first section header or key parses when an editor saved glyph.ini with a BOM.
+/**
+ * @fn std::string StripUtf8Bom(const std::string& str)
+ * @brief Remove a leading UTF-8 byte-order mark.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Strip the first-line UTF-8 BOM before parsing its key or section.
+ */
 static std::string StripUtf8Bom(const std::string& str)
 {
     if (str.size() >= 3 && static_cast<unsigned char>(str[0]) == 0xEF &&
@@ -1126,9 +1124,6 @@ static std::string StripUtf8Bom(const std::string& str)
     return str;
 }
 
-// Parse a float; return defaultVal when the text does not parse.
-// A numeric prefix is accepted, so "2.5px" gives 2.5. Only text with no leading
-// number at all, or a value outside the float range, falls back to defaultVal.
 static float ParseFloat(const std::string& str, float defaultVal)
 {
     try
@@ -1141,8 +1136,6 @@ static float ParseFloat(const std::string& str, float defaultVal)
     }
 }
 
-// Parse an int; return defaultVal when the text does not parse.
-// A numeric prefix is accepted, so "10 plates" gives 10, and "1.9" gives 1.
 static int ParseInt(const std::string& str, int defaultVal)
 {
     try
@@ -1155,7 +1148,6 @@ static int ParseInt(const std::string& str, int defaultVal)
     }
 }
 
-// Parse a bool: true/1/yes/on/enabled, case-insensitive; anything else false.
 static bool ParseBool(const std::string& str)
 {
     std::string lower = str;
@@ -1167,10 +1159,6 @@ static bool ParseBool(const std::string& str)
             lower == "enabled");
 }
 
-// Parse a comma-separated RGB color in 0.0-1.0. Components absent from the string
-// keep their existing value in out, so "0.5" changes only the red channel. A
-// component that is present but does not parse, including an empty field in
-// "0.5,,0.2", becomes 1.0. Values are not clamped here; each caller clamps.
 static void ParseColor3(const std::string& str, Color3& out)
 {
     std::istringstream ss(str);
@@ -1184,18 +1172,24 @@ static void ParseColor3(const std::string& str, Color3& out)
     out = Color3(rgb[0], rgb[1], rgb[2]);
 }
 
-// Map an effect type name to the enum; unknown names fall back to Gradient.
+/**
+ * @fn EffectType ParseEffectType(const std::string& str)
+ * @brief Resolve an effect name or use Gradient for unknown text.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static EffectType ParseEffectType(const std::string& str)
 {
     return kEffectTypeMap.fromString(ToLowerAscii(Trim(str)), EffectType::Gradient);
 }
 
-// Parse an effect string "EffectType param1,param2,... whiteBase" into an EffectParams.
-// Whitespace separates the effect name from the parameter list, so a comma directly
-// after the name becomes part of the name token and the lookup falls back to Gradient.
-// The optional whiteBase marker is matched case-insensitively anywhere in the
-// parameter text; everything from that position on is discarded. At most 5 parameters
-// are read and the rest are ignored.
+/**
+ * @fn void ParseEffectString(const std::string& val, EffectParams& effect)
+ * @brief Parse an effect name and its optional numeric parameters.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Whitespace separates the effect name from up to five comma-separated parameters.
+ * A comma attached to the name causes Gradient fallback; whiteBase truncates remaining text.
+ */
 static void ParseEffectString(const std::string& val, EffectParams& effect)
 {
     std::istringstream ss(val);
@@ -1244,18 +1238,21 @@ static void ParseEffectString(const std::string& val, EffectParams& effect)
                     break;
             }
         }
-        // Advance even on empty fields so positional params keep their slot:
-        // "Aurora 0.5,,0.85" assigns 0.85 to param3 (not param2); an empty field
-        // leaves that param at its existing/default value.
+        // Preserve empty parameter slots: "Aurora 0.5,,0.85" assigns 0.85 to param3,
+        // leaving param2 at its default.
         paramIdx++;
     }
 }
 
-// Parse an ornaments string: "LEFT, RIGHT", or a bare two-character "AB".
-// The comma form takes each side whole, so a side may hold several characters. The
-// bare form splits by byte and keeps only the first two, so it is correct for
-// single-byte ornament codes only. A bare value shorter than two bytes clears both
-// sides.
+/**
+ * @fn void ParseOrnaments(const std::string& val, std::string& leftOrnaments, std::string&
+ *     rightOrnaments)
+ * @brief Split ornament codes into left and right strings.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Comma-separated sides retain all characters. Bare "ab" takes two single-byte codes;
+ * fewer than two bytes clears both sides.
+ */
 static void ParseOrnaments(const std::string& val,
                            std::string& leftOrnaments,
                            std::string& rightOrnaments)
@@ -1278,11 +1275,14 @@ static void ParseOrnaments(const std::string& val,
     }
 }
 
-// Parse a single key-value pair for a [TierN] section. Returns false when the key is
-// not a tier field, which lets Load() offer the same line to the scalar table.
-// The keys compared here are the canonical spellings from CanonicalizeStructKey(); the
-// five colors it does not canonicalize (TitleLeftColor, TitleRightColor,
-// LevelLeftColor, LevelRightColor, ParticleColor) are therefore case-sensitive.
+/**
+ * @fn bool ParseTierField(TierDefinition& tier, const std::string& key, const std::string& val)
+ * @brief Apply a recognized tier field and report whether it consumed the key.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * False lets Load offer the line to scalar lookup. Optional color keys omitted by
+ * CanonicalizeStructKey require exact casing.
+ */
 static bool ParseTierField(TierDefinition& tier, const std::string& key, const std::string& val)
 {
     if (key == "Name")
@@ -1291,8 +1291,7 @@ static bool ParseTierField(TierDefinition& tier, const std::string& key, const s
     }
     else if (key == "MinLevel")
     {
-        // Unparsable text gives 1 here and 25 for MaxLevel; both are then clamped into
-        // the uint16_t range. ClampAndValidate() swaps the pair if it ends up inverted.
+        // Invalid min/max use 1/25; validation clamps to uint16_t and swaps inverted bounds.
         const int parsed = ParseInt(val, 1);
         const int clamped =
             std::clamp(parsed, 0, static_cast<int>((std::numeric_limits<uint16_t>::max)()));
@@ -1378,6 +1377,10 @@ static bool ParseTierField(TierDefinition& tier, const std::string& key, const s
     {
         tier.particleCount = ParseInt(val, 0);
     }
+    else if (key == "Badge")
+    {
+        tier.badgeIndex = ParseInt(val, 0);
+    }
     else
     {
         return false;
@@ -1385,8 +1388,12 @@ static bool ParseTierField(TierDefinition& tier, const std::string& key, const s
     return true;
 }
 
-// Parse a single key-value pair for a [SpecialTitleN] section. ForceFlourishes is the
-// legacy spelling of ForceOrnaments and sets the same field.
+/**
+ * @fn bool ParseSpecialTitleField(SpecialTitleDefinition& st, const std::string& key, const
+ *     std::string& val)
+ * @brief Apply a recognized name-keyword override field.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static bool ParseSpecialTitleField(SpecialTitleDefinition& st,
                                    const std::string& key,
                                    const std::string& val)
@@ -1430,11 +1437,15 @@ static bool ParseSpecialTitleField(SpecialTitleDefinition& st,
     return true;
 }
 
-// Parse a comma-separated `When` predicate list into required and forbidden
-// context masks. Tokens: interior, exterior, night, day, city, sneaking,
-// dialogue, crowded; a leading '!' negates. `exterior` and `day` are short
-// forms of !interior and !night. Unknown tokens are ignored.
-// Mirrored in tests/test_settings.cpp - keep the logic in sync.
+/**
+ * @fn void ParseWhenTokens(const std::string& val, uint32_t& whenMask, uint32_t& whenNotMask)
+ * @brief Build required and forbidden context masks from comma-separated tokens.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * When tokens: interior, exterior, night, day, city, sneaking, dialogue, crowded.
+ * ! negates; exterior/day mean !interior/!night. Unknown tokens are ignored.
+ * Keep the mirror in tests/test_settings.cpp synchronized.
+ */
 static void ParseWhenTokens(const std::string& val, uint32_t& whenMask, uint32_t& whenNotMask)
 {
     whenMask = 0;
@@ -1493,9 +1504,14 @@ static void ParseWhenTokens(const std::string& val, uint32_t& whenMask, uint32_t
     }
 }
 
-// Parse a single key-value pair for a [RegisterN] section. Any recognized key marks
-// the register configured, which is what promotes it from the inert placeholder that
-// the section growth path creates.
+/**
+ * @fn bool ParseRegisterField(RegisterDefinition& r, const std::string& key, const std::string&
+ *     val)
+ * @brief Apply a recognized profile field and activate the profile.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * A recognized key activates the otherwise inert gap placeholder.
+ */
 static bool ParseRegisterField(RegisterDefinition& r,
                                const std::string& key,
                                const std::string& val)
@@ -1536,8 +1552,14 @@ static bool ParseRegisterField(RegisterDefinition& r,
     return true;
 }
 
-// Parse a single key-value pair for an [HonorificN] section. The honorific
-// text uses the `Title` INI key, which CanonicalizeStructKey folds to "Name".
+/**
+ * @fn bool ParseHonorificField(HonorificDefinition& h, const std::string& key, const std::string&
+ *     val)
+ * @brief Apply a recognized faction-title field.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The title INI key is canonicalized to Name.
+ */
 static bool ParseHonorificField(HonorificDefinition& h,
                                 const std::string& key,
                                 const std::string& val)
@@ -1573,16 +1595,20 @@ static bool ParseHonorificField(HonorificDefinition& h,
     return true;
 }
 
-// Parse quoted segments, each with an optional trailing `?` droppable marker.
-// outTitle, when non-null, absorbs segments containing `%t`; the rest go to
-// out. forceLevelFont overrides the per-segment auto-detection (presence of
-// `%l`) and is used by the InfoFormat row, which renders in the level font.
-//
-// Text outside the quotes is discarded, except a `?` in the position directly after a
-// closing quote. A title segment cannot be marked droppable, because absorbing it
-// clears the pointer the `?` would apply to. Several `%t` segments are allowed but the
-// last one wins. Both outputs are cleared first, so a value with no quoted run leaves
-// them empty.
+/**
+ * @fn void ParseQuotedSegments(const std::string& val, std::vector<Segment>& out, std::string*
+ *     outTitle, bool forceLevelFont)
+ * @brief Extract row segments and optionally separate the title format.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Clear both outputs first. If `outTitle` is non-null, move the last `%t` segment to it.
+ * Ignore unquoted text except `?` directly after a closing quote. Title segments cannot
+ * be droppable. Inside quotes, a backslash copies the next byte literally.
+ * Discard a final segment with no closing quote.
+ *
+ * @param outTitle Optional title output; null keeps `%t` segments in the row.
+ * @param forceLevelFont Select the level font for every segment, regardless of `%l`.
+ */
 static void ParseQuotedSegments(const std::string& val,
                                 std::vector<Segment>& out,
                                 std::string* outTitle,
@@ -1647,7 +1673,6 @@ static void ParseQuotedSegments(const std::string& val,
             continue;
         }
 
-        // Outside quotes: `?` immediately after a closing `"` marks the previous segment optional.
         if (justClosed && c == '?')
         {
             if (lastPushed != nullptr)
@@ -1659,15 +1684,18 @@ static void ParseQuotedSegments(const std::string& val,
     }
 }
 
-// Parse the `Format` INI key: quoted segments forming the title line and main row.
-// Each half is assigned only when it parsed to something, so `Format = ` and a value
-// with no quoted run both keep the ResetToDefaults() rows. ParseInfoFormat() below
-// deliberately does the opposite.
+/**
+ * @fn void ParseDisplayFormat(const std::string& val)
+ * @brief Replace nonempty main and title rows from quoted segments.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Assign each row only if nonempty; empty or unquoted Format leaves defaults intact.
+ */
 static void ParseDisplayFormat(const std::string& val)
 {
     std::vector<Segment> newDisplayFormat;
     std::string newTitleFormat;
-    ParseQuotedSegments(val, newDisplayFormat, &newTitleFormat, /*forceLevelFont*/ false);
+    ParseQuotedSegments(val, newDisplayFormat, &newTitleFormat, false);
 
     if (!newTitleFormat.empty())
     {
@@ -1679,12 +1707,17 @@ static void ParseDisplayFormat(const std::string& val)
     }
 }
 
-// Parse the `InfoFormat` INI key: quoted segments for the third row.
-// Always assigns, so an empty `InfoFormat = ` disables the info row.
+/**
+ * @fn void ParseInfoFormat(const std::string& val)
+ * @brief Replace the info row, including an explicitly empty row.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Always assign so an empty InfoFormat disables the row.
+ */
 static void ParseInfoFormat(const std::string& val)
 {
     std::vector<Segment> newInfoFormat;
-    ParseQuotedSegments(val, newInfoFormat, /*outTitle*/ nullptr, /*forceLevelFont*/ true);
+    ParseQuotedSegments(val, newInfoFormat, nullptr, true);
     InfoFormat() = newInfoFormat;
 }
 
@@ -1699,8 +1732,7 @@ void Load()
     {
         ClampAndValidate();
         SKSE::log::warn("Settings: glyph.ini not found, using defaults");
-        // Early return: the defaults are already in place, but Generation() is left
-        // alone, so a generation-gated consumer keeps the copy it already holds.
+        // Missing files leave Generation unchanged, so consumers keep cached copies.
         return;
     }
 
@@ -1718,8 +1750,7 @@ void Load()
     std::vector<std::string> parseWarnings;
     std::unordered_set<std::string> warnedUnknownSections;
 
-    // Store at most MAX_WARNINGS messages. The three counters above keep counting past
-    // the cap, so the summary line stays truthful when the detail list is truncated.
+    // Cap detailed warnings; counters continue for the summary.
     auto addWarning = [&](size_t lineNo, const std::string& message)
     {
         constexpr size_t MAX_WARNINGS = 48;
@@ -1741,22 +1772,18 @@ void Load()
         line = Trim(line);
         line = StripInlineComment(line);
 
-        // Skip empty lines and ; / # comment lines.
         if (line.empty() || line[0] == ';' || line[0] == '#')
         {
             continue;
         }
 
-        // A section header changes the parsing context for the key-value
-        // pairs that follow it.
         if (line.size() >= 2 && line[0] == '[' && line.back() == ']')
         {
             currentSection = line.substr(1, line.size() - 2);
             currentSection = Trim(currentSection);
             currentSectionLower = ToLowerAscii(currentSection);
 
-            // Tier numbers are 0-indexed. An index above MAX_TIER_INDEX is rejected
-            // to keep a typo from allocating an unbounded number of tiers.
+            // Reject excessive indices to bound vector growth after INI typos.
             if (currentSectionLower.size() >= 4 && currentSectionLower.rfind("tier", 0) == 0)
             {
                 std::string numStr = currentSection.substr(4);
@@ -1773,12 +1800,8 @@ void Load()
                 }
                 else
                 {
-                    // Grow the Tiers vector to reach this index. Growing past the
-                    // current size back-fills intermediate indices with default
-                    // 'Unknown' tiers (level range 1-250). MatchTier() scans from
-                    // index 0 and stops at the first level-range match, so those
-                    // back-filled tiers shadow this and every higher tier; warn
-                    // when a gap is created.
+                    // Gap tiers span levels 1-250 and shadow higher tiers in first-match lookup;
+                    // warn on gaps.
                     const int oldTierCount = static_cast<int>(Tiers().size());
                     if (oldTierCount < currentTier)
                     {
@@ -1795,7 +1818,7 @@ void Load()
                     }
                 }
             }
-            // Special title sections like [SpecialTitle0], [SpecialTitle1], etc.
+
             else if (currentSectionLower.size() >= 12 &&
                      currentSectionLower.rfind("specialtitle", 0) == 0)
             {
@@ -1808,7 +1831,6 @@ void Load()
                 if (currentSpecialTitle >= 0 &&
                     currentSpecialTitle <= RenderConstants::MAX_SPECIAL_TITLE_INDEX)
                 {
-                    // Dynamically grow the SpecialTitles vector
                     while (static_cast<int>(SpecialTitles().size()) <= currentSpecialTitle)
                     {
                         SpecialTitleDefinition newSpecial;
@@ -1830,7 +1852,7 @@ void Load()
                     currentSpecialTitle = -1;
                 }
             }
-            // Honorific sections like [Honorific0], [Honorific1], etc.
+
             else if (currentSectionLower.size() >= 9 &&
                      currentSectionLower.rfind("honorific", 0) == 0)
             {
@@ -1856,7 +1878,7 @@ void Load()
                     currentHonorific = -1;
                 }
             }
-            // Register sections like [Register0], [Register1], etc.
+
             else if (currentSectionLower.size() >= 8 &&
                      currentSectionLower.rfind("register", 0) == 0)
             {
@@ -1896,10 +1918,7 @@ void Load()
                 currentHonorific = -1;
                 currentRegister = -1;
 
-                // Non-indexed section names that parse without a warning. The empty
-                // string covers keys written before the first header. An unknown name
-                // only warns: its keys are still matched against the scalar table,
-                // because a scalar is looked up by key name and not by section.
+                // Unknown sections warn but still accept scalars by key name.
                 static const std::unordered_set<std::string> kKnownSections = {"",
                                                                                "general",
                                                                                "display",
@@ -1943,11 +1962,8 @@ void Load()
         std::string key = CanonicalizeStructKey(keyRaw);
         std::string val = Trim(line.substr(eq + 1));
 
-        // Key dispatch, first match wins: the parser for the active indexed section,
-        // then Format / InfoFormat, then the scalar table. At most one indexed parser
-        // can be active, because a section header clears the other three indices.
-        // The indexed parsers see the canonicalized key; the scalar lookup uses keyRaw,
-        // so canonicalization cannot rename a scalar out of the table.
+        // Offer indexed fields first, then formats, then raw scalar keys. At most one indexed
+        // parser is active; canonicalization must not rename a scalar.
         bool handled = false;
 
         if (currentTier >= 0 && currentTier < static_cast<int>(Tiers().size()))
@@ -1983,7 +1999,7 @@ void Load()
             {
                 ParseInfoFormat(val);
             }
-            // Table-driven lookup for all scalar settings.
+
             else if (auto it = GetKeyMap().find(ToLowerAscii(keyRaw)); it != GetKeyMap().end())
             {
                 ApplySettingValue(*it->second, val);
@@ -2012,16 +2028,14 @@ void Load()
         {
             SKSE::log::warn("Settings: {}", warning);
         }
-        // 48 is the MAX_WARNINGS cap inside addWarning; the list cannot exceed it.
+
         if (parseWarnings.size() == 48)
         {
             SKSE::log::warn("Settings: warning output truncated");
         }
     }
 
-    // Publish last, while the write lock is still held. The release order pairs with
-    // the acquire load in RefreshCachedSettingsSnapshot() on the render thread, so a
-    // reader that observes the new generation also observes every value written above.
+    // Publish under the write lock; the render-thread acquire observes all updated values.
     Generation().fetch_add(1, std::memory_order_release);
 }
 }  // namespace Settings
