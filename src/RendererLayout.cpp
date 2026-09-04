@@ -1,15 +1,15 @@
 // RendererLayout - measurement, placeholder expansion, style resolution and badge
 // placement for one nameplate.
 //
-// Render thread only. Every input is plain data: the ActorDrawData the game thread
-// published under snapshotLock, plus the per-frame RenderSettingsSnapshot. Nothing
-// here dereferences an RE::* object and nothing here draws. The output is a
+// render thread only. every input is plain data: the ActorDrawData the game thread
+// published under snapshotLock, plus the per-frame RenderSettingsSnapshot. nothing
+// here dereferences an RE::* object and nothing here draws. the output is a
 // LabelStyle (per-role colors, effect selection, animation phase) and a LabelLayout
 // (fonts, segments, positions, bounding box) that Renderer.cpp and
 // RendererEffects.cpp consume in the same frame.
 //
-// Vertical stack of one plate, in screen pixels relative to startPos.y, with Y
-// growing downward. The main row is anchored so its lowest drawn pixel - ink bottom
+// vertical stack of one plate, in screen pixels relative to startPos.y, with y
+// growing downward. the main row is anchored so its lowest drawn pixel - ink bottom
 // plus outline plus shadow - lands exactly on startPos.y:
 //
 //     emblem row                    optional, added by BuildBadges
@@ -25,23 +25,21 @@
 //                  INFO_LINE_GAP
 //   infoLineY  ---- info line-box top, present only when infoSegments is non-empty
 //
-// The gaps are reference-scale constants from RenderConstants. Each one is scaled by
+// the gaps are reference-scale constants from RenderConstants. each one is scaled by
 // the plate's text scale before use, so the stack keeps its proportions at distance.
 
 #include "RendererInternal.hpp"
 
 #include "BadgeTextures.hpp"
 #include "NameFit.hpp"
+#include "TierEmblem.hpp"
 
 namespace Renderer
 {
-// Tight vertical ink bounds of the text, in pixels measured down from the top
-// of the line box. Both outputs are 0 when the font or text is missing, or when
-// no character resolves to a glyph.
+// Glyph offsets are pixels below the line-box top; missing glyphs yield zero bounds.
 void CalcTightYBoundsFromTop(
     ImFont* font, float fontSize, const char* text, float& outTop, float& outBottom)
 {
-    // Start at the extremes so the first glyph replaces them.
     outTop = +FLT_MAX;
     outBottom = -FLT_MAX;
 
@@ -59,7 +57,6 @@ void CalcTightYBoundsFromTop(
         unsigned int cp;
         p = Utf8Next(p, cp);
 
-        // Plate text carries no newlines; skip them defensively.
         if (cp == '\n' || cp == '\r')
         {
             continue;
@@ -71,14 +68,11 @@ void CalcTightYBoundsFromTop(
             continue;  // Character not in font
         }
 
-        // Y0 (glyph top) and Y1 (glyph bottom) are offsets from the top of the
-        // line, not the baseline; both are positive and Y grows downward. The
-        // tightest bounds are the smallest Y0 and the largest Y1.
+        // Y0/Y1 are line-box offsets with y downward.
         outTop = std::min(outTop, g->Y0 * scale);
         outBottom = std::max(outBottom, g->Y1 * scale);
     }
 
-    // No glyph resolved.
     if (outTop == +FLT_MAX)
     {
         outTop = .0f;
@@ -86,14 +80,6 @@ void CalcTightYBoundsFromTop(
     }
 }
 
-// Replace placeholders in a format string with values from an actor label
-// context. Single-pass, so a placeholder inside a substituted value is not
-// expanded again.
-// Supported placeholders: %n (name), %l (level), %r (relationship),
-// %d (level delta), %c (creature kind).
-// %t (title) expands only when the caller set ctx.title, which happens for the
-// title row alone. BuildLabelContext leaves ctx.title null, so "%t" in
-// DisplayFormat or InfoFormat is copied through as the literal characters.
 std::string FormatString(const std::string& fmt, const ActorLabelContext& ctx)
 {
     const std::string lStr = std::to_string(ctx.level);
@@ -144,9 +130,13 @@ std::string FormatString(const std::string& fmt, const ActorLabelContext& ctx)
 
 namespace
 {
-// Resolve enum -> label string from the per-frame settings snapshot. The returned view
-// points into lbl and stays valid until Settings::Generation() advances. A value outside
-// the enum yields an empty view, which FormatString then expands to nothing.
+/**
+ * @fn std::string_view LabelFor(RelationshipKind r, const RenderSettingsSnapshot::LabelTokens& lbl)
+ * @brief Resolve a snapshot classification to its configured label view.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Views alias lbl; invalid enum values expand to empty text.
+ */
 std::string_view LabelFor(RelationshipKind r, const RenderSettingsSnapshot::LabelTokens& lbl)
 {
     switch (r)
@@ -163,6 +153,11 @@ std::string_view LabelFor(RelationshipKind r, const RenderSettingsSnapshot::Labe
     return {};
 }
 
+/**
+ * @fn std::string_view LabelFor(LevelDelta d, const RenderSettingsSnapshot::LabelTokens& lbl)
+ * @brief Resolve a snapshot classification to its configured label view.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::string_view LabelFor(LevelDelta d, const RenderSettingsSnapshot::LabelTokens& lbl)
 {
     switch (d)
@@ -179,6 +174,11 @@ std::string_view LabelFor(LevelDelta d, const RenderSettingsSnapshot::LabelToken
     return {};
 }
 
+/**
+ * @fn std::string_view LabelFor(CreatureKind k, const RenderSettingsSnapshot::LabelTokens& lbl)
+ * @brief Resolve a snapshot classification to its configured label view.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 std::string_view LabelFor(CreatureKind k, const RenderSettingsSnapshot::LabelTokens& lbl)
 {
     switch (k)
@@ -197,12 +197,15 @@ std::string_view LabelFor(CreatureKind k, const RenderSettingsSnapshot::LabelTok
     return {};
 }
 
-// Build a label context for an actor.  The string views have two owners:
-// relationship, levelDelta and creatureKind point into snap.labels, which stays
-// valid until Settings::Generation() advances; name points into the caller's
-// ActorDrawData, or at a static " " literal when the actor name is empty.  The
-// title pointer is left null; the caller must set it after this returns, or
-// "%t" in that caller's format string is emitted literally.
+/**
+ * @fn ActorLabelContext BuildLabelContext(const ActorDrawData& d, const RenderSettingsSnapshot&
+ *     snap)
+ * @brief Build non-owning format views for the current actor and settings.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Views alias snap.labels and the caller ActorDrawData. Set title separately;
+ * otherwise %t remains literal.
+ */
 ActorLabelContext BuildLabelContext(const ActorDrawData& d, const RenderSettingsSnapshot& snap)
 {
     ActorLabelContext ctx{};
@@ -216,7 +219,13 @@ ActorLabelContext BuildLabelContext(const ActorDrawData& d, const RenderSettings
     return ctx;
 }
 
-// True when every character is ASCII whitespace.  An empty string is true.
+/**
+ * @fn bool IsAllWhitespace(std::string_view s)
+ * @brief Check whether a segment has any non-whitespace byte.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Empty text counts as whitespace.
+ */
 bool IsAllWhitespace(std::string_view s)
 {
     for (char c : s)
@@ -250,17 +259,26 @@ const Settings::TierDefinition& GetFallbackTier()
     return fallback;
 }
 
-// Blend RGB only. t is clamped to [0, 1] and the result is always opaque: the alpha of
-// both inputs is discarded, because every style color carries its opacity separately.
+/**
+ * @fn static ImVec4 MixVec4(const ImVec4& a, const ImVec4& b, float t)
+ * @brief Blend RGB channels and return an opaque color.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Discard input alpha; style opacity is stored separately.
+ */
 static ImVec4 MixVec4(const ImVec4& a, const ImVec4& b, float t)
 {
     t = std::clamp(t, .0f, 1.0f);
     return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.0f);
 }
 
-// Scale chroma about the color's Rec.601 luma, leaving that luma unchanged. amount above
-// 1 saturates, below 1 desaturates. Channels clamp to [0, 1], so a strong boost on an
-// already vivid color shifts hue rather than adding chroma.
+/**
+ * @fn static void BoostSaturation(ImVec4& c, float amount)
+ * @brief Scale chroma around Rec.601 luminance and clamp the color channels.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Scale chroma about Rec.601 luma. Channel clamping can shift saturated hues.
+ */
 static void BoostSaturation(ImVec4& c, float amount)
 {
     float gray = c.x * .299f + c.y * .587f + c.z * .114f;
@@ -269,10 +287,14 @@ static void BoostSaturation(ImVec4& c, float amount)
     c.z = std::clamp(gray + (c.z - gray) * amount, .0f, 1.0f);
 }
 
-// Derive one role's support tint - the single color its outline, shadow and outline-glow
-// layers share - from that role's own gradient pair: take the midpoint, pull it toward
-// the tier highlight by highlightMix, then saturate by saturationBoost. The result is
-// opaque; each support pass supplies its own alpha.
+/**
+ * @fn static ImVec4 DeriveSupportTint(const ImVec4& left, const ImVec4& right, const
+ *     Settings::Color3& highlight, float highlightMix, float saturationBoost)
+ * @brief Resolve an opaque support tint from the gradient and tier highlight.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Derive opaque support tint from the gradient midpoint and tier highlight.
+ */
 static ImVec4 DeriveSupportTint(const ImVec4& left,
                                 const ImVec4& right,
                                 const Settings::Color3& highlight,
@@ -286,16 +308,24 @@ static ImVec4 DeriveSupportTint(const ImVec4& left,
     return support;
 }
 
+/**
+ * @struct TierLevelColors
+ * @brief Resolved left and right colors for tier level text.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 struct TierLevelColors
 {
     ImVec4 left;
     ImVec4 right;
 };
 
-// Resolve the tier's level gradient pair. A per-tier INI override wins; otherwise the
-// pair is derived by lerping the tier's name gradient 40% toward white. Three roles read
-// it - the player's level row, and an NPC's title and level rows - so all three agree
-// on the matched tier.
+/**
+ * @fn static TierLevelColors ResolveTierLevelColors(const Settings::TierDefinition& tier)
+ * @brief Resolve explicit level colors or derive them from the name gradient.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Explicit level colors win; otherwise blend the name gradient 40% toward white.
+ */
 static TierLevelColors ResolveTierLevelColors(const Settings::TierDefinition& tier)
 {
     const auto ToVec = [](const Settings::Color3& color)
@@ -314,14 +344,14 @@ static TierLevelColors ResolveTierLevelColors(const Settings::TierDefinition& ti
             tier.levelRightColor ? ToVec(*tier.levelRightColor) : LerpToWhite(nameRight, .40f)};
 }
 
-// ============================================================================
-// ComputeLabelStyle helpers
-// ============================================================================
-
-// Find the tier index matching the given level (direct match or nearest range).
-// Only called when snap.tiers is non-empty. Both passes take the lowest index on a tie:
-// the first tier whose range contains the level, or, when no range does, the first tier
-// at the smallest distance from the level to its range.
+/**
+ * @fn static int MatchTier(uint16_t level, const RenderSettingsSnapshot& snap)
+ * @brief Select a containing level range or the nearest configured tier.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Requires nonempty tiers. First containing range wins; otherwise nearest range,
+ * with the lowest index breaking ties.
+ */
 static int MatchTier(uint16_t level, const RenderSettingsSnapshot& snap)
 {
     int matchedTier = -1;
@@ -336,7 +366,6 @@ static int MatchTier(uint16_t level, const RenderSettingsSnapshot& snap)
 
     if (matchedTier < 0)
     {
-        // No direct match; find nearest range.
         int bestIdx = 0;
         int bestDistance = std::numeric_limits<int>::max();
         for (size_t i = 0; i < snap.tiers.size(); ++i)
@@ -365,14 +394,17 @@ static int MatchTier(uint16_t level, const RenderSettingsSnapshot& snap)
     return std::clamp(matchedTier, 0, static_cast<int>(snap.tiers.size()) - 1);
 }
 
-// Solid-fill effect used for NPC text (tier effects are player/special-title only).
 static constexpr Settings::EffectParams kNoneEffect{.type = Settings::EffectType::None};
-// Static two-color fill for NPC title/level roles. It uses the whole tier-level
-// color pair without opting ordinary NPCs into animated tier visuals.
+// Static gradients keep ordinary NPC text free of tier animation.
 static constexpr Settings::EffectParams kNpcTierAccentEffect{.type =
                                                                  Settings::EffectType::Gradient};
 
-// Pack the resolved float colors into draw-ready ImU32 values.
+/**
+ * @fn static void PackStyleColors(LabelStyle& style, float alpha, const RenderSettingsSnapshot&
+ *     snap)
+ * @brief Pack resolved row colors with their independent opacity multipliers.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void PackStyleColors(LabelStyle& style, float alpha, const RenderSettingsSnapshot& snap)
 {
     style.colL = ImGui::ColorConvertFloat4ToU32(
@@ -392,22 +424,24 @@ static void PackStyleColors(LabelStyle& style, float alpha, const RenderSettings
     style.colRLevel = ImGui::ColorConvertFloat4ToU32(
         ImVec4(style.RcLevel.x, style.RcLevel.y, style.RcLevel.z, style.levelAlpha));
 
-    // Outline width base, in reference pixels: the sum of the two INI bounds, not their
-    // average. The per-role widths need the row font sizes, so the caller derives them
-    // later through LabelStyle::CalcOutlineWidth.
+    // Base width is the sum of INI bounds, not their average; row scaling follows.
     style.baseOutlineWidth = snap.outlineWidthMin + snap.outlineWidthMax;
 }
 
-// Resolve tier-palette colors for the player and for special titles.  INI
-// colors display as authored; derivation runs only for optional per-tier
-// entries the INI omits.
+/**
+ * @fn static void ResolveTierStyleColors(LabelStyle& style, const Settings::TierDefinition& tier,
+ *     uint16_t level, float alpha, const RenderSettingsSnapshot& snap)
+ * @brief Resolve tier and special-title colors while preserving explicit choices.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Derive only omitted tier colors; explicit INI colors remain authoritative.
+ */
 static void ResolveTierStyleColors(LabelStyle& style,
                                    const Settings::TierDefinition& tier,
                                    uint16_t level,
                                    float alpha,
                                    const RenderSettingsSnapshot& snap)
 {
-    // Level position within tier [0, 1]
     float levelT = .0f;
     if (tier.maxLevel > tier.minLevel)
     {
@@ -419,9 +453,7 @@ static void ResolveTierStyleColors(LabelStyle& style,
     levelT = std::clamp(levelT, .0f, 1.0f);
 
     const bool under100 = (level < 100);
-    // Levels below 100 render slightly quieter. The factor multiplies with the
-    // strength band and the per-effect caps, so a value much below .85 stacks
-    // into effects that read as absent rather than restrained.
+    // Keep low-level intensity near .85 so stacked strength caps remain visible.
     const float tierIntensity = under100 ? .85f : 1.0f;
 
     const float effectAlphaMul =
@@ -435,12 +467,9 @@ static void ResolveTierStyleColors(LabelStyle& style,
         return ImVec4(c.x + (1.0f - c.x) * t, c.y + (1.0f - c.y) * t, c.z + (1.0f - c.z) * t, 1.0f);
     };
 
-    // Name colors: the tier's main gradient, as authored.
     style.LcName = ToVec(tier.leftColor);
     style.RcName = ToVec(tier.rightColor);
 
-    // Level / title colors: a per-tier INI override always wins; otherwise
-    // derive a softer companion by blending the name band toward white.
     const auto levelColors = ResolveTierLevelColors(tier);
     style.LcLevel = levelColors.left;
     style.RcLevel = levelColors.right;
@@ -487,17 +516,17 @@ static void ResolveTierStyleColors(LabelStyle& style,
     style.usesTierVisuals = true;
 }
 
-// NPC name ink is white; the title and level roles take the tier-level gradient. The
-// per-relationship NPC colors apply only as support-layer tints, so relationship stays
-// readable without coloring the name fill.
-//
-// preserveTierEffects is set when the actor matched a special title, and it guards the
-// effect selection alone: nameEffect, levelEffect, titleEffect, effectAlpha and
-// usesTierVisuals then keep whatever ResolveTierStyleColors wrote just before this call.
-// An ordinary NPC instead gets a solid name fill and a static two-color title and level.
-// Every color assignment below runs in both cases, so a special-titled NPC still draws
-// white name ink and its authored Color and GlowColor are overwritten here. Only the
-// player keeps them, because the player never reaches this function.
+/**
+ * @fn static void ResolveNpcStyleColors(LabelStyle& style, const Settings::TierDefinition& tier,
+ *     RelationshipKind relationship, float alpha, const RenderSettingsSnapshot& snap, bool
+ *     preserveTierEffects)
+ * @brief Apply NPC name and support colors to the resolved style.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * NPC names stay white; title/level use tier level colors. preserveTierEffects
+ * keeps only effect selection and strength. Color assignments still replace special-title
+ * color and GlowColor; only the player retains those authored colors.
+ */
 static void ResolveNpcStyleColors(LabelStyle& style,
                                   const Settings::TierDefinition& tier,
                                   RelationshipKind relationship,
@@ -536,10 +565,15 @@ static void ResolveNpcStyleColors(LabelStyle& style,
     }
 }
 
-// Compute animation phase and strength parameters. phase01 is a wrapped cycle position
-// in [0, 1): elapsed time times the tier's speed band, offset by a per-actor seed taken
-// from the low 10 bits of formID so that neighbouring plates never animate in lockstep.
-// strength scales the amplitude of every animated effect.
+/**
+ * @fn static void ComputeAnimationParams(LabelStyle& style, uint16_t level, uint32_t formID, float
+ *     time, const RenderSettingsSnapshot& snap)
+ * @brief Resolve per-actor animation phase and level-scaled effect strength.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Phase wraps elapsed time in [0,1), offset by the low 10 FormID bits.
+ * Strength scales amplitude, not phase rate.
+ */
 static void ComputeAnimationParams(LabelStyle& style,
                                    uint16_t level,
                                    uint32_t formID,
@@ -549,10 +583,8 @@ static void ComputeAnimationParams(LabelStyle& style,
     auto frac = [](float x) { return x - std::floor(x); };
 
     const bool under100 = (level < 100);
-    // Same factor as the effect-alpha tierIntensity above.
     const float tierIntensity = under100 ? .85f : 1.0f;
 
-    // Level position within tier [0, 1] (recalculated for strength)
     float levelT = .0f;
     if (style.tier->maxLevel > style.tier->minLevel)
     {
@@ -592,7 +624,6 @@ static void ComputeAnimationParams(LabelStyle& style,
          (RenderConstants::EFFECT_STRENGTH_MAX - RenderConstants::EFFECT_STRENGTH_MIN) * levelT);
 }
 
-// Compute all color, tier, and effect data for a label.
 LabelStyle ComputeLabelStyle(const ActorDrawData& d,
                              const std::string& nameLower,
                              float alpha,
@@ -602,8 +633,7 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
     LabelStyle style{};
     style.alpha = alpha;
 
-    // Cap the level before tier matching so a scripted or modded level stays inside the
-    // range the [TierN] sections describe.
+    // Cap modded/scripted levels to the configured tier range.
     const uint16_t lv = (uint16_t)std::min<int>(d.level, 9999);
 
     const Settings::TierDefinition* tierPtr = nullptr;
@@ -619,7 +649,6 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
     }
     style.tier = tierPtr;
 
-    // Tier effect gating
     style.tierAllowsGlow =
         !snap.visual.EnableTierEffectGating || style.tierIdx >= snap.visual.GlowMinTier;
     style.tierAllowsParticles =
@@ -627,9 +656,7 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
     style.tierAllowsOrnaments =
         !snap.visual.EnableTierEffectGating || style.tierIdx >= snap.visual.OrnamentMinTier;
 
-    // Special title matching. sortedSpecialTitles is ordered by descending priority and
-    // holds only entries with a non-empty keyword, so the first keyword that occurs as a
-    // substring of the already-lowercased name wins.
+    // The first nonempty keyword match wins in descending priority order.
     style.specialTitle = nullptr;
     {
         const auto& sortedSpecials = snap.sortedSpecialTitles;
@@ -652,10 +679,6 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
 
     style.distToPlayer = d.distToPlayer;
 
-    // The player takes the tier palette exactly as authored. Every NPC gets white name
-    // ink plus the matched tier's level gradient on its title and level roles; an NPC
-    // that matched a special title additionally keeps the tier's effect selection,
-    // because ResolveNpcStyleColors leaves that alone when preserveTierEffects is set.
     if (d.isPlayer)
     {
         ResolveTierStyleColors(style, *tierPtr, lv, alpha, snap);
@@ -675,21 +698,19 @@ LabelStyle ComputeLabelStyle(const ActorDrawData& d,
     return style;
 }
 
-// ============================================================================
-// ComputeLabelLayout helpers
-// ============================================================================
-
-// Build one row of rendered segments from a format list and advance the typewriter
-// accounting.  Shared by the main row (DisplayFormat) and the info row (InfoFormat).
-//
-// A segment is dropped entirely - no width, no padding - when dropLevelSegments is set
-// and its format contains %l, or when it is marked dropIfBlank and its expanded text is
-// all whitespace.  A dropped segment also contributes no characters to the typewriter.
-//
-// typewriterCharsToShow is the count of characters revealed so far across the whole
-// plate, or -1 to disable the reveal, in which case totalCharsProcessed is left alone.
-// outLineWidth and outLineHeight measure the full text, never displayText, so the row
-// width and the plate bounding box hold still while the reveal runs.
+/**
+ * @fn static void BuildLineSegments(std::vector<RenderSeg>& outSegs, float& outLineWidth, float&
+ *     outLineHeight, const std::vector<Settings::Segment>& fmtList, const ActorLabelContext& ctx,
+ *     ImFont* fontName, float nameFontSize, ImFont* fontLevel, float levelFontSize, float
+ *     segmentPadding, int typewriterCharsToShow, int& totalCharsProcessed, bool dropLevelSegments =
+ *     false)
+ * @brief Expand and measure one formatted row with a shared reveal budget.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Dropped segments contribute no width, padding or typewriter characters.
+ * Measure full text to keep bounds fixed during reveal. A budget of -1 disables
+ * typewriter accounting. Main and info rows share this path.
+ */
 static void BuildLineSegments(std::vector<RenderSeg>& outSegs,
                               float& outLineWidth,
                               float& outLineHeight,
@@ -710,8 +731,7 @@ static void BuildLineSegments(std::vector<RenderSeg>& outSegs,
 
     for (const auto& fmt : fmtList)
     {
-        // When moreHUD's crosshair readout already shows this target's level,
-        // drop the whole %l segment.
+        // moreHUD level yield drops the entire %l segment.
         if (dropLevelSegments && fmt.format.find("%l") != std::string::npos)
         {
             continue;
@@ -759,11 +779,8 @@ static void BuildLineSegments(std::vector<RenderSeg>& outSegs,
 
         if (seg.containsName)
         {
-            // Fit the whole segment, not the name substring alone: the width budget has
-            // to cover the level text or punctuation the same segment may carry.  A
-            // reduced font size needs a re-measure; the horizontal scale is a pure
-            // post-scale of the measured extents that the draw path re-applies to the
-            // emitted vertices through ScaleNewVerticesX.
+            // Fit the entire name-bearing segment, including punctuation and level text.
+            // Remeasure after font scaling; ScaleNewVerticesX reapplies horizontal compression.
             const NameFit::Result fit = NameFit::Compute(seg.size.x, seg.fontSize);
             if (fit.fontScale < .9999f)
             {
@@ -791,16 +808,19 @@ static void BuildLineSegments(std::vector<RenderSeg>& outSegs,
     }
 }
 
-// Build main row and info row segments from snap.displayFormat and snap.infoFormat.  The
-// typewriter reveal runs across both rows in order, so the info segments appear only
-// after the main line has finished typing.
-//
-// An empty snap.displayFormat falls back to name plus " Lv.%l"; an empty snap.infoFormat
-// simply yields no info row.  moreHUD level-yield drops %l segments from the main row
-// only, so an info row that shows the level still shows it.
+/**
+ * @fn static void BuildSegments(LabelLayout& layout, const ActorDrawData& d, const LabelStyle&,
+ *     float textSizeScale, int typewriterCharsToShow, int& totalCharsProcessed, const
+ *     RenderSettingsSnapshot& snap)
+ * @brief Build main and info rows in typewriter reveal order.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Reveal main segments before info. Empty main formats use name plus lv.%l;
+ * empty info formats omit the row. moreHUD level yield affects only the main row.
+ */
 static void BuildSegments(LabelLayout& layout,
                           const ActorDrawData& d,
-                          const LabelStyle& /*style*/,
+                          const LabelStyle&,
                           float textSizeScale,
                           int typewriterCharsToShow,
                           int& totalCharsProcessed,
@@ -844,10 +864,15 @@ static void BuildSegments(LabelLayout& layout,
                       totalCharsProcessed);
 }
 
-// Compute title text, vertical bounds, positions, and the nameplate bounding box.  See
-// the stack diagram at the top of this file for how the rows relate: titleY, mainLineY
-// and infoLineY are all line-box tops expressed as offsets from startPos.y, in screen
-// pixels.
+/**
+ * @fn static void ComputePositionAndBounds(LabelLayout& layout, const LabelStyle& style, const
+ *     ActorDrawData& d, ActorCache& entry, int typewriterCharsToShow, int totalCharsProcessed,
+ *     const RenderSettingsSnapshot& snap)
+ * @brief Position measured rows and derive the complete plate bounds.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Row y offsets are line-box tops relative to startPos; see the stack diagram.
+ */
 static void ComputePositionAndBounds(LabelLayout& layout,
                                      const LabelStyle& style,
                                      const ActorDrawData& d,
@@ -858,14 +883,18 @@ static void ComputePositionAndBounds(LabelLayout& layout,
 {
     const float outlineWidth = style.outlineWidth;
 
-    // Title precedence: a special title (matched by name keyword) first, then
-    // a faction-earned honorific, then the tier title.
-    const char* titleToUse = style.specialTitle     ? style.specialTitle->displayTitle.c_str()
+    // Title precedence: console, special title, honorific, tier.
+    // An empty console title hides text but preserves the row gap.
+    const bool titleOverridden = d.overrides && d.overrides->title.has_value();
+    const char* titleToUse = titleOverridden        ? d.overrides->title->c_str()
+                             : style.specialTitle   ? style.specialTitle->displayTitle.c_str()
                              : !d.honorific.empty() ? d.honorific.c_str()
                                                     : style.tier->title.c_str();
     ActorLabelContext titleCtx = BuildLabelContext(d, snap);
     titleCtx.title = titleToUse;
-    layout.titleStr = FormatString(snap.titleFormat, titleCtx);
+    layout.titleStr = (titleOverridden && d.overrides->title->empty())
+                          ? std::string{}
+                          : FormatString(snap.titleFormat, titleCtx);
     layout.titleDisplayStr = layout.titleStr;
 
     if (typewriterCharsToShow >= 0)
@@ -889,14 +918,13 @@ static void ComputePositionAndBounds(LabelLayout& layout,
         if (!entry.typewriterComplete && typewriterCharsToShow >= totalCharsProcessed)
         {
             entry.typewriterComplete = true;
+            entry.revealArmed = false;
         }
     }
 
-    // Measure and bound the full title, not titleDisplayStr, so the plate geometry does
-    // not move while the typewriter reveals the title.
+    // Measure the full title so bounds stay fixed during reveal.
     const char* titleText = layout.titleStr.c_str();
 
-    // Tight vertical bounds
     float titleTop = .0f, titleBottom = .0f;
     if (*titleText)
     {
@@ -936,10 +964,7 @@ static void ComputePositionAndBounds(LabelLayout& layout,
     layout.titleY = layout.mainLineY + mainTopDraw - titleBottomDraw - titleGap;
 
     layout.startPos = entry.smooth;
-    // ImGui centers text by advance width, which includes font side bearings and
-    // can differ from the visible ink center.  One scale-aware correction is
-    // applied to the whole plate, so title, badges, emblem, text, ornaments,
-    // particles, bounds and trails stay on the same screen-space axis.
+    // Correct advance-width centering once for the entire plate, scaled with text.
     layout.startPos.x += snap.horizontalOffset * spacingScale;
     if (snap.visual.EnableOverlapPrevention)
     {
@@ -950,8 +975,7 @@ static void ComputePositionAndBounds(LabelLayout& layout,
         }
     }
 
-    // Info row: below the main line, separated by INFO_LINE_GAP.  It adds height
-    // only when at least one info segment survived the dropIfBlank trim.
+    // Only surviving info segments add row height.
     float infoTop = .0f;
     float infoBottom = .0f;
     if (!layout.infoSegments.empty())
@@ -974,18 +998,14 @@ static void ComputePositionAndBounds(LabelLayout& layout,
             infoBottom = .0f;
         }
 
-        // mainLineY + mainBottomDraw is exactly 0, because mainLineY was set to
-        // -mainBottomDraw, so the info ink must start one gap below startPos.y.
-        // infoLineY is the line-box top; infoTop is the offset of the topmost glyph
-        // from that line-box top.
+        // mainLineY + mainBottomDraw = 0; info ink starts one gap below startPos.y.
         const float infoGap = RenderConstants::INFO_LINE_GAP * spacingScale;
         layout.infoLineY = infoGap - infoTop;
     }
 
     layout.totalWidth = std::max({layout.mainLineWidth, layout.titleSize.x, layout.infoLineWidth});
 
-    // The box follows tight ink, so it leaves out the outline and shadow allowances that
-    // mainTopDraw and mainBottomDraw added for row spacing.  BuildBadges widens it later.
+    // Bounds follow tight ink, excluding spacing allowances; BuildBadges widens them.
     layout.nameplateTop = layout.startPos.y + layout.titleY + titleTop;
     layout.nameplateBottom = layout.infoSegments.empty()
                                  ? layout.startPos.y + layout.mainLineY + mainBottom
@@ -996,10 +1016,7 @@ static void ComputePositionAndBounds(LabelLayout& layout,
     layout.nameplateHeight = layout.nameplateBottom - layout.nameplateTop;
     layout.nameplateCenter =
         ImVec2(layout.startPos.x, (layout.nameplateTop + layout.nameplateBottom) * .5f);
-    // Ornament anchor: the cap-band optical center of the main line - topmost
-    // ink down to the BASELINE, not to the ink bottom. Descenders (g/j/p/q/y)
-    // extend the ink box downward, so an ink-center anchor would put the side
-    // ornaments below the optical center of the letters.
+    // Anchor ornaments between cap top and baseline; descenders must not lower them.
     float mainBaseline = -FLT_MAX;
     for (const auto& seg : layout.segments)
     {
@@ -1013,12 +1030,13 @@ static void ComputePositionAndBounds(LabelLayout& layout,
             : layout.startPos.y + layout.mainLineY + (mainTop + mainBaseline) * .5f;
 }
 
-// ============================================================================
-// Status icon badges
-// ============================================================================
-
-// Map a tier index onto the low/mid/high prestige band (integer thirds).
-// Mirrored in tests/test_utils.cpp - keep in sync.
+/**
+ * @fn static int TierBandIndex(int tierIdx, int tierCount)
+ * @brief Assign a tier to the low, middle, or high rank band.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Tier thirds; mirrored in tests/test_utils.cpp. Keep in sync.
+ */
 static int TierBandIndex(int tierIdx, int tierCount)
 {
     if (tierCount <= 1)
@@ -1028,41 +1046,15 @@ static int TierBandIndex(int tierIdx, int tierCount)
     return std::clamp(tierIdx * 3 / tierCount, 0, 2);
 }
 
-// Map a tier index onto a top-weighted emblem index in [0, imageCount).  A gamma above 1
-// makes the low emblems span more tiers and the high emblems span fewer, so the rarest
-// emblems stay reserved for the top tiers.  gamma is clamped to [0.1, 8], and 1 gives an
-// even split.  Returns 0 when there is only one emblem or only one tier.  Mirrored in
-// tests/test_utils.cpp - keep in sync.
-static int TierImageBandIndex(int tierIdx, int tierCount, int imageCount, float gamma)
-{
-    if (imageCount <= 1 || tierCount <= 1)
-    {
-        return 0;
-    }
-    const float t =
-        std::clamp(static_cast<float>(tierIdx) / static_cast<float>(tierCount - 1), .0f, 1.0f);
-    const float g = std::clamp(gamma, .1f, 8.0f);
-    const int band = static_cast<int>(std::floor(std::pow(t, g) * static_cast<float>(imageCount)));
-    return std::clamp(band, 0, imageCount - 1);
-}
-// Map actor facts to an ordered set of badge slots.  Every enabled slot always renders:
-// a neutral or inactive fact is marked muted (dimmed and desaturated at draw time), a
-// notable fact is drawn lit.
-//
-// An NPC fills at most seven slots, in this order: rank, relationship, creature, role,
-// protection, threat, engagement.  The player fills at most five: rank, sneak,
-// engagement, encumbered, bounty.  Seven is also MAX_BADGE_SLOTS, so the NPC set fills
-// the array exactly and a new NPC slot needs that capacity raised first.
-//
-// Each slot still needs its own enable flag in cfg, and the rank slot needs includeRank;
-// Deck cards pass false there because the card art draws the rank emblem itself.  An
-// empty composition comes back when cfg.enabled is false.  Mirrored in
-// tests/test_utils.cpp - keep the logic in sync.
+// Mirrored in tests/test_utils.cpp; keep badge rules synchronized. The mirror shares the
+// real TierEmblem::Select, so only the slot rules need syncing.
+// Views must alias cfg or *d.overrides, never temporary strings.
 BadgeComposition ComposeBadges(const ActorDrawData& d,
                                const RenderSettingsSnapshot::IconTokens& cfg,
                                int tierIdx,
                                int tierCount,
-                               bool includeRank)
+                               bool includeRank,
+                               int explicitBadge)
 {
     BadgeComposition out{};
     if (!cfg.enabled)
@@ -1070,9 +1062,10 @@ BadgeComposition ComposeBadges(const ActorDrawData& d,
         return out;
     }
 
-    // Push a slot when its enable flag is set.  Every slot carries its own
-    // color; the muted flag drives only the draw treatment (dim, no shadow,
-    // slight desaturation), not the hue.
+    using ActorOverrides::Slot;
+    using ActorOverrides::SlotOverride;
+
+    // Muting changes treatment, not the slot hue.
     const auto add = [&](bool enabled,
                          std::string_view icon,
                          Settings::Color3 color,
@@ -1085,13 +1078,39 @@ BadgeComposition ComposeBadges(const ActorDrawData& d,
         }
     };
 
-    // Rank is an informational badge for every actor. It does not opt ordinary NPC
-    // typography into tier colors or effects; ComputeLabelStyle decides that separately.
-    // cfg.tierBadgeImages picks a full-color emblem image instead of the three-band
-    // duotone icon, and cfg.tierEnabled gates the slot on either path.
+    const auto slotOverride = [&](Slot slot) -> const SlotOverride*
+    { return d.overrides ? &d.overrides->slots[static_cast<std::size_t>(slot)] : nullptr; };
+    const auto hidden = [](const SlotOverride* ov) { return ov && ov->hidden; };
+    // Console states encode enum order. These pins prevent reordered enums from
+    // silently remapping saved overrides.
+    static_assert(static_cast<int>(RelationshipKind::Follower) == 3);
+    static_assert(static_cast<int>(CreatureKind::Dragon) == 4);
+    static_assert(static_cast<int>(RoleKind::Guard) == 2);
+    static_assert(static_cast<int>(ProtectionKind::Essential) == 2);
+    static_assert(static_cast<int>(LevelDelta::Deadly) == 3);
+    static_assert(static_cast<int>(EngagementKind::Combat) == 2);
+    static_assert(static_cast<int>(SneakKind::Detected) == 2);
+    const auto forced = [](const SlotOverride* ov, int live, int maxState) -> int
+    { return (ov && ov->state) ? std::min<int>(*ov->state, maxState) : live; };
+    // Both icon choices are lvalues that outlive this call.
+    const auto iconOf = [](const SlotOverride* ov, const std::string& cfgIcon) -> std::string_view
+    { return (ov && ov->icon) ? std::string_view(*ov->icon) : std::string_view(cfgIcon); };
+    const auto addExtras = [&]()
+    {
+        if (!d.overrides)
+        {
+            return;
+        }
+        for (const auto& extra : d.overrides->extras)
+        {
+            out.push(extra.icon, extra.color, false, false);
+        }
+    };
+
+    // Rank badges do not enable tier typography; ComputeLabelStyle owns that gate.
     const auto addRank = [&]()
     {
-        if (!includeRank)
+        if (hidden(slotOverride(Slot::Rank)) || !includeRank)
         {
             return;
         }
@@ -1099,7 +1118,8 @@ BadgeComposition ComposeBadges(const ActorDrawData& d,
         {
             out.pushTierImage(
                 cfg.tierEnabled,
-                TierImageBandIndex(tierIdx, tierCount, cfg.tierImageCount, cfg.tierBadgeGamma));
+                TierEmblem::Select(
+                    explicitBadge, tierIdx, tierCount, cfg.tierImageCount, cfg.tierBadgeGamma));
             return;
         }
 
@@ -1117,149 +1137,198 @@ BadgeComposition ComposeBadges(const ActorDrawData& d,
     {
         addRank();
 
-        switch (d.relationship)
+        if (const auto* ov = slotOverride(Slot::Relationship); !hidden(ov))
         {
-            case RelationshipKind::Hostile:
-                add(cfg.relationshipEnabled, cfg.icoHostile, cfg.colHostile, false);
-                break;
-            case RelationshipKind::Ally:
-                add(cfg.relationshipEnabled, cfg.icoAlly, cfg.colAlly, false);
-                break;
-            case RelationshipKind::Follower:
-                add(cfg.relationshipEnabled, cfg.icoFollower, cfg.colFollower, false);
-                break;
-            case RelationshipKind::Neutral:
-                add(cfg.relationshipEnabled, cfg.icoNeutral, cfg.colNeutral, true);
-                break;
+            switch (static_cast<RelationshipKind>(forced(ov, static_cast<int>(d.relationship), 3)))
+            {
+                case RelationshipKind::Hostile:
+                    add(cfg.relationshipEnabled, iconOf(ov, cfg.icoHostile), cfg.colHostile, false);
+                    break;
+                case RelationshipKind::Ally:
+                    add(cfg.relationshipEnabled, iconOf(ov, cfg.icoAlly), cfg.colAlly, false);
+                    break;
+                case RelationshipKind::Follower:
+                    add(cfg.relationshipEnabled,
+                        iconOf(ov, cfg.icoFollower),
+                        cfg.colFollower,
+                        false);
+                    break;
+                case RelationshipKind::Neutral:
+                    add(cfg.relationshipEnabled, iconOf(ov, cfg.icoNeutral), cfg.colNeutral, true);
+                    break;
+            }
         }
 
-        switch (d.creatureKind)
+        if (const auto* ov = slotOverride(Slot::Creature); !hidden(ov))
         {
-            case CreatureKind::Dragon:
-                add(cfg.creatureEnabled, cfg.icoDragon, cfg.colCreature, false);
-                break;
-            case CreatureKind::Daedra:
-                add(cfg.creatureEnabled, cfg.icoDaedra, cfg.colCreature, false);
-                break;
-            case CreatureKind::Undead:
-                add(cfg.creatureEnabled, cfg.icoUndead, cfg.colCreature, false);
-                break;
-            case CreatureKind::Beast:
-                add(cfg.creatureEnabled, cfg.icoBeast, cfg.colCreature, false);
-                break;
-            case CreatureKind::NPC:
-                add(cfg.creatureEnabled, cfg.icoHumanoid, cfg.colHumanoid, true);
-                break;
+            switch (static_cast<CreatureKind>(forced(ov, static_cast<int>(d.creatureKind), 4)))
+            {
+                case CreatureKind::Dragon:
+                    add(cfg.creatureEnabled, iconOf(ov, cfg.icoDragon), cfg.colCreature, false);
+                    break;
+                case CreatureKind::Daedra:
+                    add(cfg.creatureEnabled, iconOf(ov, cfg.icoDaedra), cfg.colCreature, false);
+                    break;
+                case CreatureKind::Undead:
+                    add(cfg.creatureEnabled, iconOf(ov, cfg.icoUndead), cfg.colCreature, false);
+                    break;
+                case CreatureKind::Beast:
+                    add(cfg.creatureEnabled, iconOf(ov, cfg.icoBeast), cfg.colCreature, false);
+                    break;
+                case CreatureKind::NPC:
+                    add(cfg.creatureEnabled, iconOf(ov, cfg.icoHumanoid), cfg.colHumanoid, true);
+                    break;
+            }
         }
 
-        switch (d.role)
+        if (const auto* ov = slotOverride(Slot::Role); !hidden(ov))
         {
-            case RoleKind::Guard:
-                add(cfg.roleEnabled, cfg.icoGuard, cfg.colGuard, false);
-                break;
-            case RoleKind::Merchant:
-                add(cfg.roleEnabled, cfg.icoMerchant, cfg.colMerchant, false);
-                break;
-            case RoleKind::Commoner:
-                add(cfg.roleEnabled, cfg.icoCommoner, cfg.colCommoner, true);
-                break;
+            switch (static_cast<RoleKind>(forced(ov, static_cast<int>(d.role), 2)))
+            {
+                case RoleKind::Guard:
+                    add(cfg.roleEnabled, iconOf(ov, cfg.icoGuard), cfg.colGuard, false);
+                    break;
+                case RoleKind::Merchant:
+                    add(cfg.roleEnabled, iconOf(ov, cfg.icoMerchant), cfg.colMerchant, false);
+                    break;
+                case RoleKind::Commoner:
+                    add(cfg.roleEnabled, iconOf(ov, cfg.icoCommoner), cfg.colCommoner, true);
+                    break;
+            }
         }
 
-        switch (d.protection)
+        if (const auto* ov = slotOverride(Slot::Protection); !hidden(ov))
         {
-            case ProtectionKind::Essential:
-                add(cfg.protectionEnabled, cfg.icoEssential, cfg.colEssential, false);
-                break;
-            case ProtectionKind::Protected:
-                add(cfg.protectionEnabled, cfg.icoProtected, cfg.colProtected, false);
-                break;
-            case ProtectionKind::Mortal:
-                add(cfg.protectionEnabled, cfg.icoMortal, cfg.colMortal, true);
-                break;
+            switch (static_cast<ProtectionKind>(forced(ov, static_cast<int>(d.protection), 2)))
+            {
+                case ProtectionKind::Essential:
+                    add(cfg.protectionEnabled,
+                        iconOf(ov, cfg.icoEssential),
+                        cfg.colEssential,
+                        false);
+                    break;
+                case ProtectionKind::Protected:
+                    add(cfg.protectionEnabled,
+                        iconOf(ov, cfg.icoProtected),
+                        cfg.colProtected,
+                        false);
+                    break;
+                case ProtectionKind::Mortal:
+                    add(cfg.protectionEnabled, iconOf(ov, cfg.icoMortal), cfg.colMortal, true);
+                    break;
+            }
         }
 
-        switch (d.levelDelta)
+        if (const auto* ov = slotOverride(Slot::Threat); !hidden(ov))
         {
-            case LevelDelta::Deadly:
-                add(cfg.threatEnabled, cfg.icoDeadly, cfg.colDeadly, false, cfg.deadlyPulse);
-                break;
-            case LevelDelta::Strong:
-                add(cfg.threatEnabled, cfg.icoStrong, cfg.colStrong, false);
-                break;
-            case LevelDelta::Weak:
-                add(cfg.threatEnabled, cfg.icoWeak, cfg.colWeak, false);
-                break;
-            case LevelDelta::Even:
-                add(cfg.threatEnabled, cfg.icoEven, cfg.colEven, true);
-                break;
+            switch (static_cast<LevelDelta>(forced(ov, static_cast<int>(d.levelDelta), 3)))
+            {
+                case LevelDelta::Deadly:
+                    add(cfg.threatEnabled,
+                        iconOf(ov, cfg.icoDeadly),
+                        cfg.colDeadly,
+                        false,
+                        cfg.deadlyPulse);
+                    break;
+                case LevelDelta::Strong:
+                    add(cfg.threatEnabled, iconOf(ov, cfg.icoStrong), cfg.colStrong, false);
+                    break;
+                case LevelDelta::Weak:
+                    add(cfg.threatEnabled, iconOf(ov, cfg.icoWeak), cfg.colWeak, false);
+                    break;
+                case LevelDelta::Even:
+                    add(cfg.threatEnabled, iconOf(ov, cfg.icoEven), cfg.colEven, true);
+                    break;
+            }
         }
 
-        switch (d.engagement)
+        if (const auto* ov = slotOverride(Slot::Engagement); !hidden(ov))
         {
-            case EngagementKind::Combat:
-                add(cfg.engagementEnabled && cfg.combatStateEnabled,
-                    cfg.icoCombat,
-                    cfg.colCombat,
-                    false);
-                break;
-            case EngagementKind::Alert:
-                add(cfg.engagementEnabled && cfg.alertStateEnabled,
-                    cfg.icoAlert,
-                    cfg.colAlert,
-                    false);
-                break;
-            case EngagementKind::Idle:
-                add(cfg.engagementEnabled, cfg.icoIdle, cfg.colIdle, true);
-                break;
+            switch (static_cast<EngagementKind>(forced(ov, static_cast<int>(d.engagement), 2)))
+            {
+                case EngagementKind::Combat:
+                    add(cfg.engagementEnabled && cfg.combatStateEnabled,
+                        iconOf(ov, cfg.icoCombat),
+                        cfg.colCombat,
+                        false);
+                    break;
+                case EngagementKind::Alert:
+                    add(cfg.engagementEnabled && cfg.alertStateEnabled,
+                        iconOf(ov, cfg.icoAlert),
+                        cfg.colAlert,
+                        false);
+                    break;
+                case EngagementKind::Idle:
+                    add(cfg.engagementEnabled, iconOf(ov, cfg.icoIdle), cfg.colIdle, true);
+                    break;
+            }
         }
 
+        addExtras();
         return out;
     }
 
-    // Player slot set: rank, sneak, engagement, encumbered, bounty.
     addRank();
 
-    switch (d.sneak)
+    if (const auto* ov = slotOverride(Slot::Sneak); !hidden(ov))
     {
-        case SneakKind::Detected:
-            add(cfg.sneakEnabled, cfg.icoSneakDetected, cfg.colSneakDetected, false);
-            break;
-        case SneakKind::Hidden:
-            add(cfg.sneakEnabled, cfg.icoSneakHidden, cfg.colSneakHidden, false);
-            break;
-        case SneakKind::Off:
-            add(cfg.sneakEnabled, cfg.icoSneakOff, cfg.colSneakOff, true);
-            break;
+        switch (static_cast<SneakKind>(forced(ov, static_cast<int>(d.sneak), 2)))
+        {
+            case SneakKind::Detected:
+                add(cfg.sneakEnabled,
+                    iconOf(ov, cfg.icoSneakDetected),
+                    cfg.colSneakDetected,
+                    false);
+                break;
+            case SneakKind::Hidden:
+                add(cfg.sneakEnabled, iconOf(ov, cfg.icoSneakHidden), cfg.colSneakHidden, false);
+                break;
+            case SneakKind::Off:
+                add(cfg.sneakEnabled, iconOf(ov, cfg.icoSneakOff), cfg.colSneakOff, true);
+                break;
+        }
     }
 
-    add(cfg.playerCombatEnabled,
-        d.playerInCombat ? cfg.icoCombat : cfg.icoIdle,
-        d.playerInCombat ? cfg.colCombat : cfg.colIdle,
-        !d.playerInCombat);
+    if (const auto* ov = slotOverride(Slot::Engagement); !hidden(ov))
+    {
+        const bool inCombat = forced(ov, d.playerInCombat ? 1 : 0, 1) != 0;
+        add(cfg.playerCombatEnabled,
+            iconOf(ov, inCombat ? cfg.icoCombat : cfg.icoIdle),
+            inCombat ? cfg.colCombat : cfg.colIdle,
+            !inCombat);
+    }
 
-    add(cfg.encumberedEnabled,
-        d.encumbered ? cfg.icoEncumbered : cfg.icoNormalWeight,
-        d.encumbered ? cfg.colEncumbered : cfg.colNormalWeight,
-        !d.encumbered);
+    if (const auto* ov = slotOverride(Slot::Encumbered); !hidden(ov))
+    {
+        const bool encumbered = forced(ov, d.encumbered ? 1 : 0, 1) != 0;
+        add(cfg.encumberedEnabled,
+            iconOf(ov, encumbered ? cfg.icoEncumbered : cfg.icoNormalWeight),
+            encumbered ? cfg.colEncumbered : cfg.colNormalWeight,
+            !encumbered);
+    }
 
-    add(cfg.bountyEnabled,
-        d.wanted ? cfg.icoWanted : cfg.icoBountyClear,
-        d.wanted ? cfg.colWanted : cfg.colBountyClear,
-        !d.wanted);
+    if (const auto* ov = slotOverride(Slot::Bounty); !hidden(ov))
+    {
+        const bool wanted = forced(ov, d.wanted ? 1 : 0, 1) != 0;
+        add(cfg.bountyEnabled,
+            iconOf(ov, wanted ? cfg.icoWanted : cfg.icoBountyClear),
+            wanted ? cfg.colWanted : cfg.colBountyClear,
+            !wanted);
+    }
 
+    addExtras();
     return out;
 }
 
-// Resolve status badge indicators into a compact strip centered above the title row.
-// Slot order is rank, relationship, creature, role, protection, threat, engagement for
-// NPCs; rank, sneak, engagement, encumbered, bounty for the player.  Must run after
-// ComputePositionAndBounds, which supplies the plate's top edge.  The strip extends the
-// nameplate bounds used for overlap prevention but never moves the text itself.
-//
-// No badge is produced when icons are disabled, the main row is empty, or the badge
-// texture atlas is not built yet.  Individual slots also drop out when the icon name is
-// empty or its texture lookup fails, so a partial atlas degrades to fewer icons rather
-// than to a missing plate.
+/**
+ * @fn static void BuildBadges(LabelLayout& layout, const ActorDrawData& d, const LabelStyle& style,
+ *     float textSizeScale, const RenderSettingsSnapshot& snap)
+ * @brief Append available badge textures and expand plate bounds around their rows.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Run after ComputePositionAndBounds. Badge rows widen overlap bounds without
+ * moving text. Missing atlas, main text or icon textures simply omit badges.
+ */
 static void BuildBadges(LabelLayout& layout,
                         const ActorDrawData& d,
                         const LabelStyle& style,
@@ -1268,8 +1337,7 @@ static void BuildBadges(LabelLayout& layout,
 {
     layout.isPlayer = d.isPlayer;
 
-    // One-shot diagnostic: log the badge pipeline state the first time any actor
-    // reaches badge layout, so a silent in-game failure is traceable.
+    // Log the first layout attempt to diagnose missing badges.
     static std::atomic<bool> s_diagLogged{false};
     if (!s_diagLogged.exchange(true, std::memory_order_relaxed))
     {
@@ -1286,19 +1354,19 @@ static void BuildBadges(LabelLayout& layout,
         return;
     }
 
-    const BadgeComposition set =
-        ComposeBadges(d, snap.icons, style.tierIdx, static_cast<int>(snap.tiers.size()));
+    const BadgeComposition set = ComposeBadges(d,
+                                               snap.icons,
+                                               style.tierIdx,
+                                               static_cast<int>(snap.tiers.size()),
+                                               true,
+                                               style.tier->badgeIndex);
 
-    // Badge size follows the level row, so the strip keeps its proportion at any
-    // distance.  The emblem is never smaller than an icon: a tierBadgeScale below 1 is
-    // clamped away rather than honored.
+    // Badge size follows the level row; emblems cannot be smaller than icons.
     const float iconSize =
         layout.levelFontSize * RenderConstants::BADGE_ICON_FACTOR * snap.icons.scale;
     const float emblemSize = iconSize * std::max(1.0f, snap.icons.tierBadgeScale);
 
-    // Resolve slots. A full-color rank emblem is taken out of the horizontal
-    // strip and rendered on its own row above it; the other icons fill the
-    // strip. An empty icon name or a failed texture lookup drops that slot.
+    // Move full-color rank emblems to their own row above the icon strip.
     for (int i = 0; i < set.count; ++i)
     {
         const ComposedBadgeSlot& s = set.slots[i];
@@ -1338,10 +1406,7 @@ static void BuildBadges(LabelLayout& layout,
 
     const float rowGap = RenderConstants::BADGE_ROW_GAP * textSizeScale;
 
-    // Icon strip: a compact row centered one gap above the plate's current top edge.
-    // That edge is the title ink top, or, when the title string is empty, one
-    // TITLE_MAIN_GAP above the main row's outlined ink top, because an empty title still
-    // reserves its gap.  rowTop is the Y that the emblem row then sits above.
+    // An empty title still reserves TITLE_MAIN_GAP above the outlined main row.
     float rowTop = layout.nameplateTop;
     if (!layout.badges.empty())
     {
@@ -1368,8 +1433,7 @@ static void BuildBadges(LabelLayout& layout,
         layout.nameplateTop = std::min(layout.nameplateTop, rowTop);
     }
 
-    // Tier emblem: its own row, centered above the icon strip (or above the
-    // title directly when the strip is empty).
+    // Emblems sit above the strip, or directly above the title when the strip is empty.
     if (layout.tierEmblemShown)
     {
         const float emblemTop = rowTop - rowGap - emblemSize;
@@ -1386,11 +1450,6 @@ static void BuildBadges(LabelLayout& layout,
     layout.nameplateWidth = layout.nameplateRight - layout.nameplateLeft;
 }
 
-// Measure text and compute all positions for a label.
-//
-// Returns a default-constructed layout with null fonts when any of the three plate fonts
-// is missing, which happens before the font atlas is built.  A caller must treat a null
-// fontName as "nothing to draw" - the rest of the layout is meaningless in that case.
 LabelLayout ComputeLabelLayout(const ActorDrawData& d,
                                ActorCache& entry,
                                const LabelStyle& style,
@@ -1400,10 +1459,8 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
 {
     LabelLayout layout{};
 
-    // Typewriter character count, in characters, shared by the title, the main row and
-    // the info row.  A forced budget, used by the death-fade crumble, overrides the
-    // entry-driven reveal.  typewriterSpeed is characters per second and typewriterDelay
-    // is the lead-in, in seconds, before the first character appears.
+    // Character budget spans main, info and title. The death-fade override wins;
+    // speed is characters/s and delay is seconds.
     int typewriterCharsToShow = -1;
     if (forcedCharsToShow >= 0)
     {
@@ -1421,8 +1478,12 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
             typewriterCharsToShow = 0;
         }
     }
+    else if (!snap.enableTypewriter)
+    {
+        // A disabled reveal must not leave a console rearm pending.
+        entry.revealArmed = false;
+    }
 
-    // Fonts
     layout.fontName = GetFontAt(RenderConstants::FONT_INDEX_NAME);
     layout.fontLevel = GetFontAt(RenderConstants::FONT_INDEX_LEVEL);
     layout.fontTitle = GetFontAt(RenderConstants::FONT_INDEX_TITLE);
@@ -1440,8 +1501,7 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
         layout, d, style, textSizeScale, typewriterCharsToShow, totalCharsProcessed, snap);
     ComputePositionAndBounds(
         layout, style, d, entry, typewriterCharsToShow, totalCharsProcessed, snap);
-    // Capture the text-only box before BuildBadges widens the nameplate bounds, and store
-    // it relative to startPos so later world anchoring and animation carry it along.
+    // Save text-only bounds relative to startPos before badges expand them.
     layout.textBoundsMin =
         ImVec2(layout.nameplateLeft - layout.startPos.x, layout.nameplateTop - layout.startPos.y);
     layout.textBoundsMax = ImVec2(layout.nameplateRight - layout.startPos.x,
@@ -1451,14 +1511,8 @@ LabelLayout ComputeLabelLayout(const ActorDrawData& d,
     return layout;
 }
 
-// Death-fade tint: pull every resolved style color toward target by mixT, scale the
-// effect strength and effect alpha by 1 - mixT, and re-pack the draw-ready colors.
-// Composable - a caller stages a multi-stop ramp (bright, then dark) by applying
-// successive tints to the freshly computed per-frame style.
-//
-// mixT is clamped to at most 1, and a value at or below 0 returns without any change.
-// The highlight color is replaced by target outright rather than mixed toward it, and
-// style.alpha stays as it was: the plate's own fade remains the caller's job.
+// mixT <= 0 leaves style unchanged; values above 1 clamp. Highlight becomes target
+// outright. style.alpha stays caller-owned. Repeated calls form a multi-stop ramp.
 void ApplyDeathRiteTint(LabelStyle& style,
                         const ImVec4& target,
                         float mixT,
@@ -1481,7 +1535,6 @@ void ApplyDeathRiteTint(LabelStyle& style,
     style.supportTitle = MixVec4(style.supportTitle, target, mixT);
     style.specialGlowColor = MixVec4(style.specialGlowColor, target, mixT);
 
-    // Animated effects fade at the same rate as the text.
     style.strength *= 1.0f - mixT;
     style.effectAlpha *= 1.0f - mixT;
     style.highlight =
@@ -1490,18 +1543,10 @@ void ApplyDeathRiteTint(LabelStyle& style,
     PackStyleColors(style, style.alpha, snap);
 }
 
-// Adapt the resolved ink to the scene behind the plate.  A bright background dims the
-// ink; a dark background lifts it and pulls it fractionally toward the scene's own
-// chroma.
-//
-// bgLum is the Rec.709 luminance of the smoothed SceneMeter sample, in [0, 1], and bgRGB
-// is that sample's three color channels.  A negative bgLum means no sample is available
-// and leaves the style untouched, as does a zero or negative snap.candleStrength.
-//
-// snap.candleStrength caps the exposure gain at 1 plus or minus its own value.  It does
-// not cap the warmth pull: that one is gated by bgLum below 0.35 and capped at 6% of
-// snap.candleWarmth.  Exposure gain mirrored in tests/test_utils.cpp as CandleGain --
-// keep the mapping in sync.
+// Negative bgLum or nonpositive candleStrength leaves style unchanged.
+// Rec.709 luminance gates warmth below .35, capped at 6% of candleWarmth.
+// Exposure gain is capped at 1 +/- candleStrength. Keep CandleGain in
+//  tests/test_utils.cpp synchronized.
 void ApplyCandlelight(LabelStyle& style,
                       float bgLum,
                       const float bgRGB[3],
@@ -1513,15 +1558,14 @@ void ApplyCandlelight(LabelStyle& style,
         return;
     }
 
-    // Exposure: a mid-grey scene (bgLum 0.5) leaves the ink untouched.
+    // Mid-grey (.5) leaves exposure unchanged.
     const float gain = 1.0f + std::clamp((.5f - bgLum) * 2.0f * strength, -strength, strength);
 
-    // Warmth: only below bgLum 0.35, and at most 6% of candleWarmth.
     float warmT = .0f;
     ImVec4 sceneTint(1.0f, 1.0f, 1.0f, 1.0f);
     if (bgLum < .35f && snap.candleWarmth > .0f)
     {
-        // Normalize the scene color so the pull carries hue, not darkness.
+        // Normalize to retain hue without importing scene darkness.
         const float maxC = std::max({bgRGB[0], bgRGB[1], bgRGB[2], .05f});
         sceneTint = ImVec4(bgRGB[0] / maxC, bgRGB[1] / maxC, bgRGB[2] / maxC, 1.0f);
         warmT = snap.candleWarmth * .06f * ((.35f - bgLum) / .35f);
