@@ -1,21 +1,14 @@
-// Deck - one-key character card: capture, composition, and PNG export.
-//
-// All state lives in one DeckState. It carries no lock because the frame hooks call every
-// entry point on the render thread; Shutdown is the exception, called from the device-creation
-// thunk. Only the PNG encoder runs elsewhere, behind its own mutex. Four fields drive the
-// pipeline, and each stage clears the one before it:
+// Render-thread capture/composition state lives in DeckState without a lock.
+// Shutdown also runs from the device-creation thunk. Only the PNG worker uses
+// its own mutex. Stages clear their predecessor:
 //
 //   captureRequested   A key edge was accepted. Renderer must resolve a CardRequest.
 //   request            A resolved card waits for a scene copy and a compose pass.
 //   sceneCaptured      sceneTexture and sceneSRV hold the portrait source for `request`.
 //   readback           The card was drawn; a staging copy waits on an event query.
 //
-// Every failure path drops the card and shows a toast. No failure path changes the frame's own
-// render state: the compose pass restores the render target and the viewport it replaced.
-//
-// The card is painted with the renderer's own fonts and text effects, so this TU includes
-// RendererInternal.hpp for Renderer::GetFontAt and Renderer::ApplyTextEffect. It reads no
-// renderer snapshot and dereferences no game object.
+// Failures discard the card and show a toast. Composition restores targets and
+// viewports. Renderer helpers supply fonts/effects; no game objects are read.
 
 #include "PCH.hpp"
 
@@ -67,6 +60,11 @@ struct EncodeResult
     std::string error;
 };
 
+/**
+ * @fn static std::string HResultText(const char* action, HRESULT hr)
+ * @brief Format a diagnostic with an uppercase hexadecimal HRESULT.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static std::string HResultText(const char* action, HRESULT hr)
 {
     std::ostringstream out;
@@ -75,8 +73,13 @@ static std::string HResultText(const char* action, HRESULT hr)
     return out.str();
 }
 
-// Local time, not UTC: the stamp goes into the filename, so it must match the clock the player
-// sees. The field order keeps the filenames sorting chronologically.
+/**
+ * @fn static std::string Timestamp()
+ * @brief Format local time so capture filenames sort by date.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Local time keeps filenames aligned with the player clock; field order sorts by date.
+ */
 static std::string Timestamp()
 {
     const auto now = std::chrono::system_clock::now();
@@ -89,6 +92,14 @@ static std::string Timestamp()
     return out.str();
 }
 
+/**
+ * @fn static std::filesystem::path PickOutputPath(const EncodeJob& job, std::string& error)
+ * @brief Create the output directory and choose a card filename.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The path is not reserved atomically. Candidate suffixes stop at 999, so the final
+ * candidate can still exist when that range is exhausted.
+ */
 static std::filesystem::path PickOutputPath(const EncodeJob& job, std::string& error)
 {
     std::filesystem::path folder = job.outputFolder.empty()
@@ -120,6 +131,11 @@ static std::filesystem::path PickOutputPath(const EncodeJob& job, std::string& e
     return candidate;
 }
 
+/**
+ * @fn static EncodeResult EncodePng(const EncodeJob& job)
+ * @brief Write a card image and package the result for render-thread reporting.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static EncodeResult EncodePng(const EncodeJob& job)
 {
     EncodeResult result;
@@ -144,24 +160,41 @@ static EncodeResult EncodePng(const EncodeJob& job)
     return result;
 }
 
-// One private worker thread for the whole process. Jobs run first-in first-out, and each
-// result waits in m_Results until PollEncoderResults picks it up on the render thread.
-// Deck::Shutdown does not stop the worker: the thread ends when the DeckState static is
-// destroyed, which lets the encode in progress finish and drops whatever is still queued.
+// FIFO encoder worker; results wait for render-thread polling. Shutdown keeps it
+// alive. Static destruction finishes the active encode and discards queued work.
 class EncoderWorker
 {
 public:
+    /**
+     * @fn EncoderWorker()
+     * @brief Start the private PNG encoder thread.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     EncoderWorker()
         : m_Thread([this](std::stop_token stop) { Run(stop); })
     {
     }
 
+    /**
+     * @fn ~EncoderWorker()
+     * @brief Stop accepting queued work and finish the active encode.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Member destruction joins the worker before its queues and mutex are released.
+     */
     ~EncoderWorker()
     {
         m_Thread.request_stop();
         m_Cv.notify_all();
     }
 
+    /**
+     * @fn void Enqueue(EncodeJob job)
+     * @brief Transfer owned pixels to the FIFO encode queue.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * The queue has no fixed capacity. GPU readback limits capture rate, not queued memory.
+     */
     void Enqueue(EncodeJob job)
     {
         {
@@ -172,6 +205,11 @@ public:
         m_Cv.notify_one();
     }
 
+    /**
+     * @fn std::vector<EncodeResult> DrainResults()
+     * @brief Consume completed results and reduce the outstanding job count.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     std::vector<EncodeResult> DrainResults()
     {
         std::vector<EncodeResult> out;
@@ -189,9 +227,21 @@ public:
         return out;
     }
 
+    /**
+     * @fn int Outstanding() const
+     * @brief Read the number of jobs whose results remain unconsumed.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     int Outstanding() const { return m_Outstanding.load(std::memory_order_acquire); }
 
 private:
+    /**
+     * @fn void Run(std::stop_token stop)
+     * @brief Encode queued jobs and retain results for render-thread polling.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Exceptions from an encode become failure results; a stop request discards waiting jobs.
+     */
     void Run(std::stop_token stop)
     {
         while (!stop.stop_requested())
@@ -270,6 +320,11 @@ struct DeckState
     EncoderWorker encoder;
 };
 
+/**
+ * @fn static DeckState& State()
+ * @brief Access mutable subsystem state with process lifetime.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static DeckState& State()
 {
     static DeckState state;
@@ -282,11 +337,14 @@ struct PortraitShaderCallbackData
     ID3D11PixelShader* shader = nullptr;
 };
 
-// Portrait pixel shader. The stock ImGui shader multiplies the vertex alpha by the texture
-// alpha, so a scene copy that carries alpha 0 would draw as nothing. This shader takes RGB
-// from the scene copy and alpha from the vertex color only, which keeps the portrait opaque
-// whatever alpha the captured target holds. The callback swaps the shader in for one draw;
-// DrawCard resets the render state right after it.
+/**
+ * @fn static void ApplyPortraitShader(const ImDrawList*, const ImDrawCmd* command)
+ * @brief Use scene RGB with vertex alpha for the portrait draw.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Use scene RGB and vertex alpha because captured targets may have zero alpha.
+ * DrawCard resets the pixel shader immediately after the portrait draw.
+ */
 static void ApplyPortraitShader(const ImDrawList*, const ImDrawCmd* command)
 {
     const auto* data = static_cast<const PortraitShaderCallbackData*>(command->UserCallbackData);
@@ -296,6 +354,11 @@ static void ApplyPortraitShader(const ImDrawList*, const ImDrawCmd* command)
     }
 }
 
+/**
+ * @fn static bool EnsurePortraitShader(ID3D11Device* device)
+ * @brief Create the portrait shader on first use and permit retry after failure.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static bool EnsurePortraitShader(ID3D11Device* device)
 {
     auto& state = State();
@@ -361,6 +424,11 @@ static bool EnsurePortraitShader(ID3D11Device* device)
     return true;
 }
 
+/**
+ * @fn static void SetStatus(std::string text, bool error, float seconds)
+ * @brief Replace the active toast and its expiration time.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void SetStatus(std::string text, bool error, float seconds)
 {
     auto& state = State();
@@ -369,11 +437,14 @@ static void SetStatus(std::string text, bool error, float seconds)
     state.statusUntil = Clock::now() + std::chrono::milliseconds(static_cast<int>(seconds * 1000));
 }
 
-// Format pair for the scene copy. The copy is created in the source format's typeless family
-// and viewed through the matching non-sRGB format, so an sRGB backbuffer is sampled as raw
-// bytes. Without that bypass the sampler would linearize pixels that are already encoded, and
-// the PNG would come out brighter than the frame the player saw. An unlisted format is passed
-// through unchanged.
+/**
+ * @fn static DXGI_FORMAT ToTypeless(DXGI_FORMAT format)
+ * @brief Select a typeless resource format for an unconverted scene copy.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Sample through a typeless/non-sRGB view to avoid decoding already-encoded bytes
+ * and brightening the exported PNG. Unlisted formats pass through.
+ */
 static DXGI_FORMAT ToTypeless(DXGI_FORMAT format)
 {
     switch (format)
@@ -401,6 +472,11 @@ static DXGI_FORMAT ToTypeless(DXGI_FORMAT format)
     }
 }
 
+/**
+ * @fn static DXGI_FORMAT ToShaderFormat(DXGI_FORMAT format)
+ * @brief Select a non-sRGB view to preserve captured color values.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static DXGI_FORMAT ToShaderFormat(DXGI_FORMAT format)
 {
     switch (format)
@@ -423,6 +499,11 @@ static DXGI_FORMAT ToShaderFormat(DXGI_FORMAT format)
     }
 }
 
+/**
+ * @fn static ImU32 Pack(const Settings::Color3& c, float alpha = 1.0f)
+ * @brief Pack normalized color channels and opacity for ImGui.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static ImU32 Pack(const Settings::Color3& c, float alpha = 1.0f)
 {
     return ImGui::ColorConvertFloat4ToU32(ImVec4(std::clamp(c.r, .0f, 1.0f),
@@ -431,18 +512,33 @@ static ImU32 Pack(const Settings::Color3& c, float alpha = 1.0f)
                                                  std::clamp(alpha, .0f, 1.0f)));
 }
 
+/**
+ * @fn static Settings::Color3 Darken(const Settings::Color3& c, float amount)
+ * @brief Scale card color channels toward black.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static Settings::Color3 Darken(const Settings::Color3& c, float amount)
 {
     return {c.r * amount, c.g * amount, c.b * amount};
 }
 
+/**
+ * @fn static Settings::Color3 Lighten(const Settings::Color3& c, float amount)
+ * @brief Interpolate card color channels toward white.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static Settings::Color3 Lighten(const Settings::Color3& c, float amount)
 {
     return {c.r + (1.0f - c.r) * amount, c.g + (1.0f - c.g) * amount, c.b + (1.0f - c.b) * amount};
 }
 
-// ASCII-only uppercase. Bytes of 128 and above stay as they are, so a UTF-8 title keeps its
-// own case instead of being corrupted byte by byte.
+/**
+ * @fn static std::string UpperAscii(std::string text)
+ * @brief Uppercase ASCII bytes without changing multibyte UTF-8.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Uppercase ASCII only; preserve multibyte UTF-8.
+ */
 static std::string UpperAscii(std::string text)
 {
     for (char& c : text)
@@ -455,14 +551,24 @@ static std::string UpperAscii(std::string text)
     return text;
 }
 
+/**
+ * @fn static Settings::Color3 Desaturate(const Settings::Color3& c, float amount)
+ * @brief Interpolate card colors toward Rec.601 luminance.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static Settings::Color3 Desaturate(const Settings::Color3& c, float amount)
 {
     const float luma = c.r * .299f + c.g * .587f + c.b * .114f;
     return {c.r + (luma - c.r) * amount, c.g + (luma - c.g) * amount, c.b + (luma - c.b) * amount};
 }
 
-// Shrink-to-fit only. The size is scaled down by the width ratio when the text is too wide,
-// and returned unchanged when it already fits, so short text never grows to fill the box.
+/**
+ * @fn static float FitText(ImFont* font, float desired, float maxWidth, const std::string& text)
+ * @brief Reduce text size to the width budget without enlarging short text.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Shrink only; short text keeps its authored size.
+ */
 static float FitText(ImFont* font, float desired, float maxWidth, const std::string& text)
 {
     if (!font || text.empty())
@@ -473,6 +579,14 @@ static float FitText(ImFont* font, float desired, float maxWidth, const std::str
     return measured.x > maxWidth && measured.x > .0f ? desired * maxWidth / measured.x : desired;
 }
 
+/**
+ * @fn static void DrawEffectCentered(ImDrawList& drawList, ImFont* font, float fontSize, float
+ *     centerX, float y, float maxWidth, const std::string& text, const Settings::EffectParams&
+ *     effect, const Settings::Color3& left, const Settings::Color3& right, const Settings::Color3&
+ *     highlight, std::uint32_t formID, float strength, float outlineWidth)
+ * @brief Place a measured text effect around a horizontal center.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawEffectCentered(ImDrawList& drawList,
                                ImFont* font,
                                float fontSize,
@@ -513,24 +627,14 @@ static void DrawEffectCentered(ImDrawList& drawList,
                               false);
 }
 
-// Pick the tier emblem for a position on the tier ladder. The 1.8 exponent bends the mapping
-// toward the low emblems, so the top emblems stay reserved for the last tiers.
-static int TierImageIndex(int tierIndex, int tierCount, int imageCount)
-{
-    if (imageCount <= 1 || tierCount <= 1)
-    {
-        return 0;
-    }
-    const float t =
-        std::clamp(static_cast<float>(tierIndex) / static_cast<float>(tierCount - 1), .0f, 1.0f);
-    return std::clamp(
-        static_cast<int>(std::floor(std::pow(t, 1.8f) * imageCount)), 0, imageCount - 1);
-}
-
-// Parse a [TierN] ParticleTypes list into at most two styles. Whitespace is removed and the
-// token is lowercased before the lookup. A ":weight" suffix is dropped: the card draws every
-// style it keeps, so the nameplate weights carry no meaning here. An unrecognized token is
-// skipped and the scan continues, so the result holds the first two recognized tokens.
+/**
+ * @fn static std::vector<Settings::ParticleStyle> ResolveParticleStyles(const std::string& list)
+ * @brief Keep the first two recognized particle style tokens.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Keep the first two recognized ParticleTypes tokens. Strip whitespace and
+ * :weight; cards do not use nameplate density weights.
+ */
 static std::vector<Settings::ParticleStyle> ResolveParticleStyles(const std::string& list)
 {
     std::vector<Settings::ParticleStyle> out;
@@ -567,6 +671,12 @@ static std::vector<Settings::ParticleStyle> ResolveParticleStyles(const std::str
     return out;
 }
 
+/**
+ * @fn static void DrawHolographicFoil(ImDrawList& drawList, const CardRequest& request, const
+ *     ImVec2& min, const ImVec2& max)
+ * @brief Draw animated foil highlights within the card rectangle.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawHolographicFoil(ImDrawList& drawList,
                                 const CardRequest& request,
                                 const ImVec2& min,
@@ -596,7 +706,6 @@ static void DrawHolographicFoil(ImDrawList& drawList,
         drawList.AddConvexPolyFilled(points, 4, kFoil[(i + 10) % 5]);
     }
 
-    // The glint positions come from the FormID, so repeat captures match.
     std::uint32_t hash = request.formID ^ 0x9E3779B9u;
     for (int i = 0; i < 34; ++i)
     {
@@ -611,6 +720,12 @@ static void DrawHolographicFoil(ImDrawList& drawList,
     drawList.PopClipRect();
 }
 
+/**
+ * @fn static void DrawTierParticles(ImDrawList& drawList, const CardRequest& request, const ImVec2&
+ *     min, const ImVec2& max, float scale)
+ * @brief Draw the selected particle styles around the card frame.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawTierParticles(ImDrawList& drawList,
                               const CardRequest& request,
                               const ImVec2& min,
@@ -646,7 +761,7 @@ static void DrawTierParticles(ImDrawList& drawList,
         params.styleIndex = i;
         params.enabledStyleCount = static_cast<int>(styles.size());
         params.useParticleTextures = ParticleTextures::IsInitialized();
-        params.blendMode = 2;  // Alpha, so the baked PNG stays predictable.
+        params.blendMode = 2;  // alpha, so the baked PNG stays predictable.
         params.depthStrength = .65f;
         params.colorWarmth = .5f;
         params.glowStrength = .20f;
@@ -657,6 +772,12 @@ static void DrawTierParticles(ImDrawList& drawList,
     drawList.PopClipRect();
 }
 
+/**
+ * @fn static void DrawBadgeStrip( ImDrawList& drawList, const CardRequest& request, float y, float
+ *     left, float right, float scale)
+ * @brief Center available badge textures within the card width.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void DrawBadgeStrip(
     ImDrawList& drawList, const CardRequest& request, float y, float left, float right, float scale)
 {
@@ -684,8 +805,11 @@ static void DrawBadgeStrip(
         return;
     }
 
-    const float icon = 58.0f * scale;
-    const float gap = 15.0f * scale;
+    // Fit console extras by shrinking icons and gaps together.
+    const float fit = FitBadgeStrip(
+        static_cast<int>(drawables.size()), 58.0f * scale, 15.0f * scale, right - left);
+    const float icon = 58.0f * scale * fit;
+    const float gap = 15.0f * scale * fit;
     const float total = icon * drawables.size() + gap * (drawables.size() - 1);
     float x = std::max(left, (left + right - total) * .5f);
     RenderSampling::PushBadgeSampler(&drawList);
@@ -703,28 +827,35 @@ static void DrawBadgeStrip(
     RenderSampling::PopSampler(&drawList);
 }
 
-// Card layout. Every length below is a design-space value times scale = CardLayoutScale(w, h),
-// the fit of the 750x1050 reference into the target, so the whole card grows with the target.
-// m = 38*scale is the content margin and pb = 0.655*h is the portrait bottom.
-//
-//   +==========================================================+  0             card edge
-//   |  +----------------------------------------------------+  |  0.45m/0.72m   frame insets
-//   |  | [RARITY]                                  (emblem) |  |  42*scale      portrait top
-//   |  |                                                    |  |
-//   |  |                   portrait crop                    |  |
-//   |  |                                                    |  |
-//   |  | <left ornaments>                 <right ornaments> |  |  pb - 58*scale
-//   |  +----------------------------------------------------+  |  pb            portrait end
-//   |                       TITLE                              |  pb + 16*scale
-//   |                        NAME                              |  pb + 54*scale
-//   |   ------------------------------------------------       |  pb + 178*scale  divider
-//   |  (LEVEL)    [badge] [badge] [badge]                      |  divider + 26*scale
-//   |                TIER NAME  /  #0001A2B3                   |  h - m - 31*scale
-//   +==========================================================+  h
-//
-// Draw order matters at the portrait: the vignette lands before the foil and the particle
-// block, so the bottom fade does not dim them, and the portrait image sits between the shader
-// callback and the reset callback, so only that one draw uses the portrait pixel shader.
+/**
+ * @fn static void DrawCard(ImDrawList& drawList, const CardRequest& request, ImTextureID
+ *     portraitTexture, void* portraitShaderData)
+ * @brief Compose the card in pixels scaled from the reference layout.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @verbatim
+ * Design lengths scale from 750x1050. m = 38*scale; pb = 0.655*h.
+ *
+ *   +==========================================================+  0             card edge
+ *   |  +----------------------------------------------------+  |  0.45m/0.72m   frame insets
+ *   |  | [RARITY]                                  (emblem) |  |  42*scale      portrait top
+ *   |  |                                                    |  |
+ *   |  |                   portrait crop                    |  |
+ *   |  |                                                    |  |
+ *   |  | <left ornaments>                 <right ornaments> |  |  pb - 58*scale
+ *   |  +----------------------------------------------------+  |  pb            portrait end
+ *   |                       TITLE                              |  pb + 16*scale
+ *   |                        NAME                              |  pb + 54*scale
+ *   |   ------------------------------------------------       |  pb + 178*scale  divider
+ *   |  (LEVEL)    [badge] [badge] [badge]                      |  divider + 26*scale
+ *   |                TIER NAME  /  #0001A2B3                   |  h - m - 31*scale
+ *   +==========================================================+  h
+ *
+ * @endverbatim
+ *
+ * The vignette precedes foil and particles so they remain bright. Only the portrait draw
+ * uses the portrait shader and reset callbacks.
+ */
 static void DrawCard(ImDrawList& drawList,
                      const CardRequest& request,
                      ImTextureID portraitTexture,
@@ -761,7 +892,6 @@ static void DrawCard(ImDrawList& drawList,
     drawList.AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     RenderSampling::PushFontSampler(&drawList);
 
-    // Vignette fading the portrait bottom into the text panel.
     const float vignetteTop = portraitBottom - 180.0f * scale;
     drawList.AddRectFilledMultiColor(ImVec2(margin, vignetteTop),
                                      portraitMax,
@@ -773,7 +903,6 @@ static void DrawCard(ImDrawList& drawList,
     DrawHolographicFoil(drawList, request, portraitMin, portraitMax);
     DrawTierParticles(drawList, request, portraitMin, portraitMax, scale);
 
-    // Background of the bottom text panel.
     drawList.AddRectFilledMultiColor(ImVec2(margin, portraitBottom - 5.0f * scale),
                                      ImVec2(width - margin, height - margin),
                                      Pack(Darken(request.frameLeft, .12f), .98f),
@@ -781,7 +910,7 @@ static void DrawCard(ImDrawList& drawList,
                                      IM_COL32(3, 5, 9, 255),
                                      IM_COL32(3, 5, 9, 255));
 
-    // Card frame. Higher rarity adds border weight and extra layers.
+    // Higher rarity adds border weight/layers.
     drawList.AddRect(ImVec2(margin * .45f, margin * .45f),
                      ImVec2(width - margin * .45f, height - margin * .45f),
                      Pack(request.frameLeft),
@@ -824,7 +953,6 @@ static void DrawCard(ImDrawList& drawList,
     ImFont* titleFont = Renderer::GetFontAt(RenderConstants::FONT_INDEX_TITLE);
     ImFont* ornamentFont = Renderer::GetFontAt(RenderConstants::FONT_INDEX_ORNAMENT);
 
-    // Rarity plaque.
     const std::string rarityText = UpperAscii(std::string(RarityName(request.rarity)));
     const float plaqueX = margin + 17.0f * scale;
     const float plaqueY = portraitTop + 17.0f * scale;
@@ -853,12 +981,10 @@ static void DrawCard(ImDrawList& drawList,
             rarityText.c_str());
     }
 
-    // Tier emblem. Drawn in full color, untinted, on every card.
-    const int tierImageCount = BadgeTextures::TierImageCount();
-    if (tierImageCount > 0)
+    // The caller resolves the emblem index from the card's treatment tier.
+    if (request.tierImageIndex >= 0)
     {
-        const int imageIndex = TierImageIndex(request.tierIndex, request.tierCount, tierImageCount);
-        if (const ImTextureID emblem = BadgeTextures::GetTierImage(imageIndex))
+        if (const ImTextureID emblem = BadgeTextures::GetTierImage(request.tierImageIndex))
         {
             const float emblemSize = 102.0f * scale;
             const ImVec2 emblemMin(width - margin - emblemSize - 8.0f * scale,
@@ -916,7 +1042,6 @@ static void DrawCard(ImDrawList& drawList,
                      Pack(request.frameLeft, .65f),
                      1.5f * scale);
 
-    // Level medallion.
     const ImVec2 levelCenter(margin + 73.0f * scale, dividerY + 55.0f * scale);
     drawList.AddCircleFilled(levelCenter, 49.0f * scale, IM_COL32(3, 6, 10, 225));
     drawList.AddCircle(levelCenter, 49.0f * scale, Pack(request.frameLeft), 0, 2.2f * scale);
@@ -950,7 +1075,6 @@ static void DrawCard(ImDrawList& drawList,
                    width - margin - 18.0f * scale,
                    scale);
 
-    // Footer: tier name plus the FormID as a stable card number.
     if (titleFont)
     {
         std::ostringstream footer;
@@ -967,7 +1091,7 @@ static void DrawCard(ImDrawList& drawList,
                          footerText.c_str());
     }
 
-    // Tier ornament glyphs sit at the portrait's bottom corners, not beside the name.
+    // Ornaments sit at portrait corners.
     if (ornamentFont)
     {
         const float ornamentSize = 58.0f * scale;
@@ -994,6 +1118,11 @@ static void DrawCard(ImDrawList& drawList,
     RenderSampling::PopSampler(&drawList);
 }
 
+/**
+ * @fn static bool EnsureCardTarget(ID3D11Device* device, int width, int height)
+ * @brief Reuse or replace the render target for the requested card dimensions.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static bool EnsureCardTarget(ID3D11Device* device, int width, int height)
 {
     auto& state = State();
@@ -1037,12 +1166,17 @@ static bool EnsureCardTarget(ID3D11Device* device, int width, int height)
     return true;
 }
 
-// Saves the bound render targets, depth-stencil view and viewports on construction, and
-// rebinds exactly those on destruction, so drawing into the card target leaves the frame's
-// output-merger and rasterizer state as it was.
+// Restore render targets, depth-stencil view and viewports after card composition.
 class RenderTargetStateGuard
 {
 public:
+    /**
+     * @fn explicit RenderTargetStateGuard(ID3D11DeviceContext* context)
+     * @brief Retain bound render targets and viewports for restoration.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @param context Non-null immediate context; borrowed until this guard is destroyed.
+     */
     explicit RenderTargetStateGuard(ID3D11DeviceContext* context)
         : m_Context(context)
     {
@@ -1064,6 +1198,11 @@ public:
         }
     }
 
+    /**
+     * @fn ~RenderTargetStateGuard()
+     * @brief Restore the render targets and viewports saved by this guard.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~RenderTargetStateGuard()
     {
         std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> targets{};
@@ -1088,10 +1227,15 @@ private:
     std::vector<D3D11_VIEWPORT> m_Viewports;
 };
 
-// Compose the card into its own render target. The card is built in a private ImDrawList and
-// ImDrawData, so its coordinates are card pixels instead of screen pixels and nothing of it
-// reaches the frame's own draw data. The clear color is opaque: the staging copy keeps alpha,
-// so any pixel the layout does not cover must still read as background, not as a hole.
+/**
+ * @fn static bool RenderToCardTarget(ID3D11Device* device, ID3D11DeviceContext* context, const
+ *     CardRequest& request)
+ * @brief Render private ImGui draw data into the opaque card target.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Private draw data uses card-pixel coordinates. Clear opaque because readback
+ * preserves alpha and uncovered pixels must remain background.
+ */
 static bool RenderToCardTarget(ID3D11Device* device,
                                ID3D11DeviceContext* context,
                                const CardRequest& request)
@@ -1143,6 +1287,12 @@ static bool RenderToCardTarget(ID3D11Device* device,
     return true;
 }
 
+/**
+ * @fn static bool QueueReadback(ID3D11Device* device, ID3D11DeviceContext* context, const
+ *     CardRequest& request)
+ * @brief Copy the card to staging and record an event query for later polling.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static bool QueueReadback(ID3D11Device* device,
                           ID3D11DeviceContext* context,
                           const CardRequest& request)
@@ -1186,6 +1336,11 @@ static bool QueueReadback(ID3D11Device* device,
     return true;
 }
 
+/**
+ * @fn static void PollEncoderResults()
+ * @brief Consume completed encodes and publish their log messages and toasts.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void PollEncoderResults()
 {
     for (auto& result : State().encoder.DrainResults())
@@ -1204,6 +1359,11 @@ static void PollEncoderResults()
     }
 }
 
+/**
+ * @fn static void PollReadback(ID3D11DeviceContext* context)
+ * @brief Queue CPU pixels for encoding once the GPU event query completes.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 static void PollReadback(ID3D11DeviceContext* context)
 {
     auto& state = State();
@@ -1212,9 +1372,7 @@ static void PollReadback(ID3D11DeviceContext* context)
         return;
     }
 
-    // Poll, never block. S_FALSE means the GPU has not reached the event yet, and DONOTFLUSH
-    // keeps this poll from forcing a flush, so the copy lands on a later frame instead of
-    // stalling this one.
+    // S_FALSE defers readback; DONOTFLUSH prevents a frame stall.
     auto& pending = *state.readback;
     const HRESULT ready =
         context->GetData(pending.completion.Get(), nullptr, 0, D3D11_ASYNC_GETDATA_DONOTFLUSH);
@@ -1246,8 +1404,7 @@ static void PollReadback(ID3D11DeviceContext* context)
         return;
     }
 
-    // The card target is RGBA8 and the WIC PNG path is most portable as BGRA8. Copy row by
-    // row, honoring the driver's RowPitch, and swizzle.
+    // Honor RowPitch while converting RGBA8 to WIC BGRA8.
     const bool copied = CopyRgbaToBgra(static_cast<const std::uint8_t*>(mapped.pData),
                                        mapped.RowPitch,
                                        job.width,
@@ -1346,9 +1503,8 @@ bool CaptureScene(ID3D11Device* device, ID3D11DeviceContext* context, IDXGISwapC
     D3D11_RENDER_TARGET_VIEW_DESC sourceViewDesc{};
     bool usingSwapChain = false;
 
-    // HUDMenu::PostDisplay can enter with a cleared UI or offscreen render target bound. The
-    // swap-chain buffer holds the composed game frame and is still valid before the HUD
-    // movie draws, so prefer it whenever the hook can supply one.
+    // PostDisplay may bind a cleared UI/offscreen target. Prefer the swap-chain
+    // buffer for the composed pre-HUD scene.
     if (swapChain)
     {
         const HRESULT swapHr = swapChain->GetBuffer(
@@ -1517,8 +1673,7 @@ bool NeedsFrame()
 
 void Process(ID3D11Device* device, ID3D11DeviceContext* context, IDXGISwapChain* swapChain)
 {
-    // Drain first, so a finished encode still reports its result on a frame that has no
-    // device or context.
+    // Report finished encodes even on frames without a device/context.
     PollEncoderResults();
     if (!device || !context)
     {
@@ -1538,8 +1693,7 @@ void Process(ID3D11Device* device, ID3D11DeviceContext* context, IDXGISwapChain*
         return;
     }
 
-    // Copy, not a reference: the pending slot is cleared below while the name and the rarity
-    // are still needed for the toast.
+    // Copy before clearing the pending slot; the toast still needs name and rarity.
     const CardRequest request = *state.request;
     if (!RenderToCardTarget(device, context, request) || !QueueReadback(device, context, request))
     {
