@@ -1,31 +1,22 @@
-// Unit tests for glyph utility functions using Google Test.
-//
-// Tests core math and color manipulation functions that are independent of the
-// game runtime.
-//
-// The harness links no game code, so most helpers below are MIRRORS: the
-// production logic is copied here, not included. A mirror goes stale silently,
-// so change the copy in the same edit that changes the production function.
-// NameFit.hpp and RenderConstants.hpp are runtime-free and are included for
-// real.
+// the harness cannot link game code. keep mirrored helpers in sync with their
+// cited production sources; included headers are tested directly.
 
 #include <gtest/gtest.h>
 
 #include "NameFit.hpp"
 #include "RasterQuality.hpp"
 #include "RenderConstants.hpp"
+#include "TierEmblem.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
-// ============================================================================
-// Re-implement functions under test: Saturate and SmoothStep mirror the
-// constexpr helpers in src/TextEffects.hpp; LerpColorU32 mirrors
-// src/TextEffectsCore.cpp.
-// ============================================================================
+// mirrors Saturate and SmoothStep in TextEffects.hpp and LerpColorU32 in TextEffectsCore.cpp.
 
 float Saturate(float x)
 {
@@ -38,7 +29,6 @@ float SmoothStep(float t)
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
-// ImGui color format macros
 #define IM_COL32_R_SHIFT 0
 #define IM_COL32_G_SHIFT 8
 #define IM_COL32_B_SHIFT 16
@@ -135,10 +125,6 @@ ImVec4 HSVtoRGB(float h, float s, float v, float a)
     return {r + m, g + m, b + m, a};
 }
 
-// ============================================================================
-// Tests: fixed crisp-layer raster quality
-// ============================================================================
-
 TEST(RasterQualityTest, BadgeTextureSizesArePowersOfTwo)
 {
     EXPECT_EQ(RasterQuality::STATUS_ICON_TEXTURE_SIZE, 256);
@@ -154,10 +140,6 @@ TEST(RasterQualityTest, GlyphPaddingSupportsFontMipLimit)
     EXPECT_GE(RasterQuality::FONT_GLYPH_PADDING, 1 << RasterQuality::FONT_MIP_LIMIT);
     EXPECT_TRUE(RasterQuality::FontPaddingSupportsMipLimit());
 }
-
-// ============================================================================
-// Tests: Saturate
-// ============================================================================
 
 TEST(SaturateTest, ClampsAboveOne)
 {
@@ -177,10 +159,6 @@ TEST(SaturateTest, PreservesValidRange)
     EXPECT_FLOAT_EQ(Saturate(0.5f), 0.5f);
     EXPECT_FLOAT_EQ(Saturate(1.0f), 1.0f);
 }
-
-// ============================================================================
-// Tests: SmoothStep (quintic)
-// ============================================================================
 
 TEST(SmoothStepTest, ReturnsZeroAtZero)
 {
@@ -209,22 +187,17 @@ TEST(SmoothStepTest, ClampsAboveOne)
 
 TEST(SmoothStepTest, HasZeroDerivativeAtEdges)
 {
-    // Test that the curve is smooth at boundaries by checking nearby values
     float eps = 0.001f;
     float at0 = SmoothStep(0.0f);
     float near0 = SmoothStep(eps);
     float slope0 = (near0 - at0) / eps;
-    EXPECT_LT(slope0, 0.01f);  // Derivative should be ~0 at t=0
+    EXPECT_LT(slope0, 0.01f);  // derivative approaches zero at t = 0
 
     float at1 = SmoothStep(1.0f);
     float near1 = SmoothStep(1.0f - eps);
     float slope1 = (at1 - near1) / eps;
-    EXPECT_LT(slope1, 0.01f);  // Derivative should be ~0 at t=1
+    EXPECT_LT(slope1, 0.01f);  // derivative approaches zero at t = 1
 }
-
-// ============================================================================
-// Tests: LerpColorU32
-// ============================================================================
 
 TEST(LerpColorTest, ReturnsFirstAtZero)
 {
@@ -271,32 +244,28 @@ TEST(LerpColorTest, ClampsT)
     EXPECT_EQ(above, b);
 }
 
-// ============================================================================
-// Tests: HSVtoRGB
-// ============================================================================
-
 TEST(HSVtoRGBTest, RedAtHueZero)
 {
     ImVec4 rgb = HSVtoRGB(0.0f, 1.0f, 1.0f, 1.0f);
-    EXPECT_NEAR(rgb.x, 1.0f, 0.01f);  // R = 1
-    EXPECT_NEAR(rgb.y, 0.0f, 0.01f);  // G = 0
-    EXPECT_NEAR(rgb.z, 0.0f, 0.01f);  // B = 0
+    EXPECT_NEAR(rgb.x, 1.0f, 0.01f);
+    EXPECT_NEAR(rgb.y, 0.0f, 0.01f);
+    EXPECT_NEAR(rgb.z, 0.0f, 0.01f);
 }
 
 TEST(HSVtoRGBTest, GreenAtHueThird)
 {
     ImVec4 rgb = HSVtoRGB(1.0f / 3.0f, 1.0f, 1.0f, 1.0f);
-    EXPECT_NEAR(rgb.x, 0.0f, 0.01f);  // R = 0
-    EXPECT_NEAR(rgb.y, 1.0f, 0.01f);  // G = 1
-    EXPECT_NEAR(rgb.z, 0.0f, 0.01f);  // B = 0
+    EXPECT_NEAR(rgb.x, 0.0f, 0.01f);
+    EXPECT_NEAR(rgb.y, 1.0f, 0.01f);
+    EXPECT_NEAR(rgb.z, 0.0f, 0.01f);
 }
 
 TEST(HSVtoRGBTest, BlueAtHueTwoThirds)
 {
     ImVec4 rgb = HSVtoRGB(2.0f / 3.0f, 1.0f, 1.0f, 1.0f);
-    EXPECT_NEAR(rgb.x, 0.0f, 0.01f);  // R = 0
-    EXPECT_NEAR(rgb.y, 0.0f, 0.01f);  // G = 0
-    EXPECT_NEAR(rgb.z, 1.0f, 0.01f);  // B = 1
+    EXPECT_NEAR(rgb.x, 0.0f, 0.01f);
+    EXPECT_NEAR(rgb.y, 0.0f, 0.01f);
+    EXPECT_NEAR(rgb.z, 1.0f, 0.01f);
 }
 
 TEST(HSVtoRGBTest, WhiteAtZeroSaturation)
@@ -324,8 +293,8 @@ TEST(HSVtoRGBTest, PreservesAlpha)
 TEST(HSVtoRGBTest, WrapsHue)
 {
     ImVec4 rgb1 = HSVtoRGB(0.0f, 1.0f, 1.0f, 1.0f);
-    ImVec4 rgb2 = HSVtoRGB(1.0f, 1.0f, 1.0f, 1.0f);  // Should wrap to same as 0
-    ImVec4 rgb3 = HSVtoRGB(2.0f, 1.0f, 1.0f, 1.0f);  // Should also wrap
+    ImVec4 rgb2 = HSVtoRGB(1.0f, 1.0f, 1.0f, 1.0f);
+    ImVec4 rgb3 = HSVtoRGB(2.0f, 1.0f, 1.0f, 1.0f);
 
     EXPECT_NEAR(rgb1.x, rgb2.x, 0.01f);
     EXPECT_NEAR(rgb1.y, rgb2.y, 0.01f);
@@ -333,10 +302,6 @@ TEST(HSVtoRGBTest, WrapsHue)
 
     EXPECT_NEAR(rgb1.x, rgb3.x, 0.01f);
 }
-
-// ============================================================================
-// Tests: Frac
-// ============================================================================
 
 TEST(FracTest, ReturnsDecimalPart)
 {
@@ -355,10 +320,6 @@ TEST(FracTest, HandlesWholeNumbers)
     EXPECT_NEAR(Frac(0.0f), 0.0f, 0.0001f);
 }
 
-// ============================================================================
-// Tests: LerpRange
-// ============================================================================
-
 TEST(LerpRangeTest, ReturnsMinimumAtZero)
 {
     EXPECT_FLOAT_EQ(LerpRange(0.2f, 0.6f, 0.0f), 0.2f);
@@ -373,10 +334,6 @@ TEST(LerpRangeTest, InterpolatesMidpoint)
 {
     EXPECT_NEAR(LerpRange(0.15f, 0.60f, 0.5f), 0.375f, 0.0001f);
 }
-
-// ============================================================================
-// Tests: IsPrimaryTextBody
-// ============================================================================
 
 TEST(TextBodyHeuristicTest, IncludesMainFillAtCurrentBatchAlpha)
 {
@@ -393,10 +350,7 @@ TEST(TextBodyHeuristicTest, ExcludesDarkOutlinePass)
     EXPECT_FALSE(IsPrimaryTextBody(24, 24, 24, 255, 255));
 }
 
-// ============================================================================
-// Re-implement particle distribution math (same logic as TextEffectsParticle.cpp
-// and ParticleTextures.cpp)
-// ============================================================================
+// mirrors particle distribution math in TextEffectsParticle.cpp and ParticleTextures.cpp.
 
 uint32_t PMixU32(uint32_t v)
 {
@@ -428,10 +382,6 @@ float PInterleavedGradientNoise(int x, int y)
     float v = 52.9829189f * f;
     return v - std::floor(v);
 }
-
-// ============================================================================
-// Tests: PTrait (per-particle hash traits)
-// ============================================================================
 
 TEST(ParticleTraitTest, StaysInUnitRange)
 {
@@ -487,10 +437,6 @@ TEST(ParticleTraitTest, SaltStreamsAreDecorrelated)
     EXPECT_LT(std::abs(pearson), 0.1);
 }
 
-// ============================================================================
-// Tests: AnnulusRadius (area-uniform band sampling)
-// ============================================================================
-
 TEST(AnnulusRadiusTest, HitsBandEdges)
 {
     EXPECT_NEAR(AnnulusRadius(0.58f, 0.0f), 0.58f, 1e-5f);
@@ -512,7 +458,7 @@ TEST(AnnulusRadiusTest, IsMonotonicInU)
 
 TEST(AnnulusRadiusTest, IsAreaUniform)
 {
-    // Equal density per unit area: the fraction of samples with r < m must
+    // equal density per unit area: the fraction of samples with r < m must
     // equal the annulus area ratio (m^2 - f^2) / (1 - f^2).
     const float f = 0.58f;
     const float m = 0.8f;
@@ -529,10 +475,6 @@ TEST(AnnulusRadiusTest, IsAreaUniform)
     const float expected = (m * m - f * f) / (1.0f - f * f);
     EXPECT_NEAR(static_cast<float>(below) / n, expected, 0.01f);
 }
-
-// ============================================================================
-// Tests: PInterleavedGradientNoise (dither pattern)
-// ============================================================================
 
 TEST(InterleavedGradientNoiseTest, StaysInUnitRange)
 {
@@ -560,14 +502,7 @@ TEST(InterleavedGradientNoiseTest, MeanIsCentered)
     EXPECT_NEAR(sum / (64.0 * 64.0), 0.5, 0.05);
 }
 
-// ============================================================================
-// Re-implement sprite flipbook + archetype timing math (same logic as
-// ParticleTextures.cpp and TextEffectsParticle.cpp)
-// ============================================================================
-
-// Mirror of the ParticleTextures loader's strip frame detection: a strip is a
-// horizontal row of square frames, so width must divide evenly by height and
-// yield more than one frame; anything else loads as a 1-frame static.
+// mirrors strip detection in ParticleTextures.cpp; only horizontal square-frame strips animate.
 int StripFrameCount(int width, int height, bool isStrip)
 {
     if (isStrip && height > 0 && width % height == 0 && width / height > 1)
@@ -577,9 +512,8 @@ int StripFrameCount(int width, int height, bool isStrip)
     return 1;
 }
 
-// Mirror of TextEffectsParticle FlipFrame with the texture lookup replaced by
-// a frame-count parameter (the lookup itself is D3D-bound; its input rule is
-// covered by StripFrameCount above). Salt 13 = Trait::Flip.
+// mirrors FlipFrame in TextEffectsParticle.cpp with an explicit frame count; salt 13 is
+// Trait::Flip.
 int FlipFrame(
     int frames, int particleIndex, int styleIndex, float timeScaled, float speedVar, float fps)
 {
@@ -592,16 +526,11 @@ int FlipFrame(
     return static_cast<int>(t) % frames;
 }
 
-// Mirror of RenderArchZapParticle's strike envelope: sharp eased attack over
-// the first tenth of the cycle, exponential decay after.
+// mirrors the strike envelope in RenderArchZapParticle.
 float ZapEnvelope(float frac)
 {
     return (frac < 0.10f) ? SmoothStep(frac / 0.10f) : std::exp(-(frac - 0.10f) * 7.0f);
 }
-
-// ============================================================================
-// Tests: StripFrameCount (flipbook detection)
-// ============================================================================
 
 TEST(StripFrameCountTest, FourFrameStrip)
 {
@@ -615,8 +544,7 @@ TEST(StripFrameCountTest, StaticSquareIsOneFrame)
 
 TEST(StripFrameCountTest, RequiresStripNaming)
 {
-    // A wide texture NOT named *_strip.png must never be sliced (HD user
-    // textures with non-square aspect would break otherwise).
+    // only the _strip.png suffix permits slicing.
     EXPECT_EQ(StripFrameCount(64, 16, false), 1);
     EXPECT_EQ(StripFrameCount(2048, 1024, false), 1);
 }
@@ -635,10 +563,6 @@ TEST(StripFrameCountTest, TallTextureIsStatic)
 {
     EXPECT_EQ(StripFrameCount(16, 64, true), 1);
 }
-
-// ============================================================================
-// Tests: FlipFrame (stateless flipbook clock)
-// ============================================================================
 
 TEST(FlipFrameTest, StaticSpriteHoldsFrameZero)
 {
@@ -673,7 +597,6 @@ TEST(FlipFrameTest, IsDeterministic)
 
 TEST(FlipFrameTest, AdvancesWithTime)
 {
-    // At 4 fps a frame must change within any half-second window.
     int changes = 0;
     int prev = FlipFrame(4, 7, 0, 0.0f, 1.0f, 4.0f);
     for (float t = 0.05f; t < 2.0f; t += 0.05f)
@@ -690,8 +613,7 @@ TEST(FlipFrameTest, AdvancesWithTime)
 
 TEST(FlipFrameTest, PhaseDesyncsParticles)
 {
-    // At one instant a flock must not share a single frame (the Flip trait
-    // spreads phases). With 32 particles over 4 frames, expect > 1 distinct.
+    // Trait::Flip must spread particle phases across frames.
     bool seen[4] = {};
     for (int i = 0; i < 32; ++i)
     {
@@ -701,14 +623,9 @@ TEST(FlipFrameTest, PhaseDesyncsParticles)
     EXPECT_GT(distinct, 1);
 }
 
-// ============================================================================
-// Tests: ZapEnvelope (strike attack/decay)
-// ============================================================================
-
 TEST(ZapEnvelopeTest, StartsDark)
 {
-    // The envelope must be zero at the cycle seam so the hash re-seat
-    // (teleport) is never visible.
+    // zero alpha at the cycle seam hides the position change.
     EXPECT_NEAR(ZapEnvelope(0.0f), 0.0f, 1e-4f);
 }
 
@@ -730,17 +647,12 @@ TEST(ZapEnvelopeTest, AttackIsMonotonic)
 
 TEST(ZapEnvelopeTest, DecaysToDarkBeforeCycleEnd)
 {
-    // Well below the renderer's 0.05 alpha cull by the back half of the cycle.
+    // below the renderer's 0.05 alpha cutoff.
     EXPECT_LT(ZapEnvelope(0.6f), 0.05f);
     EXPECT_LT(ZapEnvelope(0.99f), 0.01f);
 }
 
-// ============================================================================
-// Tests: PopFrame (once-through burst playback)
-// ============================================================================
-
-// Mirror of RenderArchRiseParticle's pop-frame selection: the burst strip
-// plays once across the pop window (popT 0..1), holding the last frame.
+// mirrors RenderArchRiseParticle pop playback; the final frame holds at popT = 1.
 static int PopFrame(float popT, int frames)
 {
     return (std::min)(static_cast<int>(popT * static_cast<float>(frames)), frames - 1);
@@ -785,13 +697,7 @@ TEST(PopFrameTest, StaticPopAlwaysFrameZero)
     }
 }
 
-// ============================================================================
-// Tests: WithAlphaFrom (highlight alpha adoption)
-// ============================================================================
-
-// Mirror of TextEffectsInternal WithAlphaFrom: RGB from the first color,
-// alpha from the second. Bright sweep targets must adopt the fill's alpha or
-// the effect makes text transparent exactly where it brightens.
+// mirrors WithAlphaFrom in TextEffectsInternal.hpp; highlights retain the fill's alpha.
 static uint32_t WithAlphaFromT(uint32_t rgbSrc, uint32_t alphaSrc)
 {
     constexpr uint32_t kAlphaMask = static_cast<uint32_t>(0xFF) << IM_COL32_A_SHIFT;
@@ -815,15 +721,9 @@ TEST(WithAlphaFromTest, IdentityWhenAlphasMatch)
     EXPECT_EQ(WithAlphaFromT(c, c), c);
 }
 
-// ============================================================================
-// Tests: flow wrap regression (counter-direction curtain visibility)
-// ============================================================================
-
 TEST(FlowWrapTest, CounterFlowStaysInUnitRange)
 {
-    // Regression for the aurora fmod bug: with dirSign = -1 the flow phase
-    // goes negative and fmod kept it negative, zeroing the edge fade and
-    // hiding the particle forever. Frac must keep it in [0, 1).
+    // negative flow must wrap into [0, 1) to retain the edge fade.
     for (float t = 0.0f; t < 200.0f; t += 1.7f)
     {
         float flow = Frac(t * 0.18f * -1.0f + 0.5f);
@@ -832,13 +732,7 @@ TEST(FlowWrapTest, CounterFlowStaysInUnitRange)
     }
 }
 
-// ============================================================================
-// Re-implement status icon badge helpers (same logic as RendererLayout.cpp)
-// ============================================================================
-
-// Simplified mirrors of the renderer-side enums and snapshot icon config.
-// Always-on slot model: every enabled slot renders, neutral/inactive states
-// muted.  Keep in sync with RendererLayout.cpp::ComposeBadges.
+// mirrors ComposeBadges in RendererLayout.cpp; keep badge states and ordering in sync.
 enum class RelKind
 {
     Hostile,
@@ -895,16 +789,13 @@ struct IconCfg
 {
     bool enabled = true;
     bool deadlyPulse = true;
-    // Full-color emblem tier badge (default off -> FA medal/gem/crown path).
     bool tierBadgeImages = false;
     int tierImageCount = 0;
-    float tierBadgeGamma = 1.8f;
-    // Original three slots.
+    float tierBadgeGamma = 1.0f;
     std::string icoFollower = "shield-halved", icoAlly = "handshake";
     std::string icoHostile = "skull-crossbones";
     std::string icoWeak = "caret-down", icoStrong = "caret-up", icoDeadly = "skull";
     std::string icoBeast = "paw", icoUndead = "ghost", icoDaedra = "fire", icoDragon = "dragon";
-    // Expanded always-on slots.
     std::string icoNeutral = "circle", icoHumanoid = "user", icoEven = "equals";
     std::string icoGuard = "helmet-battle", icoMerchant = "coins", icoCommoner = "house";
     std::string icoEssential = "certificate", icoProtected = "shield-check", icoMortal = "heart";
@@ -952,7 +843,7 @@ struct IconCfg
     bool tierEnabled = true;
 };
 
-// Mirror of RendererLayout.cpp::TierBandIndex -- keep in sync.
+// mirrors TierBandIndex in RendererLayout.cpp.
 int TierBandIndex(int tierIdx, int tierCount)
 {
     if (tierCount <= 1)
@@ -960,19 +851,39 @@ int TierBandIndex(int tierIdx, int tierCount)
     return std::clamp(tierIdx * 3 / tierCount, 0, 2);
 }
 
-// Mirror of RendererLayout.cpp::TierImageBandIndex -- keep in sync.
-int TierImageBandIndex(int tierIdx, int tierCount, int imageCount, float gamma)
-{
-    if (imageCount <= 1 || tierCount <= 1)
-        return 0;
-    const float t =
-        std::clamp(static_cast<float>(tierIdx) / static_cast<float>(tierCount - 1), 0.0f, 1.0f);
-    const float g = std::clamp(gamma, 0.1f, 8.0f);
-    const int band = static_cast<int>(std::floor(std::pow(t, g) * static_cast<float>(imageCount)));
-    return std::clamp(band, 0, imageCount - 1);
-}
+// mirrors Slot order and Record in ActorOverrides.hpp.
+constexpr size_t kSlotRank = 0;
+constexpr size_t kSlotRelationship = 1;
+constexpr size_t kSlotCreature = 2;
+constexpr size_t kSlotRole = 3;
+constexpr size_t kSlotProtection = 4;
+constexpr size_t kSlotThreat = 5;
+constexpr size_t kSlotEngagement = 6;
+constexpr size_t kSlotSneak = 7;
+constexpr size_t kSlotEncumbered = 8;
+constexpr size_t kSlotBounty = 9;
+constexpr size_t kSlotCount = 10;
 
-// Mirror of ActorDrawData's badge-relevant facts.
+struct TestSlotOverride
+{
+    bool hidden = false;
+    std::optional<uint8_t> state;
+    std::optional<std::string> icon;
+};
+
+struct TestExtra
+{
+    std::string icon;
+    TestColor color;
+};
+
+struct TestOverrides
+{
+    std::array<TestSlotOverride, kSlotCount> slots{};
+    std::vector<TestExtra> extras;
+};
+
+// mirrors the badge fields in ActorDrawData.
 struct Facts
 {
     bool isPlayer = false;
@@ -986,6 +897,7 @@ struct Facts
     bool playerInCombat = false;
     bool encumbered = false;
     bool wanted = false;
+    const TestOverrides* overrides = nullptr;  // console overrides, null when none
 };
 
 struct BadgeSlot
@@ -997,28 +909,30 @@ struct BadgeSlot
     int tierImage = -1;  // >=0 -> full-color emblem by index (icon unused)
 };
 
+// mirrors BadgeComposition capacity and overflow behavior.
 struct BadgeComposition
 {
+    static constexpr int MAX_BADGE_SLOTS = 7 + RenderConstants::MAX_EXTRA_BADGES;
     std::vector<BadgeSlot> slots;
     void push(const std::string& icon, TestColor color, bool muted, bool pulse = false)
     {
-        if (!icon.empty())
+        if (slots.size() < static_cast<size_t>(MAX_BADGE_SLOTS) && !icon.empty())
             slots.push_back({icon, color, muted, pulse});
     }
     void pushTierImage(bool enabled, int imageIndex)
     {
-        if (enabled && imageIndex >= 0)
+        if (enabled && slots.size() < static_cast<size_t>(MAX_BADGE_SLOTS) && imageIndex >= 0)
             slots.push_back(BadgeSlot{"", {}, false, false, imageIndex});
     }
 };
 
-// Map actor facts to an ordered set of badge slots.  Mirrors
-// RendererLayout.cpp::ComposeBadges -- keep the logic in sync.
+// mirrors ComposeBadges in RendererLayout.cpp, including console override priority.
 BadgeComposition ComposeBadges(const Facts& d,
                                const IconCfg& cfg,
                                int tierIdx = 0,
                                int tierCount = 20,
-                               bool includeRank = true)
+                               bool includeRank = true,
+                               int explicitBadge = 0)
 {
     BadgeComposition out{};
     if (!cfg.enabled)
@@ -1031,15 +945,32 @@ BadgeComposition ComposeBadges(const Facts& d,
             out.push(icon, color, muted, pulse);
     };
 
+    const auto slotOverride = [&](size_t slot) -> const TestSlotOverride*
+    { return d.overrides ? &d.overrides->slots[slot] : nullptr; };
+    const auto hidden = [](const TestSlotOverride* ov) { return ov && ov->hidden; };
+    const auto forced = [](const TestSlotOverride* ov, int live, int max) -> int
+    { return (ov && ov->state) ? std::min<int>(*ov->state, max) : live; };
+    const auto icon = [](const TestSlotOverride* ov,
+                         const std::string& cfgIcon) -> const std::string&
+    { return (ov && ov->icon) ? *ov->icon : cfgIcon; };
+    const auto addExtras = [&]()
+    {
+        if (!d.overrides)
+            return;
+        for (const auto& extra : d.overrides->extras)
+            out.push(extra.icon, extra.color, false, false);
+    };
+
     const auto addRank = [&]()
     {
-        if (!includeRank)
+        if (hidden(slotOverride(kSlotRank)) || !includeRank)
             return;
         if (cfg.tierBadgeImages && cfg.tierImageCount > 0)
         {
             out.pushTierImage(
                 cfg.tierEnabled,
-                TierImageBandIndex(tierIdx, tierCount, cfg.tierImageCount, cfg.tierBadgeGamma));
+                TierEmblem::Select(
+                    explicitBadge, tierIdx, tierCount, cfg.tierImageCount, cfg.tierBadgeGamma));
             return;
         }
 
@@ -1054,131 +985,168 @@ BadgeComposition ComposeBadges(const Facts& d,
     {
         addRank();
 
-        switch (d.relationship)
+        if (const auto* ov = slotOverride(kSlotRelationship); !hidden(ov))
         {
-            case RelKind::Hostile:
-                add(cfg.relationshipEnabled, cfg.icoHostile, cfg.colHostile, false);
-                break;
-            case RelKind::Ally:
-                add(cfg.relationshipEnabled, cfg.icoAlly, cfg.colAlly, false);
-                break;
-            case RelKind::Follower:
-                add(cfg.relationshipEnabled, cfg.icoFollower, cfg.colFollower, false);
-                break;
-            case RelKind::Neutral:
-                add(cfg.relationshipEnabled, cfg.icoNeutral, cfg.colNeutral, true);
-                break;
+            switch (static_cast<RelKind>(forced(ov, static_cast<int>(d.relationship), 3)))
+            {
+                case RelKind::Hostile:
+                    add(cfg.relationshipEnabled, icon(ov, cfg.icoHostile), cfg.colHostile, false);
+                    break;
+                case RelKind::Ally:
+                    add(cfg.relationshipEnabled, icon(ov, cfg.icoAlly), cfg.colAlly, false);
+                    break;
+                case RelKind::Follower:
+                    add(cfg.relationshipEnabled, icon(ov, cfg.icoFollower), cfg.colFollower, false);
+                    break;
+                case RelKind::Neutral:
+                    add(cfg.relationshipEnabled, icon(ov, cfg.icoNeutral), cfg.colNeutral, true);
+                    break;
+            }
         }
-        switch (d.creatureKind)
+        if (const auto* ov = slotOverride(kSlotCreature); !hidden(ov))
         {
-            case CritKind::Dragon:
-                add(cfg.creatureEnabled, cfg.icoDragon, cfg.colCreature, false);
-                break;
-            case CritKind::Daedra:
-                add(cfg.creatureEnabled, cfg.icoDaedra, cfg.colCreature, false);
-                break;
-            case CritKind::Undead:
-                add(cfg.creatureEnabled, cfg.icoUndead, cfg.colCreature, false);
-                break;
-            case CritKind::Beast:
-                add(cfg.creatureEnabled, cfg.icoBeast, cfg.colCreature, false);
-                break;
-            case CritKind::NPC:
-                add(cfg.creatureEnabled, cfg.icoHumanoid, cfg.colHumanoid, true);
-                break;
+            switch (static_cast<CritKind>(forced(ov, static_cast<int>(d.creatureKind), 4)))
+            {
+                case CritKind::Dragon:
+                    add(cfg.creatureEnabled, icon(ov, cfg.icoDragon), cfg.colCreature, false);
+                    break;
+                case CritKind::Daedra:
+                    add(cfg.creatureEnabled, icon(ov, cfg.icoDaedra), cfg.colCreature, false);
+                    break;
+                case CritKind::Undead:
+                    add(cfg.creatureEnabled, icon(ov, cfg.icoUndead), cfg.colCreature, false);
+                    break;
+                case CritKind::Beast:
+                    add(cfg.creatureEnabled, icon(ov, cfg.icoBeast), cfg.colCreature, false);
+                    break;
+                case CritKind::NPC:
+                    add(cfg.creatureEnabled, icon(ov, cfg.icoHumanoid), cfg.colHumanoid, true);
+                    break;
+            }
         }
-        switch (d.role)
+        if (const auto* ov = slotOverride(kSlotRole); !hidden(ov))
         {
-            case RoleK::Guard:
-                add(cfg.roleEnabled, cfg.icoGuard, cfg.colGuard, false);
-                break;
-            case RoleK::Merchant:
-                add(cfg.roleEnabled, cfg.icoMerchant, cfg.colMerchant, false);
-                break;
-            case RoleK::Commoner:
-                add(cfg.roleEnabled, cfg.icoCommoner, cfg.colCommoner, true);
-                break;
+            switch (static_cast<RoleK>(forced(ov, static_cast<int>(d.role), 2)))
+            {
+                case RoleK::Guard:
+                    add(cfg.roleEnabled, icon(ov, cfg.icoGuard), cfg.colGuard, false);
+                    break;
+                case RoleK::Merchant:
+                    add(cfg.roleEnabled, icon(ov, cfg.icoMerchant), cfg.colMerchant, false);
+                    break;
+                case RoleK::Commoner:
+                    add(cfg.roleEnabled, icon(ov, cfg.icoCommoner), cfg.colCommoner, true);
+                    break;
+            }
         }
-        switch (d.protection)
+        if (const auto* ov = slotOverride(kSlotProtection); !hidden(ov))
         {
-            case ProtK::Essential:
-                add(cfg.protectionEnabled, cfg.icoEssential, cfg.colEssential, false);
-                break;
-            case ProtK::Protected:
-                add(cfg.protectionEnabled, cfg.icoProtected, cfg.colProtected, false);
-                break;
-            case ProtK::Mortal:
-                add(cfg.protectionEnabled, cfg.icoMortal, cfg.colMortal, true);
-                break;
+            switch (static_cast<ProtK>(forced(ov, static_cast<int>(d.protection), 2)))
+            {
+                case ProtK::Essential:
+                    add(cfg.protectionEnabled, icon(ov, cfg.icoEssential), cfg.colEssential, false);
+                    break;
+                case ProtK::Protected:
+                    add(cfg.protectionEnabled, icon(ov, cfg.icoProtected), cfg.colProtected, false);
+                    break;
+                case ProtK::Mortal:
+                    add(cfg.protectionEnabled, icon(ov, cfg.icoMortal), cfg.colMortal, true);
+                    break;
+            }
         }
-        switch (d.levelDelta)
+        if (const auto* ov = slotOverride(kSlotThreat); !hidden(ov))
         {
-            case LvlDelta::Deadly:
-                add(cfg.threatEnabled, cfg.icoDeadly, cfg.colDeadly, false, cfg.deadlyPulse);
-                break;
-            case LvlDelta::Strong:
-                add(cfg.threatEnabled, cfg.icoStrong, cfg.colStrong, false);
-                break;
-            case LvlDelta::Weak:
-                add(cfg.threatEnabled, cfg.icoWeak, cfg.colWeak, false);
-                break;
-            case LvlDelta::Even:
-                add(cfg.threatEnabled, cfg.icoEven, cfg.colEven, true);
-                break;
+            switch (static_cast<LvlDelta>(forced(ov, static_cast<int>(d.levelDelta), 3)))
+            {
+                case LvlDelta::Deadly:
+                    add(cfg.threatEnabled,
+                        icon(ov, cfg.icoDeadly),
+                        cfg.colDeadly,
+                        false,
+                        cfg.deadlyPulse);
+                    break;
+                case LvlDelta::Strong:
+                    add(cfg.threatEnabled, icon(ov, cfg.icoStrong), cfg.colStrong, false);
+                    break;
+                case LvlDelta::Weak:
+                    add(cfg.threatEnabled, icon(ov, cfg.icoWeak), cfg.colWeak, false);
+                    break;
+                case LvlDelta::Even:
+                    add(cfg.threatEnabled, icon(ov, cfg.icoEven), cfg.colEven, true);
+                    break;
+            }
         }
-        switch (d.engagement)
+        if (const auto* ov = slotOverride(kSlotEngagement); !hidden(ov))
         {
-            case EngK::Combat:
-                add(cfg.engagementEnabled && cfg.combatStateEnabled,
-                    cfg.icoCombat,
-                    cfg.colCombat,
-                    false);
-                break;
-            case EngK::Alert:
-                add(cfg.engagementEnabled && cfg.alertStateEnabled,
-                    cfg.icoAlert,
-                    cfg.colAlert,
-                    false);
-                break;
-            case EngK::Idle:
-                add(cfg.engagementEnabled, cfg.icoIdle, cfg.colIdle, true);
-                break;
+            switch (static_cast<EngK>(forced(ov, static_cast<int>(d.engagement), 2)))
+            {
+                case EngK::Combat:
+                    add(cfg.engagementEnabled && cfg.combatStateEnabled,
+                        icon(ov, cfg.icoCombat),
+                        cfg.colCombat,
+                        false);
+                    break;
+                case EngK::Alert:
+                    add(cfg.engagementEnabled && cfg.alertStateEnabled,
+                        icon(ov, cfg.icoAlert),
+                        cfg.colAlert,
+                        false);
+                    break;
+                case EngK::Idle:
+                    add(cfg.engagementEnabled, icon(ov, cfg.icoIdle), cfg.colIdle, true);
+                    break;
+            }
         }
+        addExtras();
         return out;
     }
 
     addRank();
 
-    switch (d.sneak)
+    if (const auto* ov = slotOverride(kSlotSneak); !hidden(ov))
     {
-        case SneakK::Detected:
-            add(cfg.sneakEnabled, cfg.icoSneakDetected, cfg.colSneakDetected, false);
-            break;
-        case SneakK::Hidden:
-            add(cfg.sneakEnabled, cfg.icoSneakHidden, cfg.colSneakHidden, false);
-            break;
-        case SneakK::Off:
-            add(cfg.sneakEnabled, cfg.icoSneakOff, cfg.colSneakOff, true);
-            break;
+        switch (static_cast<SneakK>(forced(ov, static_cast<int>(d.sneak), 2)))
+        {
+            case SneakK::Detected:
+                add(cfg.sneakEnabled, icon(ov, cfg.icoSneakDetected), cfg.colSneakDetected, false);
+                break;
+            case SneakK::Hidden:
+                add(cfg.sneakEnabled, icon(ov, cfg.icoSneakHidden), cfg.colSneakHidden, false);
+                break;
+            case SneakK::Off:
+                add(cfg.sneakEnabled, icon(ov, cfg.icoSneakOff), cfg.colSneakOff, true);
+                break;
+        }
     }
-    add(cfg.playerCombatEnabled,
-        d.playerInCombat ? cfg.icoCombat : cfg.icoIdle,
-        d.playerInCombat ? cfg.colCombat : cfg.colIdle,
-        !d.playerInCombat);
-    add(cfg.encumberedEnabled,
-        d.encumbered ? cfg.icoEncumbered : cfg.icoNormalWeight,
-        d.encumbered ? cfg.colEncumbered : cfg.colNormalWeight,
-        !d.encumbered);
-    add(cfg.bountyEnabled,
-        d.wanted ? cfg.icoWanted : cfg.icoBountyClear,
-        d.wanted ? cfg.colWanted : cfg.colBountyClear,
-        !d.wanted);
+    if (const auto* ov = slotOverride(kSlotEngagement); !hidden(ov))
+    {
+        const bool inCombat = forced(ov, d.playerInCombat ? 1 : 0, 1) != 0;
+        add(cfg.playerCombatEnabled,
+            icon(ov, inCombat ? cfg.icoCombat : cfg.icoIdle),
+            inCombat ? cfg.colCombat : cfg.colIdle,
+            !inCombat);
+    }
+    if (const auto* ov = slotOverride(kSlotEncumbered); !hidden(ov))
+    {
+        const bool encumbered = forced(ov, d.encumbered ? 1 : 0, 1) != 0;
+        add(cfg.encumberedEnabled,
+            icon(ov, encumbered ? cfg.icoEncumbered : cfg.icoNormalWeight),
+            encumbered ? cfg.colEncumbered : cfg.colNormalWeight,
+            !encumbered);
+    }
+    if (const auto* ov = slotOverride(kSlotBounty); !hidden(ov))
+    {
+        const bool wanted = forced(ov, d.wanted ? 1 : 0, 1) != 0;
+        add(cfg.bountyEnabled,
+            icon(ov, wanted ? cfg.icoWanted : cfg.icoBountyClear),
+            wanted ? cfg.colWanted : cfg.colBountyClear,
+            !wanted);
+    }
+    addExtras();
     return out;
 }
 
-// Pure classifier mirrors (the game-thread RE:: reads can't be unit-tested,
-// but the classification logic + priority can).  Keep in sync with
-// RendererSnapshot.cpp.
+// mirrors the classifiers in RendererSnapshot.cpp; game-object reads are outside the harness.
 ProtK ClassifyProtection(bool essential, bool prot)
 {
     if (essential)
@@ -1204,15 +1172,14 @@ EngK ClassifyEngagement(bool inCombat, bool weaponDrawn, int detection)
     return EngK::Idle;
 }
 
-// Mirror of the DrawBadges muted desaturation (toward luma by `desat`).
+// mirrors DrawBadges desaturation in RendererEffects.cpp.
 TestColor ApplyMutedDesat(TestColor c, float desat)
 {
     const float luma = 0.299f * c.r + 0.587f * c.g + 0.114f * c.b;
     return {c.r + (luma - c.r) * desat, c.g + (luma - c.g) * desat, c.b + (luma - c.b) * desat};
 }
 
-// Mirror of the DrawBadges alpha treatment. IconOpacity applies to the status
-// row before the optional resting-state multiplier.
+// mirrors DrawBadges alpha in RendererEffects.cpp; IconOpacity precedes the resting multiplier.
 float ResolveBadgeAlpha(
     float plateAlpha, float badgeAlphaMul, float iconOpacity, bool muted, float mutedAlpha)
 {
@@ -1222,15 +1189,14 @@ float ResolveBadgeAlpha(
     return alpha;
 }
 
-// Mirror of the DrawTierEmblem crisp-mark alpha treatment.
-float ResolveTierEmblemAlpha(float plateAlpha, float badgeAlphaMul, float crispAlpha)
+// mirrors DrawTierEmblem alpha in RendererEffects.cpp; IconOpacity precedes the crisp multiplier.
+float ResolveTierEmblemAlpha(float plateAlpha,
+                             float badgeAlphaMul,
+                             float iconOpacity,
+                             float crispAlpha)
 {
-    return plateAlpha * badgeAlphaMul * crispAlpha;
+    return std::min(1.0f, plateAlpha * badgeAlphaMul * iconOpacity) * crispAlpha;
 }
-
-// ============================================================================
-// Tests: ComposeBadges (always-on slot model)
-// ============================================================================
 
 TEST(ComposeBadgesTest, NpcAlwaysHasSevenSlots)
 {
@@ -1361,23 +1327,21 @@ TEST(ComposeBadgesTest, TierBandThirdsMapLowMidHigh)
     EXPECT_EQ(TierBandIndex(13, 20), 1);
     EXPECT_EQ(TierBandIndex(14, 20), 2);
     EXPECT_EQ(TierBandIndex(19, 20), 2);
-    // Degenerate ladders collapse to the low band.
     EXPECT_EQ(TierBandIndex(0, 1), 0);
     EXPECT_EQ(TierBandIndex(0, 0), 0);
 }
 
 TEST(ComposeBadgesTest, TierImageBandIsTopWeighted)
 {
-    // 9 emblems over 20 tiers, gamma 1.8: monotonic, clamped, endpoints anchored,
-    // and the lowest emblem spans strictly more tiers than the top one.
-    EXPECT_EQ(TierImageBandIndex(0, 20, 9, 1.8f), 0);
-    EXPECT_EQ(TierImageBandIndex(19, 20, 9, 1.8f), 8);
+    // gamma 1.8 assigns fewer tiers to the highest emblems.
+    EXPECT_EQ(TierEmblem::BandIndex(0, 20, 9, 1.8f), 0);
+    EXPECT_EQ(TierEmblem::BandIndex(19, 20, 9, 1.8f), 8);
     int prev = -1;
     int firstSpan = 0;
     int lastSpan = 0;
     for (int t = 0; t < 20; ++t)
     {
-        const int b = TierImageBandIndex(t, 20, 9, 1.8f);
+        const int b = TierEmblem::BandIndex(t, 20, 9, 1.8f);
         EXPECT_GE(b, 0);
         EXPECT_LE(b, 8);
         EXPECT_GE(b, prev);  // non-decreasing across the ladder
@@ -1386,9 +1350,43 @@ TEST(ComposeBadgesTest, TierImageBandIsTopWeighted)
         lastSpan += (b == 8) ? 1 : 0;
     }
     EXPECT_GT(firstSpan, lastSpan);  // top-weighted: rare emblems near the top
-    // Degenerate inputs collapse to band 0.
-    EXPECT_EQ(TierImageBandIndex(5, 20, 1, 1.8f), 0);
-    EXPECT_EQ(TierImageBandIndex(5, 1, 9, 1.8f), 0);
+    EXPECT_EQ(TierEmblem::BandIndex(5, 20, 1, 1.8f), 0);
+    EXPECT_EQ(TierEmblem::BandIndex(5, 1, 9, 1.8f), 0);
+}
+
+TEST(ComposeBadgesTest, TierImageBandSpreadsEvenlyAtGammaOne)
+{
+    // shipped shape: 20 tiers over 18 emblems, so two adjacent pairs share one emblem.
+    EXPECT_EQ(TierEmblem::BandIndex(0, 20, 18, 1.0f), 0);
+    EXPECT_EQ(TierEmblem::BandIndex(1, 20, 18, 1.0f), 0);
+    EXPECT_EQ(TierEmblem::BandIndex(18, 20, 18, 1.0f), 17);
+    EXPECT_EQ(TierEmblem::BandIndex(19, 20, 18, 1.0f), 17);
+
+    std::array<bool, 18> produced{};
+    int prev = -1;
+    for (int t = 0; t < 20; ++t)
+    {
+        const int b = TierEmblem::BandIndex(t, 20, 18, 1.0f);
+        ASSERT_GE(b, 0);
+        ASSERT_LE(b, 17);
+        EXPECT_GE(b, prev);  // non-decreasing across the ladder
+        prev = b;
+        produced[static_cast<size_t>(b)] = true;
+    }
+    for (size_t i = 0; i < produced.size(); ++i)
+    {
+        EXPECT_TRUE(produced[i]) << "emblem " << i << " is never reached";
+    }
+}
+
+TEST(ComposeBadgesTest, TierEmblemSelectPrefersTheExplicitBadge)
+{
+    EXPECT_EQ(TierEmblem::Select(5, 19, 20, 18, 1.0f), 4);  // 1-based key -> 0-based index
+    EXPECT_EQ(TierEmblem::Select(0, 19, 20, 18, 1.0f), TierEmblem::BandIndex(19, 20, 18, 1.0f));
+    EXPECT_EQ(TierEmblem::Select(19, 19, 20, 18, 1.0f),
+              TierEmblem::BandIndex(19, 20, 18, 1.0f));  // past the manifest -> curve
+    EXPECT_EQ(TierEmblem::Select(-3, 4, 20, 18, 1.0f), TierEmblem::BandIndex(4, 20, 18, 1.0f));
+    EXPECT_EQ(TierEmblem::Select(5, 19, 20, 0, 1.0f), -1);  // nothing loaded -> no emblem
 }
 
 TEST(ComposeBadgesTest, TierBadgeImagesUsesEmblemSlot)
@@ -1397,12 +1395,47 @@ TEST(ComposeBadgesTest, TierBadgeImagesUsesEmblemSlot)
     f.isPlayer = true;
     IconCfg cfg;
     cfg.tierBadgeImages = true;
-    cfg.tierImageCount = 9;
+    cfg.tierImageCount = 18;
     auto s = ComposeBadges(f, cfg, 19, 20);  // top tier
     ASSERT_FALSE(s.slots.empty());
-    // First player slot is the emblem: resolved by index, no icon name.
-    EXPECT_EQ(s.slots[0].tierImage, 8);  // top tier -> top emblem
+    EXPECT_EQ(s.slots[0].tierImage, 17);  // top tier -> top emblem
     EXPECT_TRUE(s.slots[0].icon.empty());
+}
+
+TEST(ComposeBadgesTest, ExplicitBadgeOverridesTheEmblemCurve)
+{
+    IconCfg cfg;
+    cfg.tierBadgeImages = true;
+    cfg.tierImageCount = 18;
+    auto s = ComposeBadges(Facts{}, cfg, 19, 20, true, 7);
+    ASSERT_EQ(s.slots.size(), 7u);
+    EXPECT_EQ(s.slots[0].tierImage, 6);  // Badge = 7 names the seventh manifest emblem
+    EXPECT_TRUE(s.slots[0].icon.empty());
+}
+
+TEST(ComposeBadgesTest, ExplicitBadgePastTheManifestFallsBackToTheCurve)
+{
+    IconCfg cfg;
+    cfg.tierBadgeImages = true;
+    cfg.tierImageCount = 18;
+    auto s = ComposeBadges(Facts{}, cfg, 19, 20, true, 99);
+    ASSERT_EQ(s.slots.size(), 7u);
+    EXPECT_EQ(s.slots[0].tierImage, TierEmblem::BandIndex(19, 20, 18, cfg.tierBadgeGamma));
+}
+
+TEST(ComposeBadgesTest, ExplicitBadgeStillObeysAHiddenRankOverride)
+{
+    TestOverrides ov;
+    ov.slots[kSlotRank].hidden = true;
+    IconCfg cfg;
+    cfg.tierBadgeImages = true;
+    cfg.tierImageCount = 18;
+    Facts f;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, cfg, 19, 20, true, 7);
+    ASSERT_EQ(s.slots.size(), 6u);
+    EXPECT_EQ(s.slots[0].tierImage, -1);  // status row only
+    EXPECT_EQ(s.slots[0].icon, "circle");
 }
 
 TEST(ComposeBadgesTest, TierBadgeImagesFallsBackWhenNoneLoaded)
@@ -1446,10 +1479,10 @@ TEST(ComposeBadgesTest, NpcTierImageUsesEmblemSlot)
 {
     IconCfg cfg;
     cfg.tierBadgeImages = true;
-    cfg.tierImageCount = 9;
+    cfg.tierImageCount = 18;
     auto s = ComposeBadges(Facts{}, cfg, 19, 20);
     ASSERT_EQ(s.slots.size(), 7u);
-    EXPECT_EQ(s.slots[0].tierImage, 8);
+    EXPECT_EQ(s.slots[0].tierImage, 17);
     EXPECT_TRUE(s.slots[0].icon.empty());
 }
 
@@ -1477,6 +1510,176 @@ TEST(ComposeBadgesTest, DisabledGetsNothing)
     f.relationship = RelKind::Hostile;
     f.levelDelta = LvlDelta::Deadly;
     EXPECT_TRUE(ComposeBadges(f, cfg).slots.empty());
+}
+
+TEST(ComposeBadgesTest, OverrideHiddenSlotIsSkipped)
+{
+    TestOverrides ov;
+    ov.slots[kSlotRelationship].hidden = true;
+    Facts f;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{});
+    ASSERT_EQ(s.slots.size(), 6u);
+    EXPECT_EQ(s.slots[1].icon, "user");  // creature follows rank directly
+}
+
+TEST(ComposeBadgesTest, OverrideForcedStateReplacesTheLiveValue)
+{
+    TestOverrides ov;
+    ov.slots[kSlotRelationship].state = 2;  // ally, live fact is neutral
+    Facts f;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{});
+    ASSERT_EQ(s.slots.size(), 7u);
+    EXPECT_EQ(s.slots[1].icon, "handshake");
+    EXPECT_FALSE(s.slots[1].muted);
+    EXPECT_FLOAT_EQ(s.slots[1].color.g, 0.74f);  // colAlly
+}
+
+TEST(ComposeBadgesTest, OverrideForcedStateStillHonoursTheStateSubGate)
+{
+    TestOverrides ov;
+    ov.slots[kSlotEngagement].state = 2;  // combat
+    IconCfg cfg;
+    cfg.combatStateEnabled = false;
+    Facts f;
+    f.overrides = &ov;
+    EXPECT_EQ(ComposeBadges(f, cfg).slots.size(), 6u);
+    EXPECT_EQ(ComposeBadges(f, IconCfg{}).slots[6].icon, "swords");
+}
+
+TEST(ComposeBadgesTest, OverrideForcedDeadlyKeepsThePulseSetting)
+{
+    TestOverrides ov;
+    ov.slots[kSlotThreat].state = 3;  // deadly
+    Facts f;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{});
+    EXPECT_EQ(s.slots[5].icon, "skull");
+    EXPECT_TRUE(s.slots[5].pulse);
+    IconCfg noPulse;
+    noPulse.deadlyPulse = false;
+    EXPECT_FALSE(ComposeBadges(f, noPulse).slots[5].pulse);
+}
+
+TEST(ComposeBadgesTest, OverrideIconReplacesTheNameAndKeepsTheLiveTreatment)
+{
+    TestOverrides ov;
+    ov.slots[kSlotRole].icon = "anchor";
+    Facts f;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{});
+    EXPECT_EQ(s.slots[3].icon, "anchor");
+    EXPECT_TRUE(s.slots[3].muted);               // live commoner stays muted
+    EXPECT_FLOAT_EQ(s.slots[3].color.r, 0.60f);  // colCommoner
+}
+
+TEST(ComposeBadgesTest, OverrideRankHiddenSkipsBothRankPaths)
+{
+    TestOverrides ov;
+    ov.slots[kSlotRank].hidden = true;
+    Facts f;
+    f.overrides = &ov;
+    auto duotone = ComposeBadges(f, IconCfg{});
+    ASSERT_EQ(duotone.slots.size(), 6u);
+    EXPECT_EQ(duotone.slots[0].icon, "circle");
+
+    IconCfg emblem;
+    emblem.tierBadgeImages = true;
+    emblem.tierImageCount = 9;
+    auto e = ComposeBadges(f, emblem, 19, 20);
+    ASSERT_EQ(e.slots.size(), 6u);
+    EXPECT_EQ(e.slots[0].tierImage, -1);
+}
+
+TEST(ComposeBadgesTest, OverrideExtrasAppendLitAndStopAtTheCapacity)
+{
+    TestOverrides ov;
+    for (int i = 0; i < RenderConstants::MAX_EXTRA_BADGES + 1; ++i)
+    {
+        ov.extras.push_back({"extra" + std::to_string(i), TestColor{0.5f, 0.5f, 0.5f}});
+    }
+    Facts f;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{});
+    ASSERT_EQ(s.slots.size(), static_cast<size_t>(BadgeComposition::MAX_BADGE_SLOTS));
+    EXPECT_EQ(s.slots.size(), 7u + RenderConstants::MAX_EXTRA_BADGES);
+    EXPECT_EQ(s.slots[7].icon, "extra0");
+    EXPECT_EQ(s.slots[10].icon, "extra3");
+    for (size_t i = 7; i < s.slots.size(); ++i)
+    {
+        EXPECT_FALSE(s.slots[i].muted);
+        EXPECT_FALSE(s.slots[i].pulse);
+        EXPECT_FLOAT_EQ(s.slots[i].color.r, 0.5f);
+    }
+}
+
+TEST(ComposeBadgesTest, OverrideExtrasFollowThePlayerStripToo)
+{
+    TestOverrides ov;
+    ov.extras.push_back({"anchor", TestColor{}});
+    Facts f;
+    f.isPlayer = true;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{});
+    ASSERT_EQ(s.slots.size(), 6u);
+    EXPECT_EQ(s.slots[5].icon, "anchor");
+}
+
+TEST(ComposeBadgesTest, OverrideExtrasStillAppendWhenRankIsOmitted)
+{
+    TestOverrides ov;
+    ov.extras.push_back({"anchor", TestColor{}});
+    Facts f;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{}, 0, 20, false);  // Deck card
+    ASSERT_EQ(s.slots.size(), 7u);
+    EXPECT_EQ(s.slots[0].icon, "circle");
+    EXPECT_EQ(s.slots[6].icon, "anchor");
+}
+
+TEST(ComposeBadgesTest, OverridePlayerForcedStatesSubstituteTheBoolSlots)
+{
+    TestOverrides ov;
+    ov.slots[kSlotSneak].state = 2;       // detected
+    ov.slots[kSlotEngagement].state = 1;  // combat
+    ov.slots[kSlotEncumbered].state = 1;  // encumbered
+    ov.slots[kSlotBounty].state = 1;      // wanted
+    Facts f;
+    f.isPlayer = true;
+    f.overrides = &ov;
+    auto s = ComposeBadges(f, IconCfg{});
+    ASSERT_EQ(s.slots.size(), 5u);
+    EXPECT_EQ(s.slots[1].icon, "eye");
+    EXPECT_EQ(s.slots[2].icon, "swords");
+    EXPECT_EQ(s.slots[3].icon, "weight-hanging");
+    EXPECT_EQ(s.slots[4].icon, "gavel");
+    for (size_t i = 1; i < s.slots.size(); ++i)
+    {
+        EXPECT_FALSE(s.slots[i].muted);
+    }
+
+    TestOverrides off;
+    off.slots[kSlotEngagement].state = 0;  // idle, live fact is combat
+    Facts g;
+    g.isPlayer = true;
+    g.playerInCombat = true;
+    g.overrides = &off;
+    auto t = ComposeBadges(g, IconCfg{});
+    EXPECT_EQ(t.slots[2].icon, "moon");
+    EXPECT_TRUE(t.slots[2].muted);
+}
+
+TEST(ComposeBadgesTest, CompositionDropsSlotsPastTheCapacity)
+{
+    BadgeComposition c;
+    for (int i = 0; i < BadgeComposition::MAX_BADGE_SLOTS + 2; ++i)
+    {
+        c.push("x", TestColor{}, false);
+    }
+    EXPECT_EQ(c.slots.size(), static_cast<size_t>(BadgeComposition::MAX_BADGE_SLOTS));
+    c.pushTierImage(true, 0);
+    EXPECT_EQ(c.slots.size(), static_cast<size_t>(BadgeComposition::MAX_BADGE_SLOTS));
 }
 
 TEST(ComposeBadgesTest, PerSlotEnableDropsSlot)
@@ -1529,10 +1732,6 @@ TEST(ComposeBadgesTest, DragonCreatureLitInCreatureColor)
     EXPECT_FALSE(s.slots[2].muted);
     EXPECT_FLOAT_EQ(s.slots[2].color.r, 0.80f);  // colCreature
 }
-
-// ============================================================================
-// Tests: status classifiers + muted styling
-// ============================================================================
 
 TEST(ClassifyTest, ProtectionEssentialBeatsProtected)
 {
@@ -1598,26 +1797,27 @@ TEST(BadgeTreatmentTest, CustomMutedAlphaDimsOnlyRestingBadges)
     EXPECT_LT(resting, active);
 }
 
-TEST(BadgeTreatmentTest, RankBadgeStaysSlightlyAboveStatusRowDuringFades)
+TEST(BadgeTreatmentTest, RankEmblemFollowsStatusRowOpacity)
 {
-    constexpr float kStatusOpacity = 0.92f;
-    constexpr float kRankOpacity = 0.95f;
+    constexpr float kIconOpacity = 0.92f;
+    constexpr float kCrispAlpha = 0.95f;
 
-    const float statusFull = ResolveBadgeAlpha(1.0f, 1.0f, kStatusOpacity, false, 1.0f);
-    const float rankFull = ResolveTierEmblemAlpha(1.0f, 1.0f, kRankOpacity);
+    const float statusFull = ResolveBadgeAlpha(1.0f, 1.0f, kIconOpacity, false, 1.0f);
+    const float emblemFull = ResolveTierEmblemAlpha(1.0f, 1.0f, kIconOpacity, kCrispAlpha);
     EXPECT_FLOAT_EQ(statusFull, 0.92f);
-    EXPECT_FLOAT_EQ(rankFull, 0.95f);
-    EXPECT_GT(rankFull, statusFull);
+    EXPECT_FLOAT_EQ(emblemFull, statusFull * kCrispAlpha);
+    EXPECT_LE(emblemFull, statusFull);  // the crisp mark never outshines the status row
 
-    const float statusFading = ResolveBadgeAlpha(0.42f, 0.65f, kStatusOpacity, false, 1.0f);
-    const float rankFading = ResolveTierEmblemAlpha(0.42f, 0.65f, kRankOpacity);
-    EXPECT_GT(rankFading, statusFading);
+    const float statusFading = ResolveBadgeAlpha(0.42f, 0.65f, kIconOpacity, false, 1.0f);
+    const float emblemFading = ResolveTierEmblemAlpha(0.42f, 0.65f, kIconOpacity, kCrispAlpha);
+    EXPECT_FLOAT_EQ(emblemFading, statusFading * kCrispAlpha);
+    EXPECT_LE(emblemFading, statusFading);
+
+    // IconOpacity above 1 clamps before the crisp multiplier.
+    EXPECT_FLOAT_EQ(ResolveTierEmblemAlpha(1.0f, 1.0f, 2.0f, kCrispAlpha), kCrispAlpha);
 }
 
-// ============================================================================
-// The Quiet Frame -- camera-motion quiet target mapping
-// (mirrors QuietTarget in Renderer.cpp; keep the logic in sync)
-// ============================================================================
+// mirrors QuietTarget in Renderer.cpp.
 
 static float QuietTarget(float degPerSec, float lo, float hi)
 {
@@ -1640,7 +1840,7 @@ TEST(QuietFrame, AboveHighThresholdIsFullyQuiet)
 
 TEST(QuietFrame, MidpointIsSmoothstepHalf)
 {
-    // SmoothStep(0.5) = 0.5 for the quintic; the mapping must be monotonic.
+    // the quintic gives SmoothStep(0.5) = 0.5.
     EXPECT_FLOAT_EQ(QuietTarget(100.0f, 40.0f, 160.0f), 0.5f);
     EXPECT_LT(QuietTarget(60.0f, 40.0f, 160.0f), QuietTarget(120.0f, 40.0f, 160.0f));
 }
@@ -1651,10 +1851,7 @@ TEST(QuietFrame, DegenerateThresholdsActAsStep)
     EXPECT_FLOAT_EQ(QuietTarget(50.0f, 50.0f, 50.0f), 1.0f);
 }
 
-// ============================================================================
-// Roll Call -- entrance stagger slot delays
-// (mirrors the assignment in Renderer.cpp DrawLabel; keep in sync)
-// ============================================================================
+// mirrors entrance delay assignment in DrawLabel, Renderer.cpp.
 
 static float StaggerDelay(int slot, float step, float maxDelay)
 {
@@ -1682,10 +1879,7 @@ TEST(RollCall, ZeroStepDisablesStagger)
     EXPECT_FLOAT_EQ(StaggerDelay(7, 0.0f, 0.8f), 0.0f);
 }
 
-// ============================================================================
-// Last Rites -- valediction phase math
-// (mirrors ComputeDeathRitePhases in Renderer.cpp; keep in sync)
-// ============================================================================
+// mirrors ComputeDeathRitePhases in Renderer.cpp.
 
 struct DeathRitePhases
 {
@@ -1731,10 +1925,7 @@ TEST(DeathRite, MidDrainIsProportional)
     EXPECT_FLOAT_EQ(p.dissolveT, 0.0f);
 }
 
-// ============================================================================
-// Candlelight Metering -- exposure gain mapping
-// (mirrors the gain computation in ApplyCandlelight, RendererLayout.cpp)
-// ============================================================================
+// mirrors the exposure gain in ApplyCandlelight, RendererLayout.cpp.
 
 static float CandleGain(float bgLum, float strength)
 {
@@ -1763,7 +1954,7 @@ TEST(Candlelight, ZeroStrengthIsIdentity)
     EXPECT_FLOAT_EQ(CandleGain(1.0f, 0.0f), 1.0f);
 }
 
-// ---- Orbit sampler (mirror of TextEffectsParticle.cpp SampleOrbit) ----
+// mirrors SampleOrbit in TextEffectsParticle.cpp.
 static constexpr float kOrbitTiltT = 0.45f;
 
 struct OrbitSampleT
@@ -1818,7 +2009,7 @@ TEST(SampleOrbit, VerticalExtentSquashedByTilt)
     EXPECT_NEAR(std::fabs(top.oy), kOrbitTiltT, 1e-4f);  // |oy| = radialAnchor*tilt
 }
 
-// ---- Duotone secondary opacity floor (mirror of BadgeTextures RasterizeIcon) ----
+// mirrors the secondary opacity floor in RasterizeIcon, BadgeTextures.cpp.
 static float SecondaryOpacityFloor(float shapeOpacity)
 {
     constexpr float kFloor = 0.80f;
@@ -1832,10 +2023,6 @@ TEST(IconOpacityFloor, LiftsSecondaryKeepsPrimary)
     EXPECT_NEAR(SecondaryOpacityFloor(0.80f), 0.80f, 1e-6f);  // at floor unchanged
     EXPECT_NEAR(SecondaryOpacityFloor(0.90f), 0.90f, 1e-6f);  // above floor unchanged
 }
-
-// ============================================================================
-// Long-name fitting -- production width-driven fit from NameFit.hpp
-// ============================================================================
 
 TEST(NameFit, OrdinaryNamesKeepAuthoredTypography)
 {
@@ -1884,10 +2071,6 @@ TEST(NameFit, InvalidMeasurementsAreSafeNoOps)
     EXPECT_FLOAT_EQ(zeroFont.fontScale, 1.0f);
     EXPECT_FLOAT_EQ(zeroFont.horizontalScale, 1.0f);
 }
-
-// ============================================================================
-// Configurable actor processing limits
-// ============================================================================
 
 TEST(ActorLimits, DefaultsRemainTheFormerCompileTimeLimits)
 {
