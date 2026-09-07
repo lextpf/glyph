@@ -84,7 +84,8 @@
         "glyph_test_settings",
         "glyph_test_label_format",
         "glyph_test_graffito",
-        "glyph_test_deck"
+        "glyph_test_deck",
+        "glyph_test_console"
       ]
     },
     {
@@ -106,7 +107,8 @@
         "glyph_test_settings",
         "glyph_test_label_format",
         "glyph_test_graffito",
-        "glyph_test_deck"
+        "glyph_test_deck",
+        "glyph_test_console"
       ],
       "nativeToolOptions": [
         "/m"
