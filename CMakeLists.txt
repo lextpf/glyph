@@ -5,8 +5,7 @@ project(glyph LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Enforce static runtime linking and Async Exception Handling (for __try)
-# Also explicitly set C++23 standard for MSVC to ensure ranges support
+# /EHa supports SEH guards; /MT keeps the plugin runtime self-contained.
 if(MSVC)
     add_compile_options(/MT /EHa /std:c++latest)
 else()
@@ -14,24 +13,19 @@ else()
 endif()
 add_link_options(/NODEFAULTLIB:MSVCRT)
 
-# clang-tidy is run out-of-band by build.bat against the `compile-db`
-# Ninja sidecar preset's compile_commands.json - it intentionally does
-# NOT wrap the main MSVC build via CMAKE_CXX_CLANG_TIDY.
+# clang-tidy uses the Ninja sidecar in build.bat; do not wrap the MSVC build.
 
-# Disable building tests for CommonLibSSE-NG
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 
-# Enable Xbyak support for SKSE, needed for hook_function_prologue
+# Xbyak is required by hook_function_prologue.
 set(SKSE_SUPPORT_XBYAK ON CACHE BOOL "" FORCE)
 
-# Build one Address Library-backed DLL for Skyrim SE 1.5.x and AE 1.6.x
-# (including GOG). Skyrim VR is intentionally unsupported.
+# one Address Library-backed DLL supports SE and AE, including GOG; VR is unsupported.
 set(ENABLE_SKYRIM_SE ON CACHE BOOL "Enable Skyrim SE runtime support" FORCE)
 set(ENABLE_SKYRIM_AE ON CACHE BOOL "Enable Skyrim AE/GOG runtime support" FORCE)
 set(ENABLE_SKYRIM_VR OFF CACHE BOOL "Enable Skyrim VR runtime support" FORCE)
 
-# Fetch CommonLibSSE-NG
 include(FetchContent)
 FetchContent_Declare(
     CommonLibSSE-NG
@@ -42,11 +36,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(CommonLibSSE-NG)
 
-# Clamp cl.exe to one source file at a time when compiling CommonLibSSE-NG.
-# Its templates are heavy enough that the default /MP parallel compile can
-# spawn workers that collectively exhaust RAM and trigger MSVC crashes
-# (STATUS_ACCESS_VIOLATION / 0xC0000005 during "Generating Code..."). Costs
-# a minute or two on a clean build; only this target is affected.
+# CommonLibSSE-NG templates exhaust RAM with parallel cl.exe workers.
 if(TARGET CommonLibSSE)
     target_compile_options(CommonLibSSE PRIVATE /MP1)
 endif()
@@ -58,10 +48,8 @@ find_package(NanoSVG CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_path(RAPIDCSV_INCLUDE_DIRS "rapidcsv.h") # Added for CommonLibSSE-NG dependency
 
-# boost-unordered is header-only, find the include directory
 find_path(BOOST_UNORDERED_INCLUDE_DIRS "boost_unordered.hpp")
 if(NOT BOOST_UNORDERED_INCLUDE_DIRS)
-    # Try common vcpkg locations
     find_path(BOOST_UNORDERED_INCLUDE_DIRS "boost_unordered.hpp" 
         PATHS
             "${CMAKE_CURRENT_SOURCE_DIR}/build/vcpkg_installed/x64-windows-static/include"
@@ -74,10 +62,8 @@ else()
     message(WARNING "boost-unordered not found. Make sure it's installed via vcpkg.")
 endif()
 
-# srell is header-only, find the include directory
 find_path(SRELL_INCLUDE_DIRS "srell.hpp")
 if(NOT SRELL_INCLUDE_DIRS)
-    # Try common vcpkg locations
     find_path(SRELL_INCLUDE_DIRS "srell.hpp" 
         PATHS
             "${CMAKE_CURRENT_SOURCE_DIR}/build/vcpkg_installed/x64-windows-static/include"
@@ -90,8 +76,7 @@ else()
     message(WARNING "srell not found. Make sure it's installed via vcpkg.")
 endif()
 
-# ClibUtil is part of powerof3's CommonLibSSE (not CommonLibSSE-NG)
-# Try to find it in common locations
+# ClibUtil ships with powerof3's CommonLibSSE, separately from CommonLibSSE-NG.
 find_path(CLIBUTIL_INCLUDE_DIRS 
     "ClibUtil/simpleINI.hpp" 
     PATHS 
@@ -101,7 +86,6 @@ find_path(CLIBUTIL_INCLUDE_DIRS
     NO_DEFAULT_PATH
 )
 if(NOT CLIBUTIL_INCLUDE_DIRS)
-    # If not found, try vcpkg/system paths
     find_path(CLIBUTIL_INCLUDE_DIRS "ClibUtil/simpleINI.hpp")
 endif()
 if(CLIBUTIL_INCLUDE_DIRS)
@@ -115,6 +99,9 @@ add_library(glyph SHARED
     src/PCH.hpp
     src/ConsoleCommands.hpp
     src/ConsoleCommands.cpp
+    src/ConsoleParse.hpp
+    src/ActorOverrides.hpp
+    src/ActorOverrides.cpp
     src/Settings.cpp
     src/Settings.hpp
     src/SettingsBinding.hpp
@@ -144,6 +131,7 @@ add_library(glyph SHARED
     src/RenderSampling.hpp
     src/RenderSampling.cpp
     src/NameFit.hpp
+    src/TierEmblem.hpp
     src/ParticleTextures.hpp
     src/ParticleTextures.cpp
     src/BadgeTextures.hpp
@@ -178,17 +166,14 @@ target_include_directories(glyph PRIVATE
     ${RAPIDCSV_INCLUDE_DIRS}
 )
 
-# Add ClibUtil include directory if found
 if(CLIBUTIL_INCLUDE_DIRS)
     target_include_directories(glyph PRIVATE ${CLIBUTIL_INCLUDE_DIRS})
 endif()
 
-# Add boost-unordered include directory if found
 if(BOOST_UNORDERED_INCLUDE_DIRS)
     target_include_directories(glyph PRIVATE ${BOOST_UNORDERED_INCLUDE_DIRS})
 endif()
 
-# Add srell include directory if found
 if(SRELL_INCLUDE_DIRS)
     target_include_directories(glyph PRIVATE ${SRELL_INCLUDE_DIRS})
 endif()
@@ -204,17 +189,12 @@ target_link_libraries(glyph PRIVATE
     ole32
     windowscodecs
 )
-# Note: boost-unordered and srell are header-only, no linking needed
 
-# ============================================================================
-# Testing Support
-# ============================================================================
 option(BUILD_GLYPH_TESTS "Build glyph unit tests" ON)
 
 if(BUILD_GLYPH_TESTS)
     find_package(GTest CONFIG REQUIRED)
 
-    # Test executable for utility functions
     add_executable(glyph_test_utils tests/test_utils.cpp)
     target_include_directories(glyph_test_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_features(glyph_test_utils PRIVATE cxx_std_17)
@@ -223,7 +203,6 @@ if(BUILD_GLYPH_TESTS)
         target_compile_options(glyph_test_utils PRIVATE /W4)
     endif()
 
-    # Test executable for settings parsing
     add_executable(glyph_test_settings tests/test_settings.cpp)
     target_compile_features(glyph_test_settings PRIVATE cxx_std_17)
     target_link_libraries(glyph_test_settings PRIVATE GTest::gtest GTest::gtest_main)
@@ -231,7 +210,6 @@ if(BUILD_GLYPH_TESTS)
         target_compile_options(glyph_test_settings PRIVATE /W4)
     endif()
 
-    # Test executable for contextual label/token classification and FormatString
     add_executable(glyph_test_label_format tests/test_label_format.cpp)
     target_compile_features(glyph_test_label_format PRIVATE cxx_std_17)
     target_link_libraries(glyph_test_label_format PRIVATE GTest::gtest GTest::gtest_main)
@@ -239,7 +217,6 @@ if(BUILD_GLYPH_TESTS)
         target_compile_options(glyph_test_label_format PRIVATE /W4)
     endif()
 
-    # Test executable for Graffito's runtime-independent plane math
     add_executable(glyph_test_graffito tests/test_graffito.cpp)
     target_include_directories(glyph_test_graffito PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_features(glyph_test_graffito PRIVATE cxx_std_17)
@@ -248,7 +225,6 @@ if(BUILD_GLYPH_TESTS)
         target_compile_options(glyph_test_graffito PRIVATE /W4)
     endif()
 
-    # Test executable for runtime-independent card helpers
     add_executable(glyph_test_deck tests/test_deck.cpp src/DeckUtils.cpp src/DeckPng.cpp)
     target_include_directories(glyph_test_deck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_features(glyph_test_deck PRIVATE cxx_std_23)
@@ -262,7 +238,14 @@ if(BUILD_GLYPH_TESTS)
         target_compile_options(glyph_test_deck PRIVATE /W4)
     endif()
 
-    # Enable CTest integration with Google Test
+    add_executable(glyph_test_console tests/test_console.cpp src/ActorOverrides.cpp)
+    target_include_directories(glyph_test_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_features(glyph_test_console PRIVATE cxx_std_23)
+    target_link_libraries(glyph_test_console PRIVATE GTest::gtest GTest::gtest_main)
+    if(MSVC)
+        target_compile_options(glyph_test_console PRIVATE /W4)
+    endif()
+
     include(GoogleTest)
     enable_testing()
     gtest_discover_tests(glyph_test_utils)
@@ -270,4 +253,5 @@ if(BUILD_GLYPH_TESTS)
     gtest_discover_tests(glyph_test_label_format)
     gtest_discover_tests(glyph_test_graffito)
     gtest_discover_tests(glyph_test_deck)
+    gtest_discover_tests(glyph_test_console)
 endif()
