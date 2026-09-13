@@ -11,7 +11,7 @@
 ![CommonLibSSE-NG](https://img.shields.io/badge/CommonLib-SSE_NG-7c3aed.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTY0cHgiIGhlaWdodD0iMTY0cHgiIHZpZXdCb3g9IjAgMCAyOC4wMCAyOC4wMCIgdmVyc2lvbj0iMS4xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNmZmZmZmYiPjxnIGlkPSJTVkdSZXBvX2JnQ2FycmllciIgc3Ryb2tlLXdpZHRoPSIwIj48L2c+PGcgaWQ9IlNWR1JlcG9fdHJhY2VyQ2FycmllciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2U9IiNDQ0NDQ0MiIHN0cm9rZS13aWR0aD0iMC4yMjQwMDAwMDAwMDAwMDAwMyI+PC9nPjxnIGlkPSJTVkdSZXBvX2ljb25DYXJyaWVyIj4gPCEtLSBVcGxvYWRlZCB0bzogU1ZHIFJlcG8sIHd3dy5zdmdyZXBvLmNvbSwgR2VuZXJhdG9yOiBTVkcgUmVwbyBNaXhlciBUb29scyAtLT4gPHRpdGxlPmljX2ZsdWVudF9saWJyYXJ5XzI4X2ZpbGxlZDwvdGl0bGU+IDxkZXNjPkNyZWF0ZWQgd2l0aCBTa2V0Y2guPC9kZXNjPiA8ZyBpZD0i8J+UjS1Qcm9kdWN0LUljb25zIiBzdHJva2Utd2lkdGg9IjAuMDAwMjgiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+IDxnIGlkPSJpY19mbHVlbnRfbGlicmFyeV8yOF9maWxsZWQiIGZpbGw9IiNmZmZmZmYiIGZpbGwtcnVsZT0ibm9uemVybyI+IDxwYXRoIGQ9Ik01Ljk4OTcsMyBDNy4wOTM3LDMgNy45ODk3LDMuODk2IDcuOTg5Nyw1IEw3Ljk4OTcsMjMgQzcuOTg5NywyNC4xMDQgNy4wOTM3LDI1IDUuOTg5NywyNSBMNC4wMDA3LDI1IEMyLjg5NTcsMjUgMi4wMDA3LDI0LjEwNCAyLjAwMDcsMjMgTDIuMDAwNyw1IEMyLjAwMDcsMy44OTYgMi44OTU3LDMgNC4wMDA3LDMgTDUuOTg5NywzIFogTTEyLjk4OTcsMyBDMTQuMDkzNywzIDE0Ljk4OTcsMy44OTYgMTQuOTg5Nyw1IEwxNC45ODk3LDIzIEMxNC45ODk3LDI0LjEwNCAxNC4wOTM3LDI1IDEyLjk4OTcsMjUgTDEwLjk5NDcsMjUgQzkuODg5NywyNSA4Ljk5NDcsMjQuMTA0IDguOTk0NywyMyBMOC45OTQ3LDUgQzguOTk0NywzLjg5NiA5Ljg4OTcsMyAxMC45OTQ3LDMgTDEyLjk4OTcsMyBaIE0yMi4wNzAxLDYuNTQzMiBMMjUuOTMwMSwyMi4wMjYyIEMyNi4xOTcxLDIzLjA5NzIgMjUuNTQ0MSwyNC4xODMyIDI0LjQ3MzEsMjQuNDUxMiBMMjIuNTEwMSwyNC45NDAyIEMyMS40MzkxLDI1LjIwNzIgMjAuMzUzMSwyNC41NTUyIDIwLjA4NjEsMjMuNDgzMiBMMTYuMjI2MSw4LjAwMDIgQzE1Ljk1ODEsNi45MjgyIDE2LjYxMTEsNS44NDMyIDE3LjY4MjEsNS41NzUyIEwxOS42NDUxLDUuMDg2MiBDMjAuNzE2MSw0LjgxODIgMjEuODAyMSw1LjQ3MTIgMjIuMDcwMSw2LjU0MzIgWiIgaWQ9IvCfjqgtQ29sb3IiPiA8L3BhdGg+IDwvZz4gPC9nPiA8L2c+PC9zdmc+)
 ![Skyrim](https://img.shields.io/badge/Skyrim-SE%20%7C%20AE%20%7C%20GOG-16a34a.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB3aWR0aD0iMTI4cHgiIGhlaWdodD0iMTI4cHgiIHZpZXdCb3g9IjAgLTY0IDY0MCA2NDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjZmZmZmZmIj48ZyBpZD0iU1ZHUmVwb19iZ0NhcnJpZXIiIHN0cm9rZS13aWR0aD0iMCI+PC9nPjxnIGlkPSJTVkdSZXBvX3RyYWNlckNhcnJpZXIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PC9nPjxnIGlkPSJTVkdSZXBvX2ljb25DYXJyaWVyIj48cGF0aCBkPSJNMTguMzIgMjU1Ljc4TDE5MiAyMjMuOTZsLTkxLjI4IDY4LjY5Yy0xMC4wOCAxMC4wOC0yLjk0IDI3LjMxIDExLjMxIDI3LjMxaDIyMi43Yy05LjQ0LTI2LjQtMTQuNzMtNTQuNDctMTQuNzMtODMuMzh2LTQyLjI3bC0xMTkuNzMtODcuNmMtMjMuODItMTUuODgtNTUuMjktMTQuMDEtNzcuMDYgNC41OUw1LjgxIDIyNy42NGMtMTIuMzggMTAuMzMtMy40NSAzMC40MiAxMi41MSAyOC4xNHptNTU2Ljg3IDM0LjFsLTEwMC42Ni01MC4zMUE0Ny45OTIgNDcuOTkyIDAgMCAxIDQ0OCAxOTYuNjV2LTM2LjY5aDY0bDI4LjA5IDIyLjYzYzYgNiAxNC4xNCA5LjM3IDIyLjYzIDkuMzdoMzAuOTdhMzIgMzIgMCAwIDAgMjguNjItMTcuNjlsMTQuMzEtMjguNjJhMzIuMDA1IDMyLjAwNSAwIDAgMC0zLjAyLTMzLjUxbC03NC41My05OS4zOEM1NTMuMDIgNC43IDU0My41NCAwIDUzMy40NyAwSDI5Ni4wMmMtNy4xMyAwLTEwLjcgOC41Ny01LjY2IDEzLjYxTDM1MiA2My45NiAyOTIuNDIgODguOGMtNS45IDIuOTUtNS45IDExLjM2IDAgMTQuMzFMMzUyIDEyNy45NnYxMDguNjJjMCA3Mi4wOCAzNi4wMyAxMzkuMzkgOTYgMTc5LjM4LTE5NS41OSA2LjgxLTM0NC41NiA0MS4wMS00MzQuMSA2MC45MUM1Ljc4IDQ3OC42NyAwIDQ4NS44OCAwIDQ5NC4yIDAgNTA0IDcuOTUgNTEyIDE3Ljc2IDUxMmg0OTkuMDhjNjMuMjkuMDEgMTE5LjYxLTQ3LjU2IDEyMi45OS0xMTAuNzYgMi41Mi00Ny4yOC0yMi43My05MC40LTY0LjY0LTExMS4zNnpNNDg5LjE4IDY2LjI1bDQ1LjY1IDExLjQxYy0yLjc1IDEwLjkxLTEyLjQ3IDE4Ljg5LTI0LjEzIDE4LjI2LTEyLjk2LS43MS0yNS44NS0xMi41My0yMS41Mi0yOS42N3oiPjwvcGF0aD48L2c+PC9zdmc+)
 ![CMake](https://img.shields.io/badge/CMake-3.21%2B-c0392b?style=flat&logo=cmake&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-475569.svg?logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB3aWR0aD0iMTY0cHgiIGhlaWdodD0iMTY0cHgiIHZpZXdCb3g9IjAgMCA1MTIuMDAgNTEyLjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIwLjAwNTEyIj48ZyBpZD0iU1ZHUmVwb19iZ0NhcnJpZXIiIHN0cm9rZS13aWR0aD0iMCI+PC9nPjxnIGlkPSJTVkdSZXBvX3RyYWNlckNhcnJpZXIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgc3Ryb2tlPSIjQ0NDQ0NDIiBzdHJva2Utd2lkdGg9IjMuMDcyIj48L2c+PGcgaWQ9IlNWR1JlcG9faWNvbkNhcnJpZXIiPjxwYXRoIGQ9Ik0yNTYgOEMxMTkuMDMzIDggOCAxMTkuMDMzIDggMjU2czExMS4wMzMgMjQ4IDI0OCAyNDggMjQ4LTExMS4wMzMgMjQ4LTI0OFMzOTIuOTY3IDggMjU2IDh6bTExNy4xMzQgMzQ2Ljc1M2MtMS41OTIgMS44NjctMzkuNzc2IDQ1LjczMS0xMDkuODUxIDQ1LjczMS04NC42OTIgMC0xNDQuNDg0LTYzLjI2LTE0NC40ODQtMTQ1LjU2NyAwLTgxLjMwMyA2Mi4wMDQtMTQzLjQwMSAxNDMuNzYyLTE0My40MDEgNjYuOTU3IDAgMTAxLjk2NSAzNy4zMTUgMTAzLjQyMiAzOC45MDRhMTIgMTIgMCAwIDEgMS4yMzggMTQuNjIzbC0yMi4zOCAzNC42NTVjLTQuMDQ5IDYuMjY3LTEyLjc3NCA3LjM1MS0xOC4yMzQgMi4yOTUtLjIzMy0uMjE0LTI2LjUyOS0yMy44OC02MS44OC0yMy44OC00Ni4xMTYgMC03My45MTYgMzMuNTc1LTczLjkxNiA3Ni4wODIgMCAzOS42MDIgMjUuNTE0IDc5LjY5MiA3NC4yNzcgNzkuNjkyIDM4LjY5NyAwIDY1LjI4LTI4LjMzOCA2NS41NDQtMjguNjI1IDUuMTMyLTUuNTY1IDE0LjA1OS01LjAzMyAxOC41MDggMS4wNTNsMjQuNTQ3IDMzLjU3MmExMi4wMDEgMTIuMDAxIDAgMCAxLS41NTMgMTQuODY2eiI+PC9wYXRoPjwvZz48L3N2Zz4=)
+![License](https://img.shields.io/badge/License-GPL-475569.svg?logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB3aWR0aD0iMTY0cHgiIGhlaWdodD0iMTY0cHgiIHZpZXdCb3g9IjAgMCA1MTIuMDAgNTEyLjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIwLjAwNTEyIj48ZyBpZD0iU1ZHUmVwb19iZ0NhcnJpZXIiIHN0cm9rZS13aWR0aD0iMCI+PC9nPjxnIGlkPSJTVkdSZXBvX3RyYWNlckNhcnJpZXIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgc3Ryb2tlPSIjQ0NDQ0NDIiBzdHJva2Utd2lkdGg9IjMuMDcyIj48L2c+PGcgaWQ9IlNWR1JlcG9faWNvbkNhcnJpZXIiPjxwYXRoIGQ9Ik0yNTYgOEMxMTkuMDMzIDggOCAxMTkuMDMzIDggMjU2czExMS4wMzMgMjQ4IDI0OCAyNDggMjQ4LTExMS4wMzMgMjQ4LTI0OFMzOTIuOTY3IDggMjU2IDh6bTExNy4xMzQgMzQ2Ljc1M2MtMS41OTIgMS44NjctMzkuNzc2IDQ1LjczMS0xMDkuODUxIDQ1LjczMS04NC42OTIgMC0xNDQuNDg0LTYzLjI2LTE0NC40ODQtMTQ1LjU2NyAwLTgxLjMwMyA2Mi4wMDQtMTQzLjQwMSAxNDMuNzYyLTE0My40MDEgNjYuOTU3IDAgMTAxLjk2NSAzNy4zMTUgMTAzLjQyMiAzOC45MDRhMTIgMTIgMCAwIDEgMS4yMzggMTQuNjIzbC0yMi4zOCAzNC42NTVjLTQuMDQ5IDYuMjY3LTEyLjc3NCA3LjM1MS0xOC4yMzQgMi4yOTUtLjIzMy0uMjE0LTI2LjUyOS0yMy44OC02MS44OC0yMy44OC00Ni4xMTYgMC03My45MTYgMzMuNTc1LTczLjkxNiA3Ni4wODIgMCAzOS42MDIgMjUuNTE0IDc5LjY5MiA3NC4yNzcgNzkuNjkyIDM4LjY5NyAwIDY1LjI4LTI4LjMzOCA2NS41NDQtMjguNjI1IDUuMTMyLTUuNTY1IDE0LjA1OS01LjAzMyAxOC41MDggMS4wNTNsMjQuNTQ3IDMzLjU3MmExMi4wMDEgMTIuMDAxIDAgMCAxLS41NTMgMTQuODY2eiI+PC9wYXRoPjwvZz48L3N2Zz4=)
 <br/>
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_whois&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_whois)
@@ -44,8 +44,10 @@ An SKSE plugin that renders **floating nameplates** above NPCs and creatures, di
 >   `GLYPH_MO2_MODS` and `GLYPH_MO2_PROFILE` before you run the script to use other folders.
 > - If you experience frame drops, type `glyph` in the console to toggle the overlay off.
 >   `glyph help` lists the sub-commands: `glyph status`, `glyph nameplates [on|off]`,
->   `glyph plates [on|off]`, and `glyph debug [on|off]` (the performance/cache HUD).
->   Any unambiguous prefix works, for example `s`, `n`, or `d`.
+>   `glyph plates [on|off]`, `glyph debug [on|off]` (the performance/cache HUD), and the
+>   per-actor edits `glyph title ...`, `glyph icon ...` and `glyph clear [all]` (see
+>   [Console Edits](#-console-edits)). Any unambiguous prefix works, for example `s`, `n`,
+>   `d`, `t` or `i`; `clear` must be typed in full.
 
 ```
 /* ============================================================================================== *
@@ -74,6 +76,8 @@ glyph/
 |   |-- Hooks.cpp/hpp                        # D3D11 device, HUDMenu::PostDisplay, Present
 |   |-- GameState.cpp/hpp                    # CanDrawOverlay gate (menus, combat, cell)
 |   |-- ConsoleCommands.cpp/hpp              # `glyph` console command
+|   |-- ConsoleParse.hpp                     # Runtime-independent console tokenizing
+|   |-- ActorOverrides.cpp/hpp               # Per-actor session overrides (title, icons)
 |   |-- Renderer.cpp/hpp                     # World-to-screen projection, shared entry
 |   |-- RendererSnapshot.cpp                 # Game thread: scan actors, publish snapshot
 |   |-- RendererLayout.cpp                   # Render thread: measurement, FormatString, badges
@@ -112,15 +116,16 @@ glyph/
 |   |-- PCH.hpp                              # Precompiled header
 |   +-- Version.hpp                          # Plugin version
 |-- tests/                                   # GoogleTest suites (pure logic, no game deps)
-|   |-- test_settings.cpp
-|   |-- test_label_format.cpp
-|   |-- test_deck.cpp
-|   |-- test_graffito.cpp
-|   +-- test_utils.cpp
+|   |-- test_settings.cpp                    # Mirror: INI parsing, tiers, colors, formats
+|   |-- test_label_format.cpp                # Mirror: ClassifyDelta, FormatString, LabelFor
+|   |-- test_deck.cpp                        # Direct: DeckUtils + DeckPng, WIC round-trip
+|   |-- test_graffito.cpp                    # Direct: GraffitoMath + shader contract
+|   |-- test_console.cpp                     # Direct: ConsoleParse + ActorOverrides
+|   +-- test_utils.cpp                       # Mirror: color/easing math; NameFit direct
 |-- scripts/                                 # Build & doc helper scripts
 |   |-- _normalize_compile_db.py             # clang-cl compile-db fixup
 |   |-- _promote_subgroups.py                # doxide doc post-processing
-|   +-- _clean_docs.py
+|   +-- _clean_docs.py                       # doxide markdown cleanup for mkdocs
 |-- glyph.ini                                # Default configuration
 |-- glyph.project.json                       # Asset manifest (GUID -> role/token map)
 |-- assets/                                  # Runtime assets (deployed as SKSE/Plugins/glyph/)
@@ -200,7 +205,8 @@ The bundled `glyph.ini` defines 20 tiers, `[Tier0]` to `[Tier19]`, in 25-level
 bands: tier *N* covers levels `25N + 1` to `25N + 25`. `[Tier19]` is the open
 top band - its `MaxLevel` is `9999`, so every level above 475 lands there. Each
 `[TierN]` block owns its own colors, `NameEffect` / `TitleEffect` / `LevelEffect`,
-`ParticleTypes`, `ParticleCount`, and optional `Ornaments`. Both the particle
+`ParticleTypes`, `ParticleCount`, `Badge` (its 1-based rank emblem in
+`glyph.project.json`), and optional `Ornaments`. Both the particle
 count and the number of particle types rise up the ladder (`[Tier0]` uses one
 type and 6 particles; `[Tier19]` uses six types and 18 particles).
 
@@ -300,7 +306,8 @@ codes (`119` is F8).
 - 🏅 **Deeds, Not Words** - `[HonorificN]` sections derive titles from
   faction membership and rank, so "Of the Circle" appears the moment the
   deed is done - on the player *and* on NPC members of the same faction.
-  Special titles still take precedence.
+  Special titles still take precedence, and a title typed at the console
+  (`glyph title`) beats both for that actor.
 
   *Keys:* `Faction = 0xFORMID[@Plugin.esp]`, `MinRank`, `Title`, `Priority`,
   `PlayerOnly` / `NpcOnly`.
@@ -371,8 +378,9 @@ Data/SKSE/Plugins/
 > **📝 Assets aren't in the repo.** The `glyph/` art (icons, fonts, sprites,
 > emblems) is licensed or non-redistributed, so it ships in a release archive
 > rather than the source tree. glyph still loads without it - particle
-> sprites fall back to procedural rendering - and you can point `IconFolder`,
-> `TierBadgeFolder`, and the `*FontPath` keys at your own art.
+> sprites fall back to procedural rendering - and you can point `IconFolder`
+> and the `*FontPath` keys at your own art. Custom tier emblems go through
+> `glyph.project.json`.
 
 ## Configuration
 
@@ -486,7 +494,8 @@ outlines/shadows so relationship information remains restrained.
 ### 🏷️ Status Icon Badges
 
 Relationship, threat, and creature type render as a compact strip of icons
-above the name (replacing the old text info row).
+above the name (replacing the old text info row). One actor's strip can be
+edited in play with `glyph icon` (see [Console Edits](#-console-edits)).
 Icons are [Font Awesome](https://fontawesome.com/) **duotone SVGs**
 rasterized at load time (via nanosvg) from `IconFolder`: each `Icon*`
 value is an SVG file name without the extension, so any icon dropped into
@@ -502,21 +511,30 @@ semantic color is applied as a tint.
 
 ```ini
 [Icons]
-IconFolder      = Data/SKSE/Plugins/glyph/duotone
-IconsEnabled    = true
-IconScale       = 0.8         ; badge size relative to the level font
-IconDeadlyPulse = true        ; subtle pulse on the Deadly skull
-IconOpacity     = 0.92        ; status-row opacity multiplier, 0.5-2.0
-IconMutedAlpha  = 1.0         ; optional resting-state multiplier, 0.0-1.0
+IconFolder       = Data/SKSE/Plugins/glyph/duotone
+IconsEnabled     = true
+IconScale        = 0.8         ; badge size relative to the level font
+IconDeadlyPulse  = true        ; subtle pulse on the Deadly skull
+IconOpacity      = 0.92        ; status-row and emblem multiplier, 0.5-2.0
+IconMutedAlpha   = 1.0         ; optional resting-state multiplier, 0.0-1.0
+TierBadgeImages  = true        ; full-color rank emblems from the manifest
+TierBadgeGamma   = 1.0         ; spread curve for tiers with no Badge key
+TierBadgeScale   = 1.7         ; emblem size relative to a status icon
+EmblemCrispAlpha = 0.95        ; crisp emblem alpha, applied after IconOpacity
 ```
 
-`IconOpacity` affects active and resting status icons. Resting icons use the same
-alpha by default. Set `IconMutedAlpha` below `1.0` to dim only resting icons.
+`IconOpacity` affects active and resting status icons and the rank emblem.
+Resting icons use the same alpha by default. Set `IconMutedAlpha` below `1.0`
+to dim only resting icons. `EmblemCrispAlpha` scales the rank emblem on top of
+`IconOpacity`.
 
-**🧩 NPC badge icons** render left-to-right - rank, relationship, creature,
-role, protection, threat, then engagement. The rank follows the same level
-ladder as the player's badge, but does not enable tier typography or tier
-effects for ordinary NPCs. Leave any value empty to hide that badge.
+**🧩 NPC badge icons** keep the rank emblem on its own centered row above the
+strip, and the strip itself renders left-to-right - relationship, creature,
+role, protection, threat, then engagement, then any extras added from the
+console. The rank joins the strip as its leftmost slot only when the medal /
+gem / crown fallback takes over. The rank follows the same level ladder as the
+player's badge, but does not enable tier typography or tier effects for
+ordinary NPCs. Leave any value empty to hide that badge.
 
 | Category        | Setting        | Default icon       | Tint             |
 |-----------------|----------------|--------------------|------------------|
@@ -536,16 +554,59 @@ Each badge takes an `R,G,B` float color: `IconFollowerColor`,
 `IconDeadlyColor`, and one shared `IconCreatureColor` for all creature
 types.
 
-**👑 Rank and player row** - every actor gets a rank badge. The player's strip
-shows five slots, left to right: **tier prestige**, sneak, engagement,
-encumbered, and bounty. The prestige
-badge tracks the `[TierN]` ladder and is always lit - `IconTierLow` (`medal`,
-bronze), `IconTierMid` (`gem`, silver-blue), `IconTierHigh` (`crown`, gold)
-for the low / mid / high third. Toggle with `IconTierEnabled`; recolor with
-`IconTierLowColor` / `IconTierMidColor` / `IconTierHighColor`.
+**👑 Rank and player row** - every actor gets a rank badge. By default it is a
+full-color **tier prestige** emblem on its own centered row above the icon
+strip, and the player's strip then holds four slots, left to right: sneak,
+engagement, encumbered, and bounty, then any extras added from the console. The
+prestige badge tracks the `[TierN]` ladder and is always lit. Its emblems are
+the ones listed in `glyph.project.json` - one per tier, named by that tier's
+`Badge` key, with the `TierBadgeGamma` curve covering any tier that leaves
+`Badge` at `0`. The `IconTierLow` (`medal`, bronze), `IconTierMid` (`gem`,
+silver-blue) and `IconTierHigh` (`crown`, gold) icons take over for the low /
+mid / high third only when `TierBadgeImages` is `false` or no emblem loads, and
+that fallback icon sits in the strip as its leftmost slot. Toggle with
+`IconTierEnabled`; recolor with `IconTierLowColor` / `IconTierMidColor` /
+`IconTierHighColor`.
 
 📜 The legacy text row is still available: set `InfoFormat` explicitly
 (e.g. `InfoFormat = "%r?","  • %d?","  • %c?"`) and it renders as before.
+
+### 🎛️ Console Edits
+
+Open the console, click an actor (or click nothing to edit your own plate),
+and type. Every edit lives for the current game session only: nothing is
+written to `glyph.ini`, and `glyph clear all` or a restart removes it all.
+
+| Command                              | Effect                                                        |
+|--------------------------------------|---------------------------------------------------------------|
+| `glyph title`                        | Show the actor's title override                               |
+| `glyph title <text>`                 | Custom title; beats special titles, honorifics and tier titles |
+| `glyph title "<text>"`               | Same; one pair of surrounding quotes is stripped              |
+| `glyph title = <text>`               | Same, and `<text>` is always literal                          |
+| `glyph title hide`                   | Hide the title text on this actor                             |
+| `glyph title auto`                   | Remove the title override                                     |
+| `glyph icon`                         | Show the actor's icon overrides                               |
+| `glyph icon <slot> <state>`          | Force a slot, for example `glyph icon relationship ally`      |
+| `glyph icon <slot> <state> <name>`   | Force the state and draw duotone icon `<name>`                |
+| `glyph icon <slot> auto <name>`      | Keep the live state, draw icon `<name>`                       |
+| `glyph icon <slot> hide`             | Hide that slot on this actor                                  |
+| `glyph icon <slot> auto`             | Remove that slot's override                                   |
+| `glyph icon add <name> [r,g,b]`      | Append an extra badge (at most 4), parchment tint by default  |
+| `glyph icon remove <name>`           | Remove an extra badge                                         |
+| `glyph icon clear`                   | Remove every icon override on this actor                      |
+| `glyph clear`                        | Remove title and icon overrides on this actor                 |
+| `glyph clear all`                    | Remove every override in the session (`clear` typed in full)  |
+
+Slots and states use the `[Icons]` vocabulary. NPC slots: `rank` (hide/auto
+only), `relationship` (hostile, neutral, ally, follower), `creature`
+(humanoid, beast, undead, daedra, dragon), `role` (commoner, merchant,
+guard), `protection` (mortal, protected, essential), `threat` (weak, even,
+strong, deadly), `engagement` (idle, alert, combat). Player slots: `rank`,
+`engagement` (idle, combat), `sneak` (off, hidden, detected), `encumbered`
+(normal, encumbered), `bounty` (clear, wanted). An icon `<name>` is any SVG
+in `IconFolder`; it draws as a tinted silhouette. INI gates still win: a slot
+disabled in `[Icons]` stays hidden whatever the override says, and a forced
+state passes through the same gates as the live one.
 
 ## Building
 
@@ -636,7 +697,7 @@ states the affinity of that function.
 |-----------------|-----------------------------------------------------------------------------------------------------------|----------------------------------------------------------------|
 | Entry point     | `main.cpp`, `Version.hpp`, `PCH.hpp`                                                                        | SKSE load, lifecycle, message listener                         |
 | Engine hooks    | `Hooks.cpp/hpp`                                                                                             | D3D11 device creation, `HUDMenu::PostDisplay`, `Present`       |
-| Gating          | `GameState.cpp/hpp`, `ConsoleCommands.cpp/hpp`                                                              | `CanDrawOverlay` gate; the `glyph` console command             |
+| Gating          | `GameState.cpp/hpp`, `ConsoleCommands.cpp/hpp`, `ConsoleParse.hpp`, `ActorOverrides.cpp/hpp`               | `CanDrawOverlay` gate; the `glyph` console command and its per-actor overrides |
 | Renderer        | `Renderer.cpp/hpp`, `RendererSnapshot.cpp`, `RendererLayout.cpp`, `RendererEffects.cpp`, `RendererInternal.hpp` | Snapshot publish, projection, layout, per-effect dispatch  |
 | Text effects    | `TextEffectsCore.cpp`, `TextEffectsGradient.cpp`, `TextEffectsAnimated.cpp`, `TextEffectsComplex.cpp`, `TextEffectsParticle.cpp` | Visual effect implementations; `TextEffects.hpp` is the shared API   |
 | GPU passes      | `TextPostProcess.cpp/hpp`, `Graffito.cpp/hpp`, `DepthClip.cpp/hpp`, `SceneMeter.cpp/hpp`                     | Glow/divide capture, world plates, depth clip, scene metering  |
@@ -671,7 +732,7 @@ Contributions are welcome! Please read the [Contributing Guidelines](CONTRIBUTIN
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
+This project is licensed under the GPL License - see the [LICENSE](LICENSE.md) file for details.
 
 ## Acknowledgments
 
